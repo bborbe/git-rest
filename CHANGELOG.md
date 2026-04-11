@@ -2,6 +2,10 @@
 
 All notable changes to this project will be documented in this file.
 
+## v0.4.0
+
+- feat: Implement git-rest HTTP server with file CRUD, periodic git pull, health/readiness probes, and Prometheus metrics
+
 Please choose versions by [Semantic Versioning](http://semver.org/).
 
 * MAJOR version when you make incompatible API changes,

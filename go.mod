@@ -13,6 +13,7 @@ replace (
 
 require (
 	github.com/bborbe/errors v1.5.10
+	github.com/felixge/httpsnoop v1.0.4
 	github.com/golangci/golangci-lint/v2 v2.11.4
 	github.com/google/addlicense v1.2.0
 	github.com/google/osv-scanner/v2 v2.3.5
@@ -21,6 +22,7 @@ require (
 	github.com/maxbrunsfeld/counterfeiter/v6 v6.12.2
 	github.com/onsi/ginkgo/v2 v2.28.1
 	github.com/onsi/gomega v1.39.1
+	github.com/prometheus/client_golang v1.23.2
 	github.com/securego/gosec/v2 v2.25.0
 	github.com/segmentio/golines v0.13.0
 	github.com/shoenig/go-modtool v0.7.1
@@ -160,7 +162,6 @@ require (
 	github.com/ettle/strcase v0.2.0 // indirect
 	github.com/fatih/color v1.19.0 // indirect
 	github.com/fatih/structtag v1.2.0 // indirect
-	github.com/felixge/httpsnoop v1.0.4 // indirect
 	github.com/firefart/nonamedreturns v1.0.6 // indirect
 	github.com/fsnotify/fsnotify v1.9.0 // indirect
 	github.com/fzipp/gocyclo v0.6.0 // indirect
@@ -303,7 +304,6 @@ require (
 	github.com/pkg/xattr v0.4.12 // indirect
 	github.com/planetscale/vtprotobuf v0.6.1-0.20240319094008-0393e58bdf10 // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
-	github.com/prometheus/client_golang v1.23.2 // indirect
 	github.com/prometheus/client_model v0.6.2 // indirect
 	github.com/prometheus/common v0.67.5 // indirect
 	github.com/prometheus/procfs v0.20.1 // indirect
