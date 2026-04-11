@@ -1,8 +1,13 @@
 ---
-status: approved
+status: completed
 spec: [001-git-rest-server]
+summary: Implemented git-rest HTTP server with main.go, pkg/metrics, pkg/puller, and git instrumentation; all tests pass and make precommit exits 0.
+container: git-rest-003-spec-001-main-wiring
+dark-factory-version: v0.108.0-dirty
 created: "2026-04-11T19:30:00Z"
 queued: "2026-04-11T19:37:18Z"
+started: "2026-04-11T19:54:26Z"
+completed: "2026-04-11T20:01:14Z"
 branch: dark-factory/git-rest-server
 ---
 
