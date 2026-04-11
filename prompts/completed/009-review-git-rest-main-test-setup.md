@@ -1,7 +1,12 @@
 ---
-status: approved
+status: completed
+summary: 'Updated main_test.go to match canonical suite setup: added time.Local=time.UTC, format.TruncatedDiff=false, GinkgoConfiguration with 60s timeout, //go:generate directive, and changed gexec.Build flag from -mod=mod to -mod=vendor; also ran go mod vendor to fix inconsistent vendor directory.'
+container: git-rest-009-review-git-rest-main-test-setup
+dark-factory-version: v0.108.0-dirty
 created: "2026-04-11T00:00:00Z"
 queued: "2026-04-11T21:05:28Z"
+started: "2026-04-11T21:10:25Z"
+completed: "2026-04-11T21:15:23Z"
 ---
 
 <summary>
