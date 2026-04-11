@@ -1,8 +1,13 @@
 ---
-status: approved
+status: completed
 spec: [001-git-rest-server]
+summary: Created pkg/handler package with filesGet/Post/Delete/List/Healthz/Readiness handlers, shared JSON helpers, and pkg/factory with Create* factory functions, all with Ginkgo tests at 93.5% coverage
+container: git-rest-002-spec-001-http-handlers
+dark-factory-version: v0.108.0-dirty
 created: "2026-04-11T19:30:00Z"
 queued: "2026-04-11T19:37:18Z"
+started: "2026-04-11T19:47:23Z"
+completed: "2026-04-11T19:54:23Z"
 branch: dark-factory/git-rest-server
 ---
 
