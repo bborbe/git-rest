@@ -74,7 +74,15 @@ func (a *application) createHTTPServer(gitClient git.Git, _ libsentry.Client) ru
 		mux.Handle("/readiness", readinessH)
 		mux.Handle("/metrics", promhttp.Handler())
 
-		return libhttp.NewServer(a.Listen, factory.CreateMetricsMiddleware(mux)).Run(ctx)
+		return libhttp.NewServer(
+			a.Listen,
+			factory.CreateMetricsMiddleware(mux),
+			func(o *libhttp.ServerOptions) {
+				o.ReadTimeout = 60 * time.Second
+				o.WriteTimeout = 60 * time.Second
+				o.IdleTimeout = 120 * time.Second
+			},
+		).Run(ctx)
 	}
 }
 

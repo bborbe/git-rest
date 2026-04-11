@@ -2,6 +2,10 @@
 
 All notable changes to this project will be documented in this file.
 
+## v0.6.3
+
+- fix: Set ReadTimeout (60s), WriteTimeout (60s), and IdleTimeout (120s) on HTTP server to prevent slow-client resource exhaustion attacks
+
 ## v0.6.2
 
 - refactor: Extract `filesDispatch` and `metricsMiddleware` from `main.go` into `pkg/handler/` as `NewFilesDispatchHandler` and `NewMetricsMiddleware`; add corresponding `CreateFilesDispatchHandler` and `CreateMetricsMiddleware` factory functions in `pkg/factory/`; add unit tests for both handlers
