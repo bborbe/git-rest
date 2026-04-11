@@ -1,7 +1,12 @@
 ---
-status: approved
+status: completed
+summary: Added counterfeiter:generate directive to Puller interface, go:generate runner to puller_suite_test.go, and generated FakePuller mock in mocks/puller.go.
+container: git-rest-010-review-git-rest-puller-counterfeiter
+dark-factory-version: v0.108.0-dirty
 created: "2026-04-11T00:00:00Z"
 queued: "2026-04-11T21:05:32Z"
+started: "2026-04-11T21:15:25Z"
+completed: "2026-04-11T21:19:36Z"
 ---
 
 <summary>
