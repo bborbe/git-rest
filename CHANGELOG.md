@@ -2,6 +2,10 @@
 
 All notable changes to this project will be documented in this file.
 
+## v0.5.5
+
+- chore: Add counterfeiter:generate directive to Puller interface and generate FakePuller mock in mocks/puller.go
+
 ## v0.5.4
 
 - chore: Align main_test.go suite setup with canonical pattern (time.Local, format.TruncatedDiff, GinkgoConfiguration timeout, //go:generate directive, -mod=vendor)

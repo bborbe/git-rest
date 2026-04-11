@@ -12,6 +12,8 @@ import (
 	"github.com/bborbe/git-rest/pkg/git"
 )
 
+//counterfeiter:generate -o ../../mocks/puller.go --fake-name FakePuller . Puller
+
 // Puller periodically runs git pull on a repository.
 type Puller interface {
 	Run(ctx context.Context) error

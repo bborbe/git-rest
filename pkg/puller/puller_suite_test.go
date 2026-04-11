@@ -13,6 +13,8 @@ import (
 	"github.com/onsi/gomega/format"
 )
 
+//go:generate go run -mod=mod github.com/maxbrunsfeld/counterfeiter/v6 -generate
+
 func TestSuite(t *testing.T) {
 	time.Local = time.UTC
 	format.TruncatedDiff = false
