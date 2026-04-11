@@ -1,7 +1,12 @@
 ---
-status: approved
+status: completed
+summary: Replaced fragile err.Error() string comparison with typed errors.As(err, &maxBytesErr) check using *http.MaxBytesError in files_post handler.
+container: git-rest-012-review-git-rest-max-bytes-error-type
+dark-factory-version: v0.108.0-dirty
 created: "2026-04-11T00:00:00Z"
 queued: "2026-04-11T21:05:41Z"
+started: "2026-04-11T21:25:32Z"
+completed: "2026-04-11T21:29:46Z"
 ---
 
 <summary>
