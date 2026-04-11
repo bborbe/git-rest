@@ -2,6 +2,10 @@
 
 All notable changes to this project will be documented in this file.
 
+## v0.5.1
+
+- chore: Run full automated code review and generate fix prompts for Critical/Important findings
+
 ## v0.5.0
 
 - feat: Add production Dockerfile and docker build/upload/clean/buca targets to Makefile; remove Makefile.docker
