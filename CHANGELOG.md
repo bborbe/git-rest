@@ -2,6 +2,10 @@
 
 All notable changes to this project will be documented in this file.
 
+## v0.5.0
+
+- feat: Add production Dockerfile and docker build/upload/clean/buca targets to Makefile; remove Makefile.docker
+
 ## v0.4.1
 
 - refactor: Move Counterfeiter FakeGit mock from pkg/git/mocks/ to top-level mocks/ directory, update counterfeiter:generate annotation and all test imports

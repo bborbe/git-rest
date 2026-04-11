@@ -1,6 +1,9 @@
 
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -X main.version=$(VERSION)
+REGISTRY ?= docker.io
+IMAGE ?= bborbe/git-rest
+BRANCH ?= $(shell git rev-parse --abbrev-ref HEAD)
 
 .PHONY: default
 default: precommit
@@ -11,7 +14,20 @@ run:
 
 .PHONY: build
 build:
-	@go build -mod=mod -o bin/git-rest main.go
+	go mod vendor
+	docker build --no-cache --rm=true --platform=linux/amd64 -t $(REGISTRY)/$(IMAGE):$(BRANCH) -f Dockerfile .
+
+.PHONY: upload
+upload:
+	docker push $(REGISTRY)/$(IMAGE):$(BRANCH)
+
+.PHONY: clean
+clean:
+	docker rmi $(REGISTRY)/$(IMAGE):$(BRANCH) || true
+	rm -rf vendor
+
+.PHONY: buca
+buca: build upload clean
 
 .PHONY: install
 install:
