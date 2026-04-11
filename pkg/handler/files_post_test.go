@@ -14,6 +14,7 @@ import (
 	. "github.com/onsi/gomega"
 
 	"github.com/bborbe/git-rest/mocks"
+	"github.com/bborbe/git-rest/pkg/git"
 	"github.com/bborbe/git-rest/pkg/handler"
 )
 
@@ -55,12 +56,24 @@ var _ = Describe("FilesPostHandler", func() {
 		})
 	})
 
-	Context("path traversal", func() {
-		It("returns 400", func() {
-			fakeGit.WriteFileReturns(errWithMessage("path traversal not allowed"))
+	Context("invalid path", func() {
+		It("returns 400 when git returns ErrInvalidPath", func() {
+			fakeGit.WriteFileReturns(git.ErrInvalidPath)
 			req := httptest.NewRequest(
 				http.MethodPost,
 				"/api/v1/files/../etc/passwd",
+				bytes.NewBufferString("x"),
+			)
+			h.ServeHTTP(rec, req)
+			Expect(rec.Code).To(Equal(http.StatusBadRequest))
+			Expect(rec.Body.String()).To(ContainSubstring(`"error"`))
+		})
+
+		It("returns 400 for .git path", func() {
+			fakeGit.WriteFileReturns(git.ErrInvalidPath)
+			req := httptest.NewRequest(
+				http.MethodPost,
+				"/api/v1/files/.git/config",
 				bytes.NewBufferString("x"),
 			)
 			h.ServeHTTP(rec, req)

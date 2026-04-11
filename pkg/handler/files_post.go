@@ -5,6 +5,7 @@
 package handler
 
 import (
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -38,13 +39,11 @@ func (h *filesPostHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.git.WriteFile(r.Context(), path, body); err != nil {
-		msg := err.Error()
-		if strings.Contains(msg, "traversal") || strings.Contains(msg, "absolute") ||
-			strings.Contains(msg, "empty") {
-			writeJSONError(w, http.StatusBadRequest, msg)
+		if errors.Is(err, git.ErrInvalidPath) {
+			writeJSONError(w, http.StatusBadRequest, "invalid path")
 			return
 		}
-		writeJSONError(w, http.StatusInternalServerError, msg)
+		writeJSONError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
 	writeJSONOK(w)

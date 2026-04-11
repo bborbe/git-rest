@@ -29,13 +29,11 @@ func (h *filesGetHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			writeJSONError(w, http.StatusNotFound, "not found")
 			return
 		}
-		msg := err.Error()
-		if strings.Contains(msg, "traversal") || strings.Contains(msg, "absolute") ||
-			strings.Contains(msg, "empty") {
-			writeJSONError(w, http.StatusBadRequest, msg)
+		if errors.Is(err, git.ErrInvalidPath) {
+			writeJSONError(w, http.StatusBadRequest, "invalid path")
 			return
 		}
-		writeJSONError(w, http.StatusInternalServerError, msg)
+		writeJSONError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
 	w.Header().Set("Content-Type", "application/octet-stream")

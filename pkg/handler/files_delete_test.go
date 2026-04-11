@@ -58,10 +58,18 @@ var _ = Describe("FilesDeleteHandler", func() {
 		})
 	})
 
-	Context("path traversal", func() {
-		It("returns 400", func() {
-			fakeGit.DeleteFileReturns(errWithMessage("path traversal not allowed"))
+	Context("invalid path", func() {
+		It("returns 400 when git returns ErrInvalidPath", func() {
+			fakeGit.DeleteFileReturns(git.ErrInvalidPath)
 			req := httptest.NewRequest(http.MethodDelete, "/api/v1/files/../etc/passwd", nil)
+			h.ServeHTTP(rec, req)
+			Expect(rec.Code).To(Equal(http.StatusBadRequest))
+			Expect(rec.Body.String()).To(ContainSubstring(`"error"`))
+		})
+
+		It("returns 400 for .git path", func() {
+			fakeGit.DeleteFileReturns(git.ErrInvalidPath)
+			req := httptest.NewRequest(http.MethodDelete, "/api/v1/files/.git/config", nil)
 			h.ServeHTTP(rec, req)
 			Expect(rec.Code).To(Equal(http.StatusBadRequest))
 			Expect(rec.Body.String()).To(ContainSubstring(`"error"`))

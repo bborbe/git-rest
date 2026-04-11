@@ -2,6 +2,10 @@
 
 All notable changes to this project will be documented in this file.
 
+## v0.6.0
+
+- feat: Add ErrInvalidPath sentinel error to pkg/git and update validatePath to wrap all validation failures with it, including new .git directory component check; update all three file handlers to use errors.Is(err, git.ErrInvalidPath) instead of string matching for 400 vs 500 routing
+
 ## v0.5.5
 
 - chore: Add counterfeiter:generate directive to Puller interface and generate FakePuller mock in mocks/puller.go

@@ -6,6 +6,7 @@ package git_test
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -77,18 +78,27 @@ var _ = Describe("Git", func() {
 				_, err := g.ReadFile(ctx, "")
 				Expect(err).To(HaveOccurred())
 				Expect(err.Error()).To(ContainSubstring("must not be empty"))
+				Expect(errors.Is(err, git.ErrInvalidPath)).To(BeTrue())
 			})
 
 			It("returns error for path traversal", func() {
 				_, err := g.ReadFile(ctx, "../../../etc/passwd")
 				Expect(err).To(HaveOccurred())
 				Expect(err.Error()).To(ContainSubstring("traversal"))
+				Expect(errors.Is(err, git.ErrInvalidPath)).To(BeTrue())
 			})
 
 			It("returns error for absolute path", func() {
 				_, err := g.ReadFile(ctx, "/absolute/path")
 				Expect(err).To(HaveOccurred())
 				Expect(err.Error()).To(ContainSubstring("absolute"))
+				Expect(errors.Is(err, git.ErrInvalidPath)).To(BeTrue())
+			})
+
+			It("returns ErrInvalidPath for .git path", func() {
+				_, err := g.ReadFile(ctx, ".git/config")
+				Expect(err).To(HaveOccurred())
+				Expect(errors.Is(err, git.ErrInvalidPath)).To(BeTrue())
 			})
 
 			It("returns ErrNotFound for non-existent file", func() {
@@ -104,18 +114,27 @@ var _ = Describe("Git", func() {
 				err := g.WriteFile(ctx, "", []byte("content"))
 				Expect(err).To(HaveOccurred())
 				Expect(err.Error()).To(ContainSubstring("must not be empty"))
+				Expect(errors.Is(err, git.ErrInvalidPath)).To(BeTrue())
 			})
 
 			It("returns error for path traversal", func() {
 				err := g.WriteFile(ctx, "../escape.txt", []byte("content"))
 				Expect(err).To(HaveOccurred())
 				Expect(err.Error()).To(ContainSubstring("traversal"))
+				Expect(errors.Is(err, git.ErrInvalidPath)).To(BeTrue())
 			})
 
 			It("returns error for absolute path", func() {
 				err := g.WriteFile(ctx, "/tmp/escape.txt", []byte("content"))
 				Expect(err).To(HaveOccurred())
 				Expect(err.Error()).To(ContainSubstring("absolute"))
+				Expect(errors.Is(err, git.ErrInvalidPath)).To(BeTrue())
+			})
+
+			It("returns ErrInvalidPath for .git path", func() {
+				err := g.WriteFile(ctx, ".git/config", []byte("content"))
+				Expect(err).To(HaveOccurred())
+				Expect(errors.Is(err, git.ErrInvalidPath)).To(BeTrue())
 			})
 		})
 
@@ -168,12 +187,20 @@ var _ = Describe("Git", func() {
 				err := g.DeleteFile(ctx, "")
 				Expect(err).To(HaveOccurred())
 				Expect(err.Error()).To(ContainSubstring("must not be empty"))
+				Expect(errors.Is(err, git.ErrInvalidPath)).To(BeTrue())
 			})
 
 			It("returns error for path traversal", func() {
 				err := g.DeleteFile(ctx, "../../../etc/passwd")
 				Expect(err).To(HaveOccurred())
 				Expect(err.Error()).To(ContainSubstring("traversal"))
+				Expect(errors.Is(err, git.ErrInvalidPath)).To(BeTrue())
+			})
+
+			It("returns ErrInvalidPath for .git path", func() {
+				err := g.DeleteFile(ctx, ".git/config")
+				Expect(err).To(HaveOccurred())
+				Expect(errors.Is(err, git.ErrInvalidPath)).To(BeTrue())
 			})
 		})
 

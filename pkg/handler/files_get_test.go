@@ -64,14 +64,18 @@ var _ = Describe("FilesGetHandler", func() {
 		})
 	})
 
-	Context("path traversal", func() {
-		BeforeEach(func() {
-			fakeGit.ReadFileReturns(nil, git.ErrNotFound)
+	Context("invalid path", func() {
+		It("returns 400 when git returns ErrInvalidPath", func() {
+			fakeGit.ReadFileReturns(nil, git.ErrInvalidPath)
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/files/../etc/passwd", nil)
+			h.ServeHTTP(rec, req)
+			Expect(rec.Code).To(Equal(http.StatusBadRequest))
+			Expect(rec.Body.String()).To(ContainSubstring(`"error"`))
 		})
 
-		It("returns 400 when path contains traversal", func() {
-			fakeGit.ReadFileReturns(nil, errWithMessage("path traversal not allowed"))
-			req := httptest.NewRequest(http.MethodGet, "/api/v1/files/../etc/passwd", nil)
+		It("returns 400 for .git path", func() {
+			fakeGit.ReadFileReturns(nil, git.ErrInvalidPath)
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/files/.git/config", nil)
 			h.ServeHTTP(rec, req)
 			Expect(rec.Code).To(Equal(http.StatusBadRequest))
 			Expect(rec.Body.String()).To(ContainSubstring(`"error"`))

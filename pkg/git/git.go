@@ -25,6 +25,9 @@ import (
 // ErrNotFound is returned when a requested file does not exist in the repository.
 var ErrNotFound = stderrors.New("file not found")
 
+// ErrInvalidPath is returned when the requested path fails validation.
+var ErrInvalidPath = stderrors.New("invalid path")
+
 // Status represents the current state of the git working tree.
 type Status struct {
 	// Clean is true when the working tree has no uncommitted changes.
@@ -55,28 +58,33 @@ type git struct {
 	mu       sync.Mutex
 }
 
-// validatePath rejects empty, absolute, and path-traversal paths.
+// validatePath rejects empty, absolute, path-traversal, and .git paths.
 func validatePath(ctx context.Context, path string) error {
 	if path == "" {
-		return errors.New(ctx, "path must not be empty")
+		return errors.Wrapf(ctx, ErrInvalidPath, "path must not be empty")
 	}
 	if filepath.IsAbs(path) {
-		return errors.New(ctx, "absolute paths not allowed")
+		return errors.Wrapf(ctx, ErrInvalidPath, "absolute paths not allowed")
 	}
 	// Check for .. components in both slash and OS separator forms.
 	for _, part := range strings.Split(path, "/") {
 		if part == ".." {
-			return errors.New(ctx, "path traversal not allowed")
+			return errors.Wrapf(ctx, ErrInvalidPath, "path traversal not allowed")
 		}
 	}
 	for _, part := range strings.Split(path, string(filepath.Separator)) {
 		if part == ".." {
-			return errors.New(ctx, "path traversal not allowed")
+			return errors.Wrapf(ctx, ErrInvalidPath, "path traversal not allowed")
 		}
 	}
 	cleaned := filepath.Clean(path)
 	if strings.HasPrefix(cleaned, "..") {
-		return errors.New(ctx, "path traversal not allowed")
+		return errors.Wrapf(ctx, ErrInvalidPath, "path traversal not allowed")
+	}
+	for _, part := range strings.Split(path, "/") {
+		if part == ".git" {
+			return errors.Wrapf(ctx, ErrInvalidPath, ".git directory access not allowed")
+		}
 	}
 	return nil
 }
