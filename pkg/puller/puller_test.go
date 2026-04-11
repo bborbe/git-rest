@@ -12,7 +12,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
-	gitmocks "github.com/bborbe/git-rest/pkg/git/mocks"
+	gitmocks "github.com/bborbe/git-rest/mocks"
 	"github.com/bborbe/git-rest/pkg/puller"
 )
 

@@ -20,7 +20,7 @@ import (
 	"github.com/bborbe/git-rest/pkg/metrics"
 )
 
-//go:generate go run -mod=mod github.com/maxbrunsfeld/counterfeiter/v6 -o mocks/fakes.go . Git
+//counterfeiter:generate -o ../../mocks/git.go --fake-name FakeGit . Git
 
 // ErrNotFound is returned when a requested file does not exist in the repository.
 var ErrNotFound = stderrors.New("file not found")

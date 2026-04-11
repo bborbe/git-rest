@@ -2,6 +2,10 @@
 
 All notable changes to this project will be documented in this file.
 
+## v0.4.1
+
+- refactor: Move Counterfeiter FakeGit mock from pkg/git/mocks/ to top-level mocks/ directory, update counterfeiter:generate annotation and all test imports
+
 ## v0.4.0
 
 - feat: Implement git-rest HTTP server with file CRUD, periodic git pull, health/readiness probes, and Prometheus metrics
