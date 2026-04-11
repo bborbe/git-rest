@@ -2,6 +2,10 @@
 
 All notable changes to this project will be documented in this file.
 
+## v0.6.2
+
+- refactor: Extract `filesDispatch` and `metricsMiddleware` from `main.go` into `pkg/handler/` as `NewFilesDispatchHandler` and `NewMetricsMiddleware`; add corresponding `CreateFilesDispatchHandler` and `CreateMetricsMiddleware` factory functions in `pkg/factory/`; add unit tests for both handlers
+
 ## v0.6.1
 
 - refactor: Replace fragile `err.Error() == "http: request body too large"` string check with typed `errors.As(err, &maxBytesErr)` using `*http.MaxBytesError` in files_post handler

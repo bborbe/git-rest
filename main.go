@@ -8,7 +8,6 @@ import (
 	"context"
 	"net/http"
 	"os"
-	"strconv"
 	"time"
 
 	libhttp "github.com/bborbe/http"
@@ -16,7 +15,6 @@ import (
 	libsentry "github.com/bborbe/sentry"
 	"github.com/bborbe/service"
 	libtime "github.com/bborbe/time"
-	"github.com/felixge/httpsnoop"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"github.com/bborbe/git-rest/pkg/factory"
@@ -68,7 +66,7 @@ func (a *application) createHTTPServer(gitClient git.Git, _ libsentry.Client) ru
 		mux := http.NewServeMux()
 
 		// Files routes using Go 1.22+ method+path routing.
-		mux.Handle("GET /api/v1/files/", filesDispatch(getH, listH))
+		mux.Handle("GET /api/v1/files/", factory.CreateFilesDispatchHandler(getH, listH))
 		mux.Handle("POST /api/v1/files/", postH)
 		mux.Handle("DELETE /api/v1/files/", deleteH)
 
@@ -76,7 +74,7 @@ func (a *application) createHTTPServer(gitClient git.Git, _ libsentry.Client) ru
 		mux.Handle("/readiness", readinessH)
 		mux.Handle("/metrics", promhttp.Handler())
 
-		return libhttp.NewServer(a.Listen, metricsMiddleware(mux)).Run(ctx)
+		return libhttp.NewServer(a.Listen, factory.CreateMetricsMiddleware(mux)).Run(ctx)
 	}
 }
 
@@ -84,27 +82,4 @@ func (a *application) createPuller(gitClient git.Git) run.Func {
 	return func(ctx context.Context) error {
 		return puller.New(gitClient, a.PullInterval).Run(ctx)
 	}
-}
-
-// filesDispatch routes GET /api/v1/files/ requests: glob query param → list, otherwise → get.
-func filesDispatch(getH, listH http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Query().Has("glob") {
-			listH.ServeHTTP(w, r)
-			return
-		}
-		getH.ServeHTTP(w, r)
-	})
-}
-
-// metricsMiddleware records git_rest_http_requests_total after each request.
-func metricsMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		m := httpsnoop.CaptureMetrics(next, w, r)
-		metrics.HTTPRequestsTotal.WithLabelValues(
-			r.Method,
-			r.URL.Path,
-			strconv.Itoa(m.Code),
-		).Inc()
-	})
 }

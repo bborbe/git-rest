@@ -40,3 +40,13 @@ func CreateHealthzHandler() http.Handler {
 func CreateReadinessHandler(g git.Git) http.Handler {
 	return handler.NewReadinessHandler(g)
 }
+
+// CreateFilesDispatchHandler returns a handler that routes between get and list.
+func CreateFilesDispatchHandler(getH, listH http.Handler) http.Handler {
+	return handler.NewFilesDispatchHandler(getH, listH)
+}
+
+// CreateMetricsMiddleware wraps next with Prometheus HTTP request counting.
+func CreateMetricsMiddleware(next http.Handler) http.Handler {
+	return handler.NewMetricsMiddleware(next)
+}
