@@ -1,7 +1,12 @@
 ---
-status: approved
+status: completed
+summary: Extracted filesDispatch and metricsMiddleware from main.go into pkg/handler/ as NewFilesDispatchHandler and NewMetricsMiddleware, added CreateFilesDispatchHandler and CreateMetricsMiddleware factory functions in pkg/factory/, and added unit tests for both handlers.
+container: git-rest-013-review-git-rest-extract-main-handlers
+dark-factory-version: v0.108.0-dirty
 created: "2026-04-11T00:00:00Z"
 queued: "2026-04-11T21:05:44Z"
+started: "2026-04-11T21:29:48Z"
+completed: "2026-04-11T21:35:42Z"
 ---
 
 <summary>
