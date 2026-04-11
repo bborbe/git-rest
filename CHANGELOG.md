@@ -2,6 +2,10 @@
 
 All notable changes to this project will be documented in this file.
 
+## v0.5.4
+
+- chore: Align main_test.go suite setup with canonical pattern (time.Local, format.TruncatedDiff, GinkgoConfiguration timeout, //go:generate directive, -mod=vendor)
+
 ## v0.5.3
 
 - refactor: Replace errors.Wrapf with errors.Wrap for plain string messages (no format verbs) in pkg/git/git.go
