@@ -1,6 +1,7 @@
 ---
-status: draft
+status: approved
 created: "2026-04-11T00:00:00Z"
+queued: "2026-04-11T21:05:37Z"
 ---
 
 <summary>
@@ -72,9 +73,7 @@ Files to read before making changes (read ALL first):
 
 5. Apply the same replacement in `pkg/handler/files_delete.go` (~line 31-37). Remove the `"strings"` import if no longer used.
 
-6. Update `pkg/handler/files_get.go`: remove the `#nosec G705` comment on line 43 (it references a non-existent gosec rule G705).
-
-7. Add or update tests in `pkg/git/git_test.go` to verify:
+6. Add or update tests in `pkg/git/git_test.go` to verify:
    - A path containing `.git` (e.g., `.git/config`) returns an error wrapping `ErrInvalidPath`
    - `errors.Is(err, git.ErrInvalidPath)` returns true for all validation failures
 

@@ -119,7 +119,7 @@ func (g *git) WriteFile(ctx context.Context, path string, content []byte) error 
 
 	if err := validatePath(ctx, path); err != nil {
 		metrics.GitOperationErrors.WithLabelValues("write_file").Inc()
-		return errors.Wrapf(ctx, err, "validate path")
+		return errors.Wrap(ctx, err, "validate path")
 	}
 
 	g.mu.Lock()
@@ -151,12 +151,12 @@ func (g *git) WriteFile(ctx context.Context, path string, content []byte) error 
 
 	if err := runCmd(ctx, g.repoPath, "commit", "-m", commitMsg); err != nil {
 		metrics.GitOperationErrors.WithLabelValues("write_file").Inc()
-		return errors.Wrapf(ctx, err, "git commit")
+		return errors.Wrap(ctx, err, "git commit")
 	}
 
 	if err := runCmd(ctx, g.repoPath, "push"); err != nil {
 		metrics.GitOperationErrors.WithLabelValues("write_file").Inc()
-		return errors.Wrapf(ctx, err, "git push")
+		return errors.Wrap(ctx, err, "git push")
 	}
 
 	return nil
@@ -172,7 +172,7 @@ func (g *git) DeleteFile(ctx context.Context, path string) error {
 
 	if err := validatePath(ctx, path); err != nil {
 		metrics.GitOperationErrors.WithLabelValues("delete_file").Inc()
-		return errors.Wrapf(ctx, err, "validate path")
+		return errors.Wrap(ctx, err, "validate path")
 	}
 
 	g.mu.Lock()
@@ -191,12 +191,12 @@ func (g *git) DeleteFile(ctx context.Context, path string) error {
 	commitMsg := "git-rest: delete " + path
 	if err := runCmd(ctx, g.repoPath, "commit", "-m", commitMsg); err != nil {
 		metrics.GitOperationErrors.WithLabelValues("delete_file").Inc()
-		return errors.Wrapf(ctx, err, "git commit")
+		return errors.Wrap(ctx, err, "git commit")
 	}
 
 	if err := runCmd(ctx, g.repoPath, "push"); err != nil {
 		metrics.GitOperationErrors.WithLabelValues("delete_file").Inc()
-		return errors.Wrapf(ctx, err, "git push")
+		return errors.Wrap(ctx, err, "git push")
 	}
 
 	return nil
@@ -212,7 +212,7 @@ func (g *git) ReadFile(ctx context.Context, path string) ([]byte, error) {
 
 	if err := validatePath(ctx, path); err != nil {
 		metrics.GitOperationErrors.WithLabelValues("read_file").Inc()
-		return nil, errors.Wrapf(ctx, err, "validate path")
+		return nil, errors.Wrap(ctx, err, "validate path")
 	}
 
 	g.mu.Lock()
@@ -246,7 +246,7 @@ func (g *git) ListFiles(ctx context.Context, pattern string) ([]string, error) {
 	out, err := runCmdOutput(ctx, g.repoPath, "ls-files")
 	if err != nil {
 		metrics.GitOperationErrors.WithLabelValues("list_files").Inc()
-		return nil, errors.Wrapf(ctx, err, "git ls-files")
+		return nil, errors.Wrap(ctx, err, "git ls-files")
 	}
 
 	var result []string
@@ -282,7 +282,7 @@ func (g *git) Pull(ctx context.Context) error {
 
 	if err := runCmd(ctx, g.repoPath, "pull"); err != nil {
 		metrics.GitOperationErrors.WithLabelValues("pull").Inc()
-		return errors.Wrapf(ctx, err, "git pull")
+		return errors.Wrap(ctx, err, "git pull")
 	}
 	return nil
 }
@@ -296,7 +296,7 @@ func (g *git) Status(ctx context.Context) (Status, error) {
 
 	out, err := runCmdOutput(ctx, g.repoPath, "status", "--porcelain")
 	if err != nil {
-		return s, errors.Wrapf(ctx, err, "git status --porcelain")
+		return s, errors.Wrap(ctx, err, "git status --porcelain")
 	}
 	s.Clean = strings.TrimSpace(string(out)) == ""
 

@@ -2,6 +2,10 @@
 
 All notable changes to this project will be documented in this file.
 
+## v0.5.3
+
+- refactor: Replace errors.Wrapf with errors.Wrap for plain string messages (no format verbs) in pkg/git/git.go
+
 ## v0.5.2
 
 - refactor: Replace flag-based main with service.Main pattern supporting CLI flags and environment variables via github.com/bborbe/service; add BuildInfoMetrics gauge git_rest_build_info; use libhttp.NewServer for graceful shutdown

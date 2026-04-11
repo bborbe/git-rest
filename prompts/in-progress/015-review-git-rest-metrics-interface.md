@@ -1,6 +1,7 @@
 ---
-status: draft
+status: approved
 created: "2026-04-11T00:00:00Z"
+queued: "2026-04-11T21:05:54Z"
 ---
 
 <summary>
@@ -21,9 +22,9 @@ Read `CLAUDE.md` for project conventions.
 
 Files to read before making changes (read ALL first):
 - `pkg/metrics/metrics.go`: current global var declarations and init()
-- `pkg/git/git.go`: direct metrics calls (~lines 116-121, 133, 138, 143, 153, 158, 168-175, 187, 193, 198, 208-215, 228, 238-241, 248, 263, 276-278, 284)
+- `pkg/git/git.go`: direct metrics calls (search for `metrics.GitOperationDuration` and `metrics.GitOperationErrors`)
 - `pkg/factory/factory.go`: factory function that calls git.New
-- `main.go`: wiring of metricsMiddleware and git.New
+- `main.go`: wiring of git.New and metrics (may use service.Main application struct pattern)
 - `mocks/mocks.go`: package stub to understand mock structure
 - `pkg/git/git_test.go`: existing tests to understand what needs updating
 </context>
@@ -95,12 +96,12 @@ Files to read before making changes (read ALL first):
    ```
    Or pass the `Metrics` value directly through the existing factory chain — whichever is less disruptive to `main.go`.
 
-5. Update `main.go` to construct `metrics.NewMetrics()` and pass it to the git client and middleware:
+5. Update `main.go` (or the application struct methods) to construct `metrics.NewMetrics()` and pass it to the git client and middleware. Find where `git.New(...)` is called and add the metrics parameter:
    ```go
    m := metrics.NewMetrics()
-   gitClient := git.New(*repo, m)
+   gitClient := git.New(repoPath, m)
    ```
-   Pass `m` to the metrics middleware as well.
+   Pass `m` to the metrics middleware as well. If main.go uses the `service.Main` application struct pattern, construct `m` inside the run method.
 
 6. Run `go generate ./pkg/metrics/...` to create `mocks/metrics.go`.
 

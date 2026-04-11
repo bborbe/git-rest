@@ -1,6 +1,7 @@
 ---
-status: draft
+status: approved
 created: "2026-04-11T00:00:00Z"
+queued: "2026-04-11T21:05:49Z"
 ---
 
 <summary>
@@ -19,11 +20,11 @@ Add `ReadTimeout`, `WriteTimeout`, and `IdleTimeout` to the `http.Server` struct
 Read `CLAUDE.md` for project conventions.
 
 Files to read before making changes (read ALL first):
-- `main.go` (~line 68-72): the `http.Server` struct definition
+- `main.go`: find the `http.Server` struct literal (search for `&http.Server{`)
 </context>
 
 <requirements>
-1. In `main.go`, update the `http.Server` literal (~line 68-72) to add the three missing timeouts:
+1. In `main.go`, update the `http.Server` literal (search for `&http.Server{`) to add the three missing timeouts:
    ```go
    server := &http.Server{
        Addr:              *addr,

@@ -1,6 +1,7 @@
 ---
-status: draft
+status: approved
 created: "2026-04-11T00:00:00Z"
+queued: "2026-04-11T21:05:44Z"
 ---
 
 <summary>
@@ -19,7 +20,7 @@ Extract `filesDispatch` and `metricsMiddleware` from `main.go` into `pkg/handler
 Read `CLAUDE.md` for project conventions.
 
 Files to read before making changes (read ALL first):
-- `main.go` (~line 97-118): filesDispatch and metricsMiddleware definitions
+- `main.go`: find `filesDispatch` and `metricsMiddleware` function definitions (may be methods on application struct after service.Main refactor)
 - `pkg/handler/files_get.go`: existing handler structure to follow
 - `pkg/factory/factory.go`: existing factory function structure to follow
 - `pkg/handler/handler_suite_test.go`: test suite setup to understand how to add tests
@@ -94,10 +95,10 @@ Files to read before making changes (read ALL first):
    ```
 
 4. Update `main.go`:
-   - Remove the `filesDispatch` function definition (~line 97-106)
-   - Remove the `metricsMiddleware` function definition (~line 108-118)
-   - Replace the inline call `filesDispatch(getH, listH)` with `factory.CreateFilesDispatchHandler(getH, listH)`
-   - Replace `metricsMiddleware(mux)` with `factory.CreateMetricsMiddleware(mux)`
+   - Remove the `filesDispatch` function or method (search for `func` + `filesDispatch` or `func (a *application) filesDispatch`)
+   - Remove the `metricsMiddleware` function or method (search for `func` + `metricsMiddleware`)
+   - Replace the inline call `filesDispatch(getH, listH)` or `a.filesDispatch(getH, listH)` with `factory.CreateFilesDispatchHandler(getH, listH)`
+   - Replace `metricsMiddleware(mux)` or `a.metricsMiddleware(mux)` with `factory.CreateMetricsMiddleware(mux)`
    - Remove any imports that become unused (e.g., `"strconv"`, `"github.com/felixge/httpsnoop"`, `"github.com/bborbe/git-rest/pkg/metrics"`)
 
 5. Add tests in `pkg/handler/files_dispatch_test.go` (using Ginkgo, follow the pattern from existing handler test files):
