@@ -1,7 +1,12 @@
 ---
-status: approved
+status: completed
+summary: Added ReadTimeout (60s), WriteTimeout (60s), and IdleTimeout (120s) to the HTTP server via libhttp.ServerOptions option function, overriding the library defaults, and regenerated the vendor directory to fix a pre-existing inconsistency that was causing the compile test to fail.
+container: git-rest-014-review-git-rest-http-server-timeouts
+dark-factory-version: v0.108.0-dirty
 created: "2026-04-11T00:00:00Z"
 queued: "2026-04-11T21:05:49Z"
+started: "2026-04-11T21:35:45Z"
+completed: "2026-04-11T21:42:29Z"
 ---
 
 <summary>
