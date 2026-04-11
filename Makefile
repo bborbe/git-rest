@@ -1,6 +1,6 @@
 
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
-LDFLAGS := -X github.com/bborbe/vault-cli/pkg/cli.version=$(VERSION)
+LDFLAGS := -X main.version=$(VERSION)
 
 .PHONY: default
 default: precommit
@@ -11,7 +11,7 @@ run:
 
 .PHONY: build
 build:
-	@go build -mod=mod -o bin/vault-cli main.go
+	@go build -mod=mod -o bin/git-rest main.go
 
 .PHONY: install
 install:
@@ -31,7 +31,7 @@ ensure:
 format:
 	find . -type f -name 'go.mod' -not -path './vendor/*' -exec go run -mod=mod github.com/shoenig/go-modtool -w fmt "{}" \;
 	find . -type f -name '*.go' -not -path './vendor/*' -exec gofmt -w "{}" +
-	go run -mod=mod github.com/incu6us/goimports-reviser/v3 -project-name github.com/bborbe/vault-cli -format -excludes vendor ./...
+	go run -mod=mod github.com/incu6us/goimports-reviser/v3 -project-name github.com/bborbe/git-rest -format -excludes vendor ./...
 	find . -type d -name vendor -prune -o -type f -name '*.go' -print0 | xargs -0 -n 10 go run -mod=mod github.com/segmentio/golines --max-len=100 -w
 
 .PHONY: generate

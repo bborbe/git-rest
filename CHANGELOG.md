@@ -8,6 +8,10 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 * MINOR version when you add functionality in a backwards-compatible manner, and
 * PATCH version when you make backwards-compatible bug fixes.
 
+## v0.2.0
+
+- feat: Add pkg/git package with Git interface, serialized shell operations, path validation, and Counterfeiter mock
+
 ## v0.1.0
 
 - Initial project setup

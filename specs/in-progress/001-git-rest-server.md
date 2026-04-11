@@ -1,5 +1,9 @@
 ---
-status: draft
+status: prompted
+approved: "2026-04-11T19:23:50Z"
+generating: "2026-04-11T19:24:04Z"
+prompted: "2026-04-11T19:26:54Z"
+branch: dark-factory/git-rest-server
 ---
 
 ## Summary
@@ -37,12 +41,12 @@ A running `git-rest` server accepts HTTP requests to read, create, update, and d
 ## Desired Behavior
 
 1. `GET /api/v1/files/{path}` returns file content with 200, or 404 if not found
-2. `POST /api/v1/files/{path}` creates or updates a file, runs `git add + commit + push`, returns 200
+2. `POST /api/v1/files/{path}` creates or updates a file (body is raw file content), runs `git add + commit + push`, returns 200
 3. `DELETE /api/v1/files/{path}` removes a file, runs `git add + commit + push`, returns 200 or 404
 4. `GET /api/v1/files/` with query param `?glob=pattern` lists matching file paths as JSON array
 5. Server runs `git pull` on a configurable interval (default 30s)
 6. `GET /healthz` returns 200 when server is ready
-7. `GET /readiness` returns 200 only when the git repo is in a clean state
+7. `GET /readiness` returns 200 only when the git repo working tree is clean and has no unpushed commits
 8. `GET /metrics` exposes Prometheus metrics (request counts, git operation durations, errors)
 
 ## Constraints
@@ -57,7 +61,7 @@ A running `git-rest` server accepts HTTP requests to read, create, update, and d
 
 | Trigger | Expected Behavior | Recovery |
 |---------|-------------------|----------|
-| `git push` fails (conflict) | Return 500 with error, log warning | Next `git pull` resolves; retry write |
+| `git push` fails (conflict) | Return 500 with error, log warning, readiness returns non-200 | Next `git pull` attempts merge; if pull also conflicts, manual intervention required |
 | `git pull` fails (network) | Log warning, continue serving | Automatic retry on next interval |
 | File path traversal (`../`) | Return 400 Bad Request | Input validation |
 | Repo directory missing | Fail startup with clear error | Fix mount / config |
