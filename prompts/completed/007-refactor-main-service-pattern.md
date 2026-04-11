@@ -1,8 +1,13 @@
 ---
-status: approved
+status: completed
 spec: [001-git-rest-server]
+summary: Refactored main.go from raw flag parsing to service.Main pattern with application struct supporting CLI flags and env vars; added pkg/metrics/build_info.go with BuildInfoMetrics gauge; integrated libhttp.NewServer for graceful shutdown and service.Run for concurrent puller + HTTP server; vendored new dependencies (bborbe/service, bborbe/sentry, bborbe/time, bborbe/http, bborbe/run).
+container: git-rest-007-refactor-main-service-pattern
+dark-factory-version: v0.108.0-dirty
 created: "2026-04-11T22:20:00Z"
 queued: "2026-04-11T20:24:36Z"
+started: "2026-04-11T20:27:37Z"
+completed: "2026-04-11T20:33:49Z"
 ---
 
 <summary>
