@@ -2,6 +2,10 @@
 
 All notable changes to this project will be documented in this file.
 
+## v0.6.4
+
+- refactor: Define `Metrics` interface in `pkg/metrics/` with `NewMetrics()` Prometheus-backed implementation; inject into `git.New()` and `NewMetricsMiddleware()` via constructor params, removing direct package-level var access from `pkg/git/`; normalize HTTP path labels to `/api/v1/files/{path}` to prevent unbounded cardinality; add `FakeMetrics` counterfeiter mock; pre-initialize `GitOperationErrors` counter for all known operations
+
 ## v0.6.3
 
 - fix: Set ReadTimeout (60s), WriteTimeout (60s), and IdleTimeout (120s) on HTTP server to prevent slow-client resource exhaustion attacks

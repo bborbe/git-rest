@@ -17,6 +17,15 @@ import (
 	"github.com/bborbe/git-rest/pkg/git"
 )
 
+// noopMetrics satisfies metrics.Metrics without recording anything, for use in git tests.
+type noopMetrics struct{}
+
+func (n *noopMetrics) ObserveGitOperation(_ string, _ float64) {}
+
+func (n *noopMetrics) IncGitOperationError(_ string) {}
+
+func (n *noopMetrics) IncHTTPRequest(_, _, _ string) {}
+
 // initRepo creates a temporary git repo with a local bare remote so that push works.
 func initRepo() (workDir string, cleanup func()) {
 	remoteDir, err := os.MkdirTemp("", "git-remote-*")
@@ -65,7 +74,7 @@ var _ = Describe("Git", func() {
 	BeforeEach(func() {
 		ctx = context.Background()
 		workDir, cleanup = initRepo()
-		g = git.New(workDir)
+		g = git.New(workDir, &noopMetrics{})
 	})
 
 	AfterEach(func() {

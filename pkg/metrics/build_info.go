@@ -11,7 +11,7 @@ import (
 
 // BuildInfoMetrics records build information as a Prometheus gauge.
 //
-//counterfeiter:generate -o mocks/build_info_metrics.go --fake-name BuildInfoMetrics . BuildInfoMetrics
+//counterfeiter:generate -o ../../mocks/build_info_metrics.go --fake-name BuildInfoMetrics . BuildInfoMetrics
 type BuildInfoMetrics interface {
 	SetBuildInfo(buildDate *libtime.DateTime)
 }

@@ -29,4 +29,35 @@ var GitOperationErrors = prometheus.NewCounterVec(prometheus.CounterOpts{
 
 func init() {
 	prometheus.MustRegister(HTTPRequestsTotal, GitOperationDuration, GitOperationErrors)
+	for _, op := range []string{"write_file", "delete_file", "read_file", "list_files", "pull"} {
+		GitOperationErrors.WithLabelValues(op).Add(0)
+	}
+}
+
+//counterfeiter:generate -o ../../mocks/metrics.go --fake-name FakeMetrics . Metrics
+
+// Metrics records git operation instrumentation.
+type Metrics interface {
+	ObserveGitOperation(operation string, duration float64)
+	IncGitOperationError(operation string)
+	IncHTTPRequest(method, path, statusCode string)
+}
+
+// NewMetrics returns a Prometheus-backed Metrics implementation.
+func NewMetrics() Metrics {
+	return &prometheusMetrics{}
+}
+
+type prometheusMetrics struct{}
+
+func (p *prometheusMetrics) ObserveGitOperation(operation string, duration float64) {
+	GitOperationDuration.WithLabelValues(operation).Observe(duration)
+}
+
+func (p *prometheusMetrics) IncGitOperationError(operation string) {
+	GitOperationErrors.WithLabelValues(operation).Inc()
+}
+
+func (p *prometheusMetrics) IncHTTPRequest(method, path, statusCode string) {
+	HTTPRequestsTotal.WithLabelValues(method, path, statusCode).Inc()
 }

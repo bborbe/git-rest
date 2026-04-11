@@ -46,15 +46,20 @@ func (a *application) Run(ctx context.Context, sentryClient libsentry.Client) er
 
 	metrics.NewBuildInfoMetrics(a.BuildGitVersion, a.BuildGitCommit).SetBuildInfo(a.BuildDate)
 
-	gitClient := git.New(a.Repo)
+	m := metrics.NewMetrics()
+	gitClient := factory.CreateGitClient(a.Repo, m)
 
 	return service.Run(ctx,
-		a.createHTTPServer(gitClient, sentryClient),
+		a.createHTTPServer(gitClient, m, sentryClient),
 		a.createPuller(gitClient),
 	)
 }
 
-func (a *application) createHTTPServer(gitClient git.Git, _ libsentry.Client) run.Func {
+func (a *application) createHTTPServer(
+	gitClient git.Git,
+	m metrics.Metrics,
+	_ libsentry.Client,
+) run.Func {
 	return func(ctx context.Context) error {
 		getH := factory.CreateFilesGetHandler(gitClient)
 		postH := factory.CreateFilesPostHandler(gitClient)
@@ -76,7 +81,7 @@ func (a *application) createHTTPServer(gitClient git.Git, _ libsentry.Client) ru
 
 		return libhttp.NewServer(
 			a.Listen,
-			factory.CreateMetricsMiddleware(mux),
+			factory.CreateMetricsMiddleware(m, mux),
 			func(o *libhttp.ServerOptions) {
 				o.ReadTimeout = 60 * time.Second
 				o.WriteTimeout = 60 * time.Second

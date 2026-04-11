@@ -9,7 +9,13 @@ import (
 
 	"github.com/bborbe/git-rest/pkg/git"
 	"github.com/bborbe/git-rest/pkg/handler"
+	"github.com/bborbe/git-rest/pkg/metrics"
 )
+
+// CreateGitClient returns a Git implementation for the given repository path.
+func CreateGitClient(repoPath string, m metrics.Metrics) git.Git {
+	return git.New(repoPath, m)
+}
 
 // CreateFilesGetHandler returns an http.Handler for GET /api/v1/files/{path}.
 func CreateFilesGetHandler(g git.Git) http.Handler {
@@ -47,6 +53,6 @@ func CreateFilesDispatchHandler(getH, listH http.Handler) http.Handler {
 }
 
 // CreateMetricsMiddleware wraps next with Prometheus HTTP request counting.
-func CreateMetricsMiddleware(next http.Handler) http.Handler {
-	return handler.NewMetricsMiddleware(next)
+func CreateMetricsMiddleware(m metrics.Metrics, next http.Handler) http.Handler {
+	return handler.NewMetricsMiddleware(m, next)
 }

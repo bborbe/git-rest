@@ -47,15 +47,17 @@ type Git interface {
 }
 
 // New returns a Git implementation backed by the system git binary for the given repository path.
-func New(repoPath string) Git {
+func New(repoPath string, m metrics.Metrics) Git {
 	return &git{
 		repoPath: repoPath,
+		metrics:  m,
 	}
 }
 
 type git struct {
 	repoPath string
 	mu       sync.Mutex
+	metrics  metrics.Metrics
 }
 
 // validatePath rejects empty, absolute, path-traversal, and .git paths.
@@ -121,12 +123,11 @@ func runCmdOutput(ctx context.Context, dir string, args ...string) ([]byte, erro
 func (g *git) WriteFile(ctx context.Context, path string, content []byte) error {
 	start := time.Now()
 	defer func() {
-		metrics.GitOperationDuration.WithLabelValues("write_file").
-			Observe(time.Since(start).Seconds())
+		g.metrics.ObserveGitOperation("write_file", time.Since(start).Seconds())
 	}()
 
 	if err := validatePath(ctx, path); err != nil {
-		metrics.GitOperationErrors.WithLabelValues("write_file").Inc()
+		g.metrics.IncGitOperationError("write_file")
 		return errors.Wrap(ctx, err, "validate path")
 	}
 
@@ -138,17 +139,17 @@ func (g *git) WriteFile(ctx context.Context, path string, content []byte) error 
 	fileExists := statErr == nil
 
 	if err := os.MkdirAll(filepath.Dir(fullPath), 0750); err != nil {
-		metrics.GitOperationErrors.WithLabelValues("write_file").Inc()
+		g.metrics.IncGitOperationError("write_file")
 		return errors.Wrapf(ctx, err, "create directories for %s", path)
 	}
 
 	if err := os.WriteFile(fullPath, content, 0600); err != nil { //nolint:gosec
-		metrics.GitOperationErrors.WithLabelValues("write_file").Inc()
+		g.metrics.IncGitOperationError("write_file")
 		return errors.Wrapf(ctx, err, "write file %s", path)
 	}
 
 	if err := runCmd(ctx, g.repoPath, "add", path); err != nil {
-		metrics.GitOperationErrors.WithLabelValues("write_file").Inc()
+		g.metrics.IncGitOperationError("write_file")
 		return errors.Wrapf(ctx, err, "git add %s", path)
 	}
 
@@ -158,12 +159,12 @@ func (g *git) WriteFile(ctx context.Context, path string, content []byte) error 
 	}
 
 	if err := runCmd(ctx, g.repoPath, "commit", "-m", commitMsg); err != nil {
-		metrics.GitOperationErrors.WithLabelValues("write_file").Inc()
+		g.metrics.IncGitOperationError("write_file")
 		return errors.Wrap(ctx, err, "git commit")
 	}
 
 	if err := runCmd(ctx, g.repoPath, "push"); err != nil {
-		metrics.GitOperationErrors.WithLabelValues("write_file").Inc()
+		g.metrics.IncGitOperationError("write_file")
 		return errors.Wrap(ctx, err, "git push")
 	}
 
@@ -174,12 +175,11 @@ func (g *git) WriteFile(ctx context.Context, path string, content []byte) error 
 func (g *git) DeleteFile(ctx context.Context, path string) error {
 	start := time.Now()
 	defer func() {
-		metrics.GitOperationDuration.WithLabelValues("delete_file").
-			Observe(time.Since(start).Seconds())
+		g.metrics.ObserveGitOperation("delete_file", time.Since(start).Seconds())
 	}()
 
 	if err := validatePath(ctx, path); err != nil {
-		metrics.GitOperationErrors.WithLabelValues("delete_file").Inc()
+		g.metrics.IncGitOperationError("delete_file")
 		return errors.Wrap(ctx, err, "validate path")
 	}
 
@@ -192,18 +192,18 @@ func (g *git) DeleteFile(ctx context.Context, path string) error {
 	}
 
 	if err := runCmd(ctx, g.repoPath, "rm", path); err != nil {
-		metrics.GitOperationErrors.WithLabelValues("delete_file").Inc()
+		g.metrics.IncGitOperationError("delete_file")
 		return errors.Wrapf(ctx, err, "git rm %s", path)
 	}
 
 	commitMsg := "git-rest: delete " + path
 	if err := runCmd(ctx, g.repoPath, "commit", "-m", commitMsg); err != nil {
-		metrics.GitOperationErrors.WithLabelValues("delete_file").Inc()
+		g.metrics.IncGitOperationError("delete_file")
 		return errors.Wrap(ctx, err, "git commit")
 	}
 
 	if err := runCmd(ctx, g.repoPath, "push"); err != nil {
-		metrics.GitOperationErrors.WithLabelValues("delete_file").Inc()
+		g.metrics.IncGitOperationError("delete_file")
 		return errors.Wrap(ctx, err, "git push")
 	}
 
@@ -214,12 +214,11 @@ func (g *git) DeleteFile(ctx context.Context, path string) error {
 func (g *git) ReadFile(ctx context.Context, path string) ([]byte, error) {
 	start := time.Now()
 	defer func() {
-		metrics.GitOperationDuration.WithLabelValues("read_file").
-			Observe(time.Since(start).Seconds())
+		g.metrics.ObserveGitOperation("read_file", time.Since(start).Seconds())
 	}()
 
 	if err := validatePath(ctx, path); err != nil {
-		metrics.GitOperationErrors.WithLabelValues("read_file").Inc()
+		g.metrics.IncGitOperationError("read_file")
 		return nil, errors.Wrap(ctx, err, "validate path")
 	}
 
@@ -233,7 +232,7 @@ func (g *git) ReadFile(ctx context.Context, path string) ([]byte, error) {
 		if os.IsNotExist(err) {
 			return nil, ErrNotFound
 		}
-		metrics.GitOperationErrors.WithLabelValues("read_file").Inc()
+		g.metrics.IncGitOperationError("read_file")
 		return nil, errors.Wrapf(ctx, err, "read file %s", path)
 	}
 	return data, nil
@@ -244,8 +243,7 @@ func (g *git) ReadFile(ctx context.Context, path string) ([]byte, error) {
 func (g *git) ListFiles(ctx context.Context, pattern string) ([]string, error) {
 	start := time.Now()
 	defer func() {
-		metrics.GitOperationDuration.WithLabelValues("list_files").
-			Observe(time.Since(start).Seconds())
+		g.metrics.ObserveGitOperation("list_files", time.Since(start).Seconds())
 	}()
 
 	g.mu.Lock()
@@ -253,7 +251,7 @@ func (g *git) ListFiles(ctx context.Context, pattern string) ([]string, error) {
 
 	out, err := runCmdOutput(ctx, g.repoPath, "ls-files")
 	if err != nil {
-		metrics.GitOperationErrors.WithLabelValues("list_files").Inc()
+		g.metrics.IncGitOperationError("list_files")
 		return nil, errors.Wrap(ctx, err, "git ls-files")
 	}
 
@@ -268,7 +266,7 @@ func (g *git) ListFiles(ctx context.Context, pattern string) ([]string, error) {
 		}
 		matched, matchErr := filepath.Match(pattern, line)
 		if matchErr != nil {
-			metrics.GitOperationErrors.WithLabelValues("list_files").Inc()
+			g.metrics.IncGitOperationError("list_files")
 			return nil, errors.Wrapf(ctx, matchErr, "match pattern %s against %s", pattern, line)
 		}
 		if matched {
@@ -282,14 +280,14 @@ func (g *git) ListFiles(ctx context.Context, pattern string) ([]string, error) {
 func (g *git) Pull(ctx context.Context) error {
 	start := time.Now()
 	defer func() {
-		metrics.GitOperationDuration.WithLabelValues("pull").Observe(time.Since(start).Seconds())
+		g.metrics.ObserveGitOperation("pull", time.Since(start).Seconds())
 	}()
 
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
 	if err := runCmd(ctx, g.repoPath, "pull"); err != nil {
-		metrics.GitOperationErrors.WithLabelValues("pull").Inc()
+		g.metrics.IncGitOperationError("pull")
 		return errors.Wrap(ctx, err, "git pull")
 	}
 	return nil
