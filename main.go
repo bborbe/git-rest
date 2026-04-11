@@ -6,16 +6,16 @@ package main
 
 import (
 	"context"
-	"flag"
-	"fmt"
-	"log/slog"
 	"net/http"
 	"os"
-	"os/signal"
 	"strconv"
-	"syscall"
 	"time"
 
+	libhttp "github.com/bborbe/http"
+	"github.com/bborbe/run"
+	libsentry "github.com/bborbe/sentry"
+	"github.com/bborbe/service"
+	libtime "github.com/bborbe/time"
 	"github.com/felixge/httpsnoop"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
@@ -26,71 +26,63 @@ import (
 )
 
 func main() {
-	repo := flag.String("repo", "", "path to the git repository on disk (required)")
-	addr := flag.String("addr", ":8080", "HTTP listen address")
-	pullInterval := flag.Duration("pull-interval", 30*time.Second, "how often to run git pull")
-	flag.Parse()
+	app := &application{}
+	os.Exit(service.Main(context.Background(), app, &app.SentryDSN, &app.SentryProxy))
+}
 
-	if *repo == "" {
-		fmt.Fprintln(os.Stderr, "error: --repo is required")
-		flag.Usage()
-		os.Exit(1)
+type application struct {
+	SentryDSN       string            `required:"false" arg:"sentry-dsn"        env:"SENTRY_DSN"        usage:"Sentry DSN"                     display:"length"`
+	SentryProxy     string            `required:"false" arg:"sentry-proxy"      env:"SENTRY_PROXY"      usage:"Sentry Proxy"`
+	Listen          string            `required:"true"  arg:"listen"            env:"LISTEN"            usage:"HTTP listen address"                             default:":8080"`
+	Repo            string            `required:"true"  arg:"repo"              env:"REPO"              usage:"path to git repository on disk"`
+	PullInterval    time.Duration     `required:"false" arg:"pull-interval"     env:"PULL_INTERVAL"     usage:"git pull interval"                               default:"30s"`
+	BuildGitVersion string            `required:"false" arg:"build-git-version" env:"BUILD_GIT_VERSION" usage:"Build Git version"                               default:"dev"`
+	BuildGitCommit  string            `required:"false" arg:"build-git-commit"  env:"BUILD_GIT_COMMIT"  usage:"Build Git commit hash"                           default:"none"`
+	BuildDate       *libtime.DateTime `required:"false" arg:"build-date"        env:"BUILD_DATE"        usage:"Build timestamp (RFC3339)"`
+}
+
+func (a *application) Run(ctx context.Context, sentryClient libsentry.Client) error {
+	if _, err := os.Stat(a.Repo); err != nil {
+		return err
 	}
 
-	if _, err := os.Stat(*repo); err != nil {
-		fmt.Fprintf(os.Stderr, "error: repo directory does not exist: %s\n", *repo)
-		os.Exit(1)
+	metrics.NewBuildInfoMetrics(a.BuildGitVersion, a.BuildGitCommit).SetBuildInfo(a.BuildDate)
+
+	gitClient := git.New(a.Repo)
+
+	return service.Run(ctx,
+		a.createHTTPServer(gitClient, sentryClient),
+		a.createPuller(gitClient),
+	)
+}
+
+func (a *application) createHTTPServer(gitClient git.Git, _ libsentry.Client) run.Func {
+	return func(ctx context.Context) error {
+		getH := factory.CreateFilesGetHandler(gitClient)
+		postH := factory.CreateFilesPostHandler(gitClient)
+		deleteH := factory.CreateFilesDeleteHandler(gitClient)
+		listH := factory.CreateFilesListHandler(gitClient)
+		healthzH := factory.CreateHealthzHandler()
+		readinessH := factory.CreateReadinessHandler(gitClient)
+
+		mux := http.NewServeMux()
+
+		// Files routes using Go 1.22+ method+path routing.
+		mux.Handle("GET /api/v1/files/", filesDispatch(getH, listH))
+		mux.Handle("POST /api/v1/files/", postH)
+		mux.Handle("DELETE /api/v1/files/", deleteH)
+
+		mux.Handle("/healthz", healthzH)
+		mux.Handle("/readiness", readinessH)
+		mux.Handle("/metrics", promhttp.Handler())
+
+		return libhttp.NewServer(a.Listen, metricsMiddleware(mux)).Run(ctx)
 	}
+}
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-
-	gitClient := git.New(*repo)
-
-	getH := factory.CreateFilesGetHandler(gitClient)
-	postH := factory.CreateFilesPostHandler(gitClient)
-	deleteH := factory.CreateFilesDeleteHandler(gitClient)
-	listH := factory.CreateFilesListHandler(gitClient)
-	healthzH := factory.CreateHealthzHandler()
-	readinessH := factory.CreateReadinessHandler(gitClient)
-
-	mux := http.NewServeMux()
-
-	// Files routes using Go 1.22+ method+path routing.
-	mux.Handle("GET /api/v1/files/", filesDispatch(getH, listH))
-	mux.Handle("POST /api/v1/files/", postH)
-	mux.Handle("DELETE /api/v1/files/", deleteH)
-
-	mux.Handle("/healthz", healthzH)
-	mux.Handle("/readiness", readinessH)
-	mux.Handle("/metrics", promhttp.Handler())
-
-	server := &http.Server{
-		Addr:              *addr,
-		Handler:           metricsMiddleware(mux),
-		ReadHeaderTimeout: 10 * time.Second,
-	}
-
-	p := puller.New(gitClient, *pullInterval)
-	go func() {
-		if err := p.Run(ctx); err != nil && ctx.Err() == nil {
-			slog.ErrorContext(ctx, "puller exited unexpectedly", "error", err)
-		}
-	}()
-
-	go func() {
-		<-ctx.Done()
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		if err := server.Shutdown(shutdownCtx); err != nil {
-			slog.ErrorContext(shutdownCtx, "server shutdown error", "error", err)
-		}
-	}()
-
-	slog.Info("starting git-rest server", "addr", *addr, "repo", *repo)
-	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		fmt.Fprintf(os.Stderr, "server error: %v\n", err)
-		os.Exit(1)
+func (a *application) createPuller(gitClient git.Git) run.Func {
+	return func(ctx context.Context) error {
+		return puller.New(gitClient, a.PullInterval).Run(ctx)
 	}
 }
 

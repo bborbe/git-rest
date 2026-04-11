@@ -2,6 +2,10 @@
 
 All notable changes to this project will be documented in this file.
 
+## v0.5.2
+
+- refactor: Replace flag-based main with service.Main pattern supporting CLI flags and environment variables via github.com/bborbe/service; add BuildInfoMetrics gauge git_rest_build_info; use libhttp.NewServer for graceful shutdown
+
 ## v0.5.1
 
 - chore: Run full automated code review and generate fix prompts for Critical/Important findings

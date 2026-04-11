@@ -13,6 +13,11 @@ replace (
 
 require (
 	github.com/bborbe/errors v1.5.10
+	github.com/bborbe/http v1.26.10
+	github.com/bborbe/run v1.9.18
+	github.com/bborbe/sentry v1.9.14
+	github.com/bborbe/service v1.9.9
+	github.com/bborbe/time v1.25.8
 	github.com/felixge/httpsnoop v1.0.4
 	github.com/golangci/golangci-lint/v2 v2.11.4
 	github.com/google/addlicense v1.2.0
@@ -92,6 +97,13 @@ require (
 	github.com/aymerick/douceur v0.2.0 // indirect
 	github.com/ayoubfaouzi/pkcs7 v0.2.3 // indirect
 	github.com/bazelbuild/buildtools v0.0.0-20260319080235-05d2ebe49b0f // indirect
+	github.com/bborbe/argument/v2 v2.12.18 // indirect
+	github.com/bborbe/collection v1.20.8 // indirect
+	github.com/bborbe/kv v1.19.4 // indirect
+	github.com/bborbe/log v1.6.10 // indirect
+	github.com/bborbe/math v1.3.7 // indirect
+	github.com/bborbe/parse v1.10.9 // indirect
+	github.com/bborbe/validation v1.4.10 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/bkielbasa/cyclop v1.2.3 // indirect
 	github.com/blizzy78/varnamelen v0.8.0 // indirect
@@ -165,6 +177,7 @@ require (
 	github.com/firefart/nonamedreturns v1.0.6 // indirect
 	github.com/fsnotify/fsnotify v1.9.0 // indirect
 	github.com/fzipp/gocyclo v0.6.0 // indirect
+	github.com/getsentry/sentry-go v0.45.0 // indirect
 	github.com/ghostiam/protogetter v0.3.20 // indirect
 	github.com/go-critic/go-critic v0.14.3 // indirect
 	github.com/go-errors/errors v1.5.1 // indirect
@@ -189,6 +202,7 @@ require (
 	github.com/godoc-lint/godoc-lint v0.11.2 // indirect
 	github.com/gofrs/flock v0.13.0 // indirect
 	github.com/gogo/protobuf v1.3.2 // indirect
+	github.com/golang/glog v1.2.5 // indirect
 	github.com/golang/groupcache v0.0.0-20241129210726-2c02b8208cf8 // indirect
 	github.com/golangci/asciicheck v0.5.0 // indirect
 	github.com/golangci/dupl v0.0.0-20260401084720-c99c5cf5c202 // indirect
@@ -212,6 +226,7 @@ require (
 	github.com/gookit/color v1.6.0 // indirect
 	github.com/gordonklaus/ineffassign v0.2.0 // indirect
 	github.com/gorilla/css v1.0.1 // indirect
+	github.com/gorilla/mux v1.8.1 // indirect
 	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/gostaticanalysis/analysisutil v0.7.1 // indirect
 	github.com/gostaticanalysis/comment v1.5.0 // indirect
@@ -425,7 +440,6 @@ require (
 	google.golang.org/grpc v1.80.0 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
 	gopkg.in/ini.v1 v1.67.1 // indirect
-	gopkg.in/tomb.v1 v1.0.0-20141024135613-dd632973f1e7 // indirect
 	gopkg.in/warnings.v0 v0.1.2 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 	honnef.co/go/tools v0.7.0 // indirect
