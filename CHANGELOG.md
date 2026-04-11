@@ -2,6 +2,10 @@
 
 All notable changes to this project will be documented in this file.
 
+## v0.6.1
+
+- refactor: Replace fragile `err.Error() == "http: request body too large"` string check with typed `errors.As(err, &maxBytesErr)` using `*http.MaxBytesError` in files_post handler
+
 ## v0.6.0
 
 - feat: Add ErrInvalidPath sentinel error to pkg/git and update validatePath to wrap all validation failures with it, including new .git directory component check; update all three file handlers to use errors.Is(err, git.ErrInvalidPath) instead of string matching for 400 vs 500 routing
