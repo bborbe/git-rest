@@ -1,7 +1,12 @@
 ---
-status: approved
+status: completed
+summary: Added ErrInvalidPath sentinel error to pkg/git, updated validatePath to wrap all validation failures and added .git directory check, updated all three file handlers to use errors.Is(err, git.ErrInvalidPath) instead of string matching, and updated tests accordingly.
+container: git-rest-011-review-git-rest-1-sentinel-invalid-path
+dark-factory-version: v0.108.0-dirty
 created: "2026-04-11T00:00:00Z"
 queued: "2026-04-11T21:05:37Z"
+started: "2026-04-11T21:19:38Z"
+completed: "2026-04-11T21:25:30Z"
 ---
 
 <summary>
