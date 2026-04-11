@@ -1,7 +1,12 @@
 ---
-status: approved
+status: completed
+summary: Defined Metrics interface in pkg/metrics/, implemented with Prometheus-backed struct, injected into git.New() and NewMetricsMiddleware() via constructor params, normalized HTTP path labels to /api/v1/files/{path}, added FakeMetrics counterfeiter mock, pre-initialized GitOperationErrors counter, added metrics_suite_test.go for generate wiring, fixed build_info.go annotation path.
+container: git-rest-015-review-git-rest-metrics-interface
+dark-factory-version: v0.108.0-dirty
 created: "2026-04-11T00:00:00Z"
 queued: "2026-04-11T21:05:54Z"
+started: "2026-04-11T21:42:31Z"
+completed: "2026-04-11T21:59:07Z"
 ---
 
 <summary>
