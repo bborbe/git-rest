@@ -7,11 +7,11 @@ branch: dark-factory/git-rest-server
 ---
 
 <summary>
-- Multi-stage Dockerfile: Go build stage compiles static binary, Alpine runtime stage includes git and SSH client
-- Runtime image has git, openssh-client, ca-certificates, gnupg, and tzdata for git operations over SSH/HTTPS
-- Binary is statically linked (CGO_ENABLED=0) and stripped (-s flag)
-- Build args for git commit hash and build date are baked into the image as environment variables
-- Entrypoint is the compiled binary — no shell wrapper
+- Production Docker image builds the git-rest server as a single static binary
+- Runtime image includes the git toolchain needed for git add/commit/push/pull operations
+- Image supports SSH and HTTPS git remotes out of the box
+- Build metadata (git commit, build date) is embedded in the image for traceability
+- Image is ready for deployment as a K8s StatefulSet with a PVC-backed git repo
 </summary>
 
 <objective>
@@ -71,9 +71,15 @@ Existing files:
 - Runtime must include `git` — the server shells out to the git binary at runtime
 - Binary must be statically linked (`CGO_ENABLED=0`)
 - Do NOT commit — dark-factory handles git
+- Existing tests must still pass
 </constraints>
 
 <verification>
+```bash
+make precommit
+```
+
+Additional checks:
 ```bash
 # Confirm Dockerfile exists and has correct structure
 grep -n "golang:1.26.2\|alpine:3.23\|git\|ENTRYPOINT" /workspace/Dockerfile

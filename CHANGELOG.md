@@ -8,6 +8,11 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 * MINOR version when you add functionality in a backwards-compatible manner, and
 * PATCH version when you make backwards-compatible bug fixes.
 
+## v0.3.0
+
+- feat: Add pkg/handler package with HTTP handlers for files CRUD, healthz, readiness, and JSON error helpers
+- feat: Add pkg/factory package with Create* factory functions wiring handlers to git.Git
+
 ## v0.2.0
 
 - feat: Add pkg/git package with Git interface, serialized shell operations, path validation, and Counterfeiter mock
