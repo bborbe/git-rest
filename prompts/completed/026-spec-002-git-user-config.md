@@ -1,8 +1,13 @@
 ---
-status: approved
+status: completed
 spec: ["002"]
+summary: Added ConfigureUser method to Git interface and implementation, GitUserName/GitUserEmail CLI flags, bootstrap integration via extracted helper methods, and tests for all ConfigureUser code paths.
+container: git-rest-026-spec-002-git-user-config
+dark-factory-version: v0.108.0-dirty
 created: "2026-04-12T15:59:22Z"
 queued: "2026-04-12T16:21:43Z"
+started: "2026-04-12T16:33:05Z"
+completed: "2026-04-12T16:38:28Z"
 ---
 
 <summary>
