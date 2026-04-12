@@ -437,9 +437,39 @@ var _ = Describe("Git with no remote configured", func() {
 		noRemoteGit = git.New(noRemoteDir, &noopMetrics{}, libtime.NewCurrentDateTime(), "")
 	})
 
-	It("Pull returns error", func() {
+	It("Pull succeeds and skips when no remote configured", func() {
 		err := noRemoteGit.Pull(ctx)
-		Expect(err).To(HaveOccurred())
+		Expect(err).NotTo(HaveOccurred())
+	})
+
+	It("WriteFile succeeds without pushing when no remote configured", func() {
+		// Write a file — should commit locally without error
+		err := noRemoteGit.WriteFile(ctx, "local.txt", []byte("local content"))
+		Expect(err).NotTo(HaveOccurred())
+
+		// File must be readable
+		content, err := noRemoteGit.ReadFile(ctx, "local.txt")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(content).To(Equal([]byte("local content")))
+
+		// Commit must exist in git log
+		out, err := exec.Command("git", "-C", noRemoteDir, "log", "--oneline", "-1").Output()
+		Expect(err).NotTo(HaveOccurred())
+		Expect(string(out)).To(ContainSubstring("git-rest: create local.txt"))
+	})
+
+	It("DeleteFile succeeds without pushing when no remote configured", func() {
+		// Create a file first
+		err := noRemoteGit.WriteFile(ctx, "todelete.txt", []byte("bye"))
+		Expect(err).NotTo(HaveOccurred())
+
+		// Delete it — should commit locally without error
+		err = noRemoteGit.DeleteFile(ctx, "todelete.txt")
+		Expect(err).NotTo(HaveOccurred())
+
+		// File must be gone
+		_, err = noRemoteGit.ReadFile(ctx, "todelete.txt")
+		Expect(err).To(MatchError(git.ErrNotFound))
 	})
 
 	It("Status sets NoPushPending=true when no upstream", func() {

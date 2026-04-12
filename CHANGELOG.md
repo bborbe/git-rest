@@ -2,6 +2,10 @@
 
 All notable changes to this project will be documented in this file.
 
+## v0.12.0
+
+- feat: Skip push and pull operations gracefully when no remote is configured
+
 ## v0.11.0
 
 - feat: Add local repository initialization when no remote URL is configured

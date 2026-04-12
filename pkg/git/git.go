@@ -9,6 +9,7 @@ import (
 	"context"
 	stderrors "errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -201,9 +202,11 @@ func (g *git) WriteFile(ctx context.Context, path string, content []byte) error 
 		return errors.Wrap(ctx, err, "git commit")
 	}
 
-	if err := g.runCmd(ctx, g.repoPath, "push"); err != nil {
-		g.metrics.IncGitOperationError("write_file")
-		return errors.Wrap(ctx, err, "git push")
+	if g.hasRemote(ctx) {
+		if err := g.runCmd(ctx, g.repoPath, "push"); err != nil {
+			g.metrics.IncGitOperationError("write_file")
+			return errors.Wrap(ctx, err, "git push")
+		}
 	}
 
 	return nil
@@ -240,9 +243,11 @@ func (g *git) DeleteFile(ctx context.Context, path string) error {
 		return errors.Wrap(ctx, err, "git commit")
 	}
 
-	if err := g.runCmd(ctx, g.repoPath, "push"); err != nil {
-		g.metrics.IncGitOperationError("delete_file")
-		return errors.Wrap(ctx, err, "git push")
+	if g.hasRemote(ctx) {
+		if err := g.runCmd(ctx, g.repoPath, "push"); err != nil {
+			g.metrics.IncGitOperationError("delete_file")
+			return errors.Wrap(ctx, err, "git push")
+		}
 	}
 
 	return nil
@@ -329,6 +334,11 @@ func (g *git) Pull(ctx context.Context) error {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
+	if !g.hasRemote(ctx) {
+		slog.DebugContext(ctx, "git pull skipped: no remote configured")
+		return nil
+	}
+
 	if err := g.runCmd(ctx, g.repoPath, "pull"); err != nil {
 		g.metrics.IncGitOperationError("pull")
 		return errors.Wrap(ctx, err, "git pull")
@@ -378,6 +388,17 @@ func (g *git) ConfigureUser(ctx context.Context, name string, email string) erro
 		}
 	}
 	return nil
+}
+
+// hasRemote reports whether the repository has at least one configured remote.
+// It runs git remote and returns true when the output is non-empty.
+// On error (e.g. invalid repo), returns true so the caller proceeds and fails naturally.
+func (g *git) hasRemote(ctx context.Context) bool {
+	out, err := g.runCmdOutput(ctx, g.repoPath, "remote")
+	if err != nil {
+		return true
+	}
+	return strings.TrimSpace(string(out)) != ""
 }
 
 // Status returns the current working-tree and push-pending state.
