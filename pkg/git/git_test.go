@@ -17,6 +17,16 @@ import (
 	"github.com/bborbe/git-rest/pkg/git"
 )
 
+// runGit executes a git command in the given directory. Panics on error.
+func runGit(dir string, args ...string) {
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		panic(string(out))
+	}
+}
+
 // noopMetrics satisfies metrics.Metrics without recording anything, for use in git tests.
 type noopMetrics struct{}
 
@@ -256,6 +266,13 @@ var _ = Describe("Git", func() {
 			Expect(files).To(ContainElement("README.md"))
 			Expect(files).NotTo(ContainElement("main.go"))
 		})
+
+		Context("invalid glob pattern", func() {
+			It("returns an error", func() {
+				_, err := g.ListFiles(ctx, "[invalid")
+				Expect(err).To(HaveOccurred())
+			})
+		})
 	})
 
 	Context("Status", func() {
@@ -287,5 +304,60 @@ var _ = Describe("Git", func() {
 			err := g.Pull(ctx)
 			Expect(err).NotTo(HaveOccurred())
 		})
+	})
+})
+
+var _ = Describe("Git with non-existent repo path", func() {
+	var ctx context.Context
+	var brokenGit git.Git
+
+	BeforeEach(func() {
+		ctx = context.Background()
+		brokenGit = git.New("/nonexistent/path/that/does/not/exist", &noopMetrics{})
+	})
+
+	It("ListFiles returns error", func() {
+		_, err := brokenGit.ListFiles(ctx, "")
+		Expect(err).To(HaveOccurred())
+	})
+
+	It("Pull returns error", func() {
+		err := brokenGit.Pull(ctx)
+		Expect(err).To(HaveOccurred())
+	})
+
+	It("Status returns error", func() {
+		_, err := brokenGit.Status(ctx)
+		Expect(err).To(HaveOccurred())
+	})
+})
+
+var _ = Describe("Git with no remote configured", func() {
+	var ctx context.Context
+	var noRemoteDir string
+	var noRemoteGit git.Git
+
+	BeforeEach(func() {
+		ctx = context.Background()
+		var err error
+		noRemoteDir, err = os.MkdirTemp("", "git-no-remote-*")
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(func() { _ = os.RemoveAll(noRemoteDir) })
+
+		runGit(noRemoteDir, "init")
+		runGit(noRemoteDir, "config", "user.email", "test@test.com")
+		runGit(noRemoteDir, "config", "user.name", "Test")
+		noRemoteGit = git.New(noRemoteDir, &noopMetrics{})
+	})
+
+	It("Pull returns error", func() {
+		err := noRemoteGit.Pull(ctx)
+		Expect(err).To(HaveOccurred())
+	})
+
+	It("Status sets NoPushPending=true when no upstream", func() {
+		s, err := noRemoteGit.Status(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(s.NoPushPending).To(BeTrue())
 	})
 })
