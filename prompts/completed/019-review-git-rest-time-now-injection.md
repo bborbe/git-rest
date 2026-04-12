@@ -1,7 +1,12 @@
 ---
-status: approved
+status: completed
+summary: Injected libtime.CurrentDateTimeGetter into pkg/git to replace five time.Now() calls, and replaced time.Duration with libtime.Duration in pkg/puller and main.go.
+container: git-rest-019-review-git-rest-time-now-injection
+dark-factory-version: v0.108.0-dirty
 created: "2026-04-12T13:29:16Z"
 queued: "2026-04-12T13:49:15Z"
+started: "2026-04-12T14:36:49Z"
+completed: "2026-04-12T14:43:11Z"
 ---
 
 <summary>
