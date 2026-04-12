@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## v0.7.0
+
+- feat: Pre-initialize `HTTPRequestsTotal` counter for known method/path/status combinations to ensure time series are present before first request
+- chore: Add missing `factory_suite_test.go` Ginkgo test suite bootstrap for `pkg/factory`
+
 ## v0.6.10
 
 - fix: Add `ctx.Done()` cancellation check in `ListFiles` range loop to respect context cancellation for large repositories

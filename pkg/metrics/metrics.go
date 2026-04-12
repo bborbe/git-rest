@@ -32,6 +32,18 @@ func init() {
 	for _, op := range []string{"write_file", "delete_file", "read_file", "list_files", "pull"} {
 		GitOperationErrors.WithLabelValues(op).Add(0)
 	}
+	for _, combo := range []struct{ method, path string }{
+		{"GET", "/api/v1/files/{path}"},
+		{"POST", "/api/v1/files/{path}"},
+		{"DELETE", "/api/v1/files/{path}"},
+		{"GET", "/healthz"},
+		{"GET", "/readiness"},
+		{"GET", "/metrics"},
+	} {
+		for _, status := range []string{"200", "400", "404", "500"} {
+			HTTPRequestsTotal.WithLabelValues(combo.method, combo.path, status).Add(0)
+		}
+	}
 }
 
 // Metrics records git operation instrumentation.
