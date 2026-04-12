@@ -46,6 +46,17 @@ type FakeGit struct {
 	deleteFileReturnsOnCall map[int]struct {
 		result1 error
 	}
+	InitStub        func(context.Context) error
+	initMutex       sync.RWMutex
+	initArgsForCall []struct {
+		arg1 context.Context
+	}
+	initReturns struct {
+		result1 error
+	}
+	initReturnsOnCall map[int]struct {
+		result1 error
+	}
 	ListFilesStub        func(context.Context, string) ([]string, error)
 	listFilesMutex       sync.RWMutex
 	listFilesArgsForCall []struct {
@@ -298,6 +309,67 @@ func (fake *FakeGit) DeleteFileReturnsOnCall(i int, result1 error) {
 		})
 	}
 	fake.deleteFileReturnsOnCall[i] = struct {
+		result1 error
+	}{result1}
+}
+
+func (fake *FakeGit) Init(arg1 context.Context) error {
+	fake.initMutex.Lock()
+	ret, specificReturn := fake.initReturnsOnCall[len(fake.initArgsForCall)]
+	fake.initArgsForCall = append(fake.initArgsForCall, struct {
+		arg1 context.Context
+	}{arg1})
+	stub := fake.InitStub
+	fakeReturns := fake.initReturns
+	fake.recordInvocation("Init", []interface{}{arg1})
+	fake.initMutex.Unlock()
+	if stub != nil {
+		return stub(arg1)
+	}
+	if specificReturn {
+		return ret.result1
+	}
+	return fakeReturns.result1
+}
+
+func (fake *FakeGit) InitCallCount() int {
+	fake.initMutex.RLock()
+	defer fake.initMutex.RUnlock()
+	return len(fake.initArgsForCall)
+}
+
+func (fake *FakeGit) InitCalls(stub func(context.Context) error) {
+	fake.initMutex.Lock()
+	defer fake.initMutex.Unlock()
+	fake.InitStub = stub
+}
+
+func (fake *FakeGit) InitArgsForCall(i int) context.Context {
+	fake.initMutex.RLock()
+	defer fake.initMutex.RUnlock()
+	argsForCall := fake.initArgsForCall[i]
+	return argsForCall.arg1
+}
+
+func (fake *FakeGit) InitReturns(result1 error) {
+	fake.initMutex.Lock()
+	defer fake.initMutex.Unlock()
+	fake.InitStub = nil
+	fake.initReturns = struct {
+		result1 error
+	}{result1}
+}
+
+func (fake *FakeGit) InitReturnsOnCall(i int, result1 error) {
+	fake.initMutex.Lock()
+	defer fake.initMutex.Unlock()
+	fake.InitStub = nil
+	if fake.initReturnsOnCall == nil {
+		fake.initReturnsOnCall = make(map[int]struct {
+			result1 error
+		})
+	}
+	fake.initReturnsOnCall[i] = struct {
 		result1 error
 	}{result1}
 }

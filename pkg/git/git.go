@@ -54,6 +54,7 @@ type Git interface {
 	Status(ctx context.Context) (Status, error)
 	Clone(ctx context.Context, remoteURL RemoteURL) error
 	ConfigureUser(ctx context.Context, name string, email string) error
+	Init(ctx context.Context) error
 }
 
 // New returns a Git implementation backed by the system git binary for the given repository path.
@@ -348,6 +349,19 @@ func (g *git) Clone(ctx context.Context, remoteURL RemoteURL) error {
 		string(remoteURL),
 		filepath.Base(g.repoPath),
 	)
+}
+
+// Init initialises a new empty git repository at the repo path.
+func (g *git) Init(ctx context.Context) error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	start := g.currentDateTimeGetter.Now()
+	defer func() { g.metrics.ObserveGitOperation("init", time.Since(time.Time(start)).Seconds()) }()
+	if err := g.runCmd(ctx, g.repoPath, "init"); err != nil {
+		g.metrics.IncGitOperationError("init")
+		return errors.Wrap(ctx, err, "git init")
+	}
+	return nil
 }
 
 // ConfigureUser sets the git user.name and user.email in the repository config.

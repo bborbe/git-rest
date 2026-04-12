@@ -449,6 +449,37 @@ var _ = Describe("Git with no remote configured", func() {
 	})
 })
 
+var _ = Describe("Git Init", func() {
+	var ctx context.Context
+
+	BeforeEach(func() {
+		ctx = context.Background()
+	})
+
+	It("initialises a git repository in an existing empty directory", func() {
+		dir, err := os.MkdirTemp("", "git-init-*")
+		Expect(err).NotTo(HaveOccurred())
+		defer func() { _ = os.RemoveAll(dir) }()
+
+		g := git.New(dir, &noopMetrics{}, libtime.NewCurrentDateTime(), "")
+		err = g.Init(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		_, err = os.Stat(filepath.Join(dir, ".git"))
+		Expect(err).NotTo(HaveOccurred())
+	})
+
+	It("returns error when directory does not exist", func() {
+		g := git.New(
+			"/nonexistent/path/that/does/not/exist/repo",
+			&noopMetrics{},
+			libtime.NewCurrentDateTime(),
+			"",
+		)
+		err := g.Init(ctx)
+		Expect(err).To(HaveOccurred())
+	})
+})
+
 var _ = Describe("Git ConfigureUser", func() {
 	var ctx context.Context
 	var repoDir string

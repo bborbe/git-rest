@@ -65,11 +65,44 @@ func (a *application) Run(ctx context.Context, sentryClient libsentry.Client) er
 }
 
 func (a *application) bootstrap(ctx context.Context) error {
+	if err := a.initIfNeeded(ctx); err != nil {
+		return errors.Wrap(ctx, err, "init if needed")
+	}
 	if err := a.cloneIfNeeded(ctx); err != nil {
 		return errors.Wrap(ctx, err, "clone if needed")
 	}
 	if err := a.configureUserIfSet(ctx); err != nil {
 		return errors.Wrap(ctx, err, "configure user if set")
+	}
+	return nil
+}
+
+func (a *application) initIfNeeded(ctx context.Context) error {
+	// Only run when no remote URL is configured.
+	if a.GitRemoteURL != "" {
+		return nil
+	}
+	gitDir := filepath.Join(a.Repo, ".git")
+	if _, err := os.Stat(gitDir); err == nil {
+		// .git already exists — repo is ready, nothing to do.
+		return nil
+	}
+	// Reject --repo pointing at an existing file (not a directory).
+	if info, err := os.Stat(a.Repo); err == nil && !info.IsDir() {
+		return errors.Errorf(ctx, "repo path %s exists but is not a directory", a.Repo)
+	}
+	// Create the directory tree.
+	if err := os.MkdirAll(a.Repo, 0o750); err != nil { //nolint:gosec
+		return errors.Wrapf(ctx, err, "create repo directory %s", a.Repo)
+	}
+	tmpGit := factory.CreateGitClient(
+		a.Repo,
+		metrics.NewMetrics(),
+		libtime.NewCurrentDateTime(),
+		a.GitSSHKey,
+	)
+	if err := tmpGit.Init(ctx); err != nil {
+		return errors.Wrapf(ctx, err, "git init %s", a.Repo)
 	}
 	return nil
 }

@@ -2,6 +2,10 @@
 
 All notable changes to this project will be documented in this file.
 
+## v0.11.0
+
+- feat: Add local repository initialization when no remote URL is configured
+
 ## v0.10.0
 
 - feat: Add `--git-user-name` / `GIT_USER_NAME` and `--git-user-email` / `GIT_USER_EMAIL` flags; when set, configure `user.name` and `user.email` in the repository via `git config` on startup
