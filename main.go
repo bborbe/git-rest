@@ -45,7 +45,7 @@ func (a *application) Run(ctx context.Context, sentryClient libsentry.Client) er
 
 	gitClient, err := a.createGitClient(ctx)
 	if err != nil {
-		return errors.Wrapf(ctx, err, "create git client failed")
+		return errors.Wrap(ctx, err, "create git client failed")
 	}
 
 	return service.Run(ctx,
@@ -61,6 +61,7 @@ func (a *application) createGitClient(ctx context.Context) (git.Git, error) {
 
 	return factory.CreateGitClient(a.Repo, metrics.NewMetrics()), nil
 }
+
 func (a *application) createGitRefresher(gitClient git.Git) run.Func {
 	return func(ctx context.Context) error {
 		return puller.New(gitClient, a.PullInterval).Run(ctx)

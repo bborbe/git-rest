@@ -63,29 +63,29 @@ type git struct {
 // validatePath rejects empty, absolute, path-traversal, and .git paths.
 func validatePath(ctx context.Context, path string) error {
 	if path == "" {
-		return errors.Wrapf(ctx, ErrInvalidPath, "path must not be empty")
+		return errors.Wrap(ctx, ErrInvalidPath, "path must not be empty")
 	}
 	if filepath.IsAbs(path) {
-		return errors.Wrapf(ctx, ErrInvalidPath, "absolute paths not allowed")
+		return errors.Wrap(ctx, ErrInvalidPath, "absolute paths not allowed")
 	}
 	// Check for .. components in both slash and OS separator forms.
 	for _, part := range strings.Split(path, "/") {
 		if part == ".." {
-			return errors.Wrapf(ctx, ErrInvalidPath, "path traversal not allowed")
+			return errors.Wrap(ctx, ErrInvalidPath, "path traversal not allowed")
 		}
 	}
 	for _, part := range strings.Split(path, string(filepath.Separator)) {
 		if part == ".." {
-			return errors.Wrapf(ctx, ErrInvalidPath, "path traversal not allowed")
+			return errors.Wrap(ctx, ErrInvalidPath, "path traversal not allowed")
 		}
 	}
 	cleaned := filepath.Clean(path)
 	if strings.HasPrefix(cleaned, "..") {
-		return errors.Wrapf(ctx, ErrInvalidPath, "path traversal not allowed")
+		return errors.Wrap(ctx, ErrInvalidPath, "path traversal not allowed")
 	}
 	for _, part := range strings.Split(path, "/") {
 		if part == ".git" {
-			return errors.Wrapf(ctx, ErrInvalidPath, ".git directory access not allowed")
+			return errors.Wrap(ctx, ErrInvalidPath, ".git directory access not allowed")
 		}
 	}
 	return nil
