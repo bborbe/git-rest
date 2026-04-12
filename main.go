@@ -31,14 +31,15 @@ func main() {
 }
 
 type application struct {
-	SentryDSN       string            `required:"false" arg:"sentry-dsn"        env:"SENTRY_DSN"        usage:"Sentry DSN"                     display:"length"`
+	SentryDSN       string            `required:"false" arg:"sentry-dsn"        env:"SENTRY_DSN"        usage:"Sentry DSN"                                 display:"length"`
 	SentryProxy     string            `required:"false" arg:"sentry-proxy"      env:"SENTRY_PROXY"      usage:"Sentry Proxy"`
-	Listen          string            `required:"true"  arg:"listen"            env:"LISTEN"            usage:"HTTP listen address"                             default:":8080"`
+	Listen          string            `required:"true"  arg:"listen"            env:"LISTEN"            usage:"HTTP listen address"                                         default:":8080"`
 	Repo            string            `required:"true"  arg:"repo"              env:"REPO"              usage:"path to git repository on disk"`
-	PullInterval    libtime.Duration  `required:"false" arg:"pull-interval"     env:"PULL_INTERVAL"     usage:"git pull interval"                               default:"30s"`
-	BuildGitVersion string            `required:"false" arg:"build-git-version" env:"BUILD_GIT_VERSION" usage:"Build Git version"                               default:"dev"`
-	BuildGitCommit  string            `required:"false" arg:"build-git-commit"  env:"BUILD_GIT_COMMIT"  usage:"Build Git commit hash"                           default:"none"`
+	PullInterval    libtime.Duration  `required:"false" arg:"pull-interval"     env:"PULL_INTERVAL"     usage:"git pull interval"                                           default:"30s"`
+	BuildGitVersion string            `required:"false" arg:"build-git-version" env:"BUILD_GIT_VERSION" usage:"Build Git version"                                           default:"dev"`
+	BuildGitCommit  string            `required:"false" arg:"build-git-commit"  env:"BUILD_GIT_COMMIT"  usage:"Build Git commit hash"                                       default:"none"`
 	BuildDate       *libtime.DateTime `required:"false" arg:"build-date"        env:"BUILD_DATE"        usage:"Build timestamp (RFC3339)"`
+	GitSSHKey       git.SSHKeyPath    `required:"false" arg:"git-ssh-key"       env:"GIT_SSH_KEY"       usage:"Path to SSH private key for git operations"`
 }
 
 func (a *application) Run(ctx context.Context, sentryClient libsentry.Client) error {
@@ -60,7 +61,18 @@ func (a *application) createGitClient(ctx context.Context) (git.Git, error) {
 		return nil, errors.Wrapf(ctx, err, "os stat %s failed", a.Repo)
 	}
 
-	return factory.CreateGitClient(a.Repo, metrics.NewMetrics(), libtime.NewCurrentDateTime()), nil
+	if a.GitSSHKey != "" {
+		if _, err := os.Stat(string(a.GitSSHKey)); err != nil {
+			return nil, errors.Wrapf(ctx, err, "ssh key file %s", a.GitSSHKey)
+		}
+	}
+
+	return factory.CreateGitClient(
+		a.Repo,
+		metrics.NewMetrics(),
+		libtime.NewCurrentDateTime(),
+		a.GitSSHKey,
+	), nil
 }
 
 func (a *application) createGitRefresher(gitClient git.Git) run.Func {

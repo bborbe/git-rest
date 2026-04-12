@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"context"
 	stderrors "errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -20,6 +21,9 @@ import (
 
 	"github.com/bborbe/git-rest/pkg/metrics"
 )
+
+// SSHKeyPath is the path to an SSH private key used for git operations.
+type SSHKeyPath string
 
 // ErrNotFound is returned when a requested file does not exist in the repository.
 var ErrNotFound = stderrors.New("file not found")
@@ -52,11 +56,13 @@ func New(
 	repoPath string,
 	m metrics.Metrics,
 	currentDateTimeGetter libtime.CurrentDateTimeGetter,
+	sshKeyPath SSHKeyPath,
 ) Git {
 	return &git{
 		repoPath:              repoPath,
 		metrics:               m,
 		currentDateTimeGetter: currentDateTimeGetter,
+		sshKeyPath:            sshKeyPath,
 	}
 }
 
@@ -65,6 +71,7 @@ type git struct {
 	mu                    sync.Mutex
 	metrics               metrics.Metrics
 	currentDateTimeGetter libtime.CurrentDateTimeGetter
+	sshKeyPath            SSHKeyPath
 }
 
 // validatePath rejects empty, absolute, path-traversal, and .git paths.
@@ -98,11 +105,20 @@ func validatePath(ctx context.Context, path string) error {
 	return nil
 }
 
-// runCmd executes a git subcommand in dir, combining stdout+stderr into any error message.
-func runCmd(ctx context.Context, dir string, args ...string) error {
+// runCmd executes a git subcommand in the repo directory, combining stdout+stderr into any error message.
+func (g *git) runCmd(ctx context.Context, dir string, args ...string) error {
 	// #nosec G204 -- binary is hardcoded to "git"; args are internal subcommands, not user input
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = dir
+	if g.sshKeyPath != "" {
+		cmd.Env = append(
+			os.Environ(),
+			fmt.Sprintf(
+				"GIT_SSH_COMMAND=ssh -i %s -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no",
+				string(g.sshKeyPath),
+			),
+		)
+	}
 	var buf bytes.Buffer
 	cmd.Stdout = &buf
 	cmd.Stderr = &buf
@@ -113,10 +129,19 @@ func runCmd(ctx context.Context, dir string, args ...string) error {
 }
 
 // runCmdOutput executes a git subcommand in dir and returns its stdout.
-func runCmdOutput(ctx context.Context, dir string, args ...string) ([]byte, error) {
+func (g *git) runCmdOutput(ctx context.Context, dir string, args ...string) ([]byte, error) {
 	// #nosec G204 -- binary is hardcoded to "git"; args are internal subcommands, not user input
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = dir
+	if g.sshKeyPath != "" {
+		cmd.Env = append(
+			os.Environ(),
+			fmt.Sprintf(
+				"GIT_SSH_COMMAND=ssh -i %s -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no",
+				string(g.sshKeyPath),
+			),
+		)
+	}
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -155,7 +180,7 @@ func (g *git) WriteFile(ctx context.Context, path string, content []byte) error 
 		return errors.Wrapf(ctx, err, "write file %s", path)
 	}
 
-	if err := runCmd(ctx, g.repoPath, "add", path); err != nil {
+	if err := g.runCmd(ctx, g.repoPath, "add", path); err != nil {
 		g.metrics.IncGitOperationError("write_file")
 		return errors.Wrapf(ctx, err, "git add %s", path)
 	}
@@ -165,12 +190,12 @@ func (g *git) WriteFile(ctx context.Context, path string, content []byte) error 
 		commitMsg = "git-rest: update " + path
 	}
 
-	if err := runCmd(ctx, g.repoPath, "commit", "-m", commitMsg); err != nil {
+	if err := g.runCmd(ctx, g.repoPath, "commit", "-m", commitMsg); err != nil {
 		g.metrics.IncGitOperationError("write_file")
 		return errors.Wrap(ctx, err, "git commit")
 	}
 
-	if err := runCmd(ctx, g.repoPath, "push"); err != nil {
+	if err := g.runCmd(ctx, g.repoPath, "push"); err != nil {
 		g.metrics.IncGitOperationError("write_file")
 		return errors.Wrap(ctx, err, "git push")
 	}
@@ -198,18 +223,18 @@ func (g *git) DeleteFile(ctx context.Context, path string) error {
 		return ErrNotFound
 	}
 
-	if err := runCmd(ctx, g.repoPath, "rm", path); err != nil {
+	if err := g.runCmd(ctx, g.repoPath, "rm", path); err != nil {
 		g.metrics.IncGitOperationError("delete_file")
 		return errors.Wrapf(ctx, err, "git rm %s", path)
 	}
 
 	commitMsg := "git-rest: delete " + path
-	if err := runCmd(ctx, g.repoPath, "commit", "-m", commitMsg); err != nil {
+	if err := g.runCmd(ctx, g.repoPath, "commit", "-m", commitMsg); err != nil {
 		g.metrics.IncGitOperationError("delete_file")
 		return errors.Wrap(ctx, err, "git commit")
 	}
 
-	if err := runCmd(ctx, g.repoPath, "push"); err != nil {
+	if err := g.runCmd(ctx, g.repoPath, "push"); err != nil {
 		g.metrics.IncGitOperationError("delete_file")
 		return errors.Wrap(ctx, err, "git push")
 	}
@@ -256,7 +281,7 @@ func (g *git) ListFiles(ctx context.Context, pattern string) ([]string, error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
-	out, err := runCmdOutput(ctx, g.repoPath, "ls-files")
+	out, err := g.runCmdOutput(ctx, g.repoPath, "ls-files")
 	if err != nil {
 		g.metrics.IncGitOperationError("list_files")
 		return nil, errors.Wrap(ctx, err, "git ls-files")
@@ -298,7 +323,7 @@ func (g *git) Pull(ctx context.Context) error {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
-	if err := runCmd(ctx, g.repoPath, "pull"); err != nil {
+	if err := g.runCmd(ctx, g.repoPath, "pull"); err != nil {
 		g.metrics.IncGitOperationError("pull")
 		return errors.Wrap(ctx, err, "git pull")
 	}
@@ -312,14 +337,14 @@ func (g *git) Status(ctx context.Context) (Status, error) {
 
 	var s Status
 
-	out, err := runCmdOutput(ctx, g.repoPath, "status", "--porcelain")
+	out, err := g.runCmdOutput(ctx, g.repoPath, "status", "--porcelain")
 	if err != nil {
 		return s, errors.Wrap(ctx, err, "git status --porcelain")
 	}
 	s.Clean = strings.TrimSpace(string(out)) == ""
 
 	// Check for commits not yet pushed; if no upstream is configured, treat as no push pending.
-	out, err = runCmdOutput(ctx, g.repoPath, "log", "@{u}..HEAD", "--oneline")
+	out, err = g.runCmdOutput(ctx, g.repoPath, "log", "@{u}..HEAD", "--oneline")
 	if err != nil {
 		s.NoPushPending = true
 	} else {

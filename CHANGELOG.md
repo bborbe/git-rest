@@ -2,6 +2,10 @@
 
 All notable changes to this project will be documented in this file.
 
+## v0.8.0
+
+- feat: Add SSH key support via `--git-ssh-key` / `GIT_SSH_KEY` flag; sets `GIT_SSH_COMMAND` on all git operations when key path is configured, with fast-fail validation that the key file exists at startup
+
 ## v0.7.1
 
 - refactor: Replace `http.NewServeMux` with `gorilla/mux.NewRouter().SkipClean(true)` so path traversal attempts reach `validatePath` and return 400 Bad Request

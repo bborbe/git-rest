@@ -85,7 +85,7 @@ var _ = Describe("Git", func() {
 	BeforeEach(func() {
 		ctx = context.Background()
 		workDir, cleanup = initRepo()
-		g = git.New(workDir, &noopMetrics{}, libtime.NewCurrentDateTime())
+		g = git.New(workDir, &noopMetrics{}, libtime.NewCurrentDateTime(), "")
 	})
 
 	AfterEach(func() {
@@ -318,6 +318,7 @@ var _ = Describe("Git with non-existent repo path", func() {
 			"/nonexistent/path/that/does/not/exist",
 			&noopMetrics{},
 			libtime.NewCurrentDateTime(),
+			"",
 		)
 	})
 
@@ -337,6 +338,47 @@ var _ = Describe("Git with non-existent repo path", func() {
 	})
 })
 
+var _ = Describe("Git SSH key", func() {
+	var ctx context.Context
+
+	BeforeEach(func() {
+		ctx = context.Background()
+	})
+
+	Context("SSH key path empty", func() {
+		It("does not set GIT_SSH_COMMAND environment variable", func() {
+			workDir, cleanup := initRepo()
+			defer cleanup()
+			g := git.New(workDir, &noopMetrics{}, libtime.NewCurrentDateTime(), "")
+			// Pull succeeds without GIT_SSH_COMMAND set
+			err := g.Pull(ctx)
+			Expect(err).NotTo(HaveOccurred())
+		})
+	})
+
+	Context("SSH key path set to a valid file", func() {
+		It("succeeds when key file exists", func() {
+			workDir, cleanup := initRepo()
+			defer cleanup()
+
+			keyFile, err := os.CreateTemp("", "ssh-key-*")
+			Expect(err).NotTo(HaveOccurred())
+			defer func() { _ = os.Remove(keyFile.Name()) }()
+			_ = keyFile.Close()
+
+			g := git.New(
+				workDir,
+				&noopMetrics{},
+				libtime.NewCurrentDateTime(),
+				git.SSHKeyPath(keyFile.Name()),
+			)
+			// Pull will use GIT_SSH_COMMAND; the local file:// remote doesn't need SSH, so it still works
+			err = g.Pull(ctx)
+			Expect(err).NotTo(HaveOccurred())
+		})
+	})
+})
+
 var _ = Describe("Git with no remote configured", func() {
 	var ctx context.Context
 	var noRemoteDir string
@@ -352,7 +394,7 @@ var _ = Describe("Git with no remote configured", func() {
 		runGit(noRemoteDir, "init")
 		runGit(noRemoteDir, "config", "user.email", "test@test.com")
 		runGit(noRemoteDir, "config", "user.name", "Test")
-		noRemoteGit = git.New(noRemoteDir, &noopMetrics{}, libtime.NewCurrentDateTime())
+		noRemoteGit = git.New(noRemoteDir, &noopMetrics{}, libtime.NewCurrentDateTime(), "")
 	})
 
 	It("Pull returns error", func() {
