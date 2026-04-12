@@ -25,6 +25,9 @@ import (
 // SSHKeyPath is the path to an SSH private key used for git operations.
 type SSHKeyPath string
 
+// RemoteURL is the URL of a remote git repository.
+type RemoteURL string
+
 // ErrNotFound is returned when a requested file does not exist in the repository.
 var ErrNotFound = stderrors.New("file not found")
 
@@ -49,6 +52,7 @@ type Git interface {
 	ListFiles(ctx context.Context, pattern string) ([]string, error)
 	Pull(ctx context.Context) error
 	Status(ctx context.Context) (Status, error)
+	Clone(ctx context.Context, remoteURL RemoteURL) error
 }
 
 // New returns a Git implementation backed by the system git binary for the given repository path.
@@ -328,6 +332,21 @@ func (g *git) Pull(ctx context.Context) error {
 		return errors.Wrap(ctx, err, "git pull")
 	}
 	return nil
+}
+
+// Clone clones remoteURL into the repository path.
+func (g *git) Clone(ctx context.Context, remoteURL RemoteURL) error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	start := g.currentDateTimeGetter.Now()
+	defer func() { g.metrics.ObserveGitOperation("clone", time.Since(time.Time(start)).Seconds()) }()
+	return g.runCmd(
+		ctx,
+		filepath.Dir(g.repoPath),
+		"clone",
+		string(remoteURL),
+		filepath.Base(g.repoPath),
+	)
 }
 
 // Status returns the current working-tree and push-pending state.

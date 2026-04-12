@@ -2,6 +2,10 @@
 
 All notable changes to this project will be documented in this file.
 
+## v0.9.0
+
+- feat: Add `--git-remote-url` / `GIT_REMOTE_URL` flag; when set and repo has no `.git` directory, clone the remote on startup with parent directory creation via `os.MkdirAll`
+
 ## v0.8.0
 
 - feat: Add SSH key support via `--git-ssh-key` / `GIT_SSH_KEY` flag; sets `GIT_SSH_COMMAND` on all git operations when key path is configured, with fast-fail validation that the key file exists at startup

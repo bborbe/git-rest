@@ -9,6 +9,18 @@ import (
 )
 
 type FakeGit struct {
+	CloneStub        func(context.Context, git.RemoteURL) error
+	cloneMutex       sync.RWMutex
+	cloneArgsForCall []struct {
+		arg1 context.Context
+		arg2 git.RemoteURL
+	}
+	cloneReturns struct {
+		result1 error
+	}
+	cloneReturnsOnCall map[int]struct {
+		result1 error
+	}
 	DeleteFileStub        func(context.Context, string) error
 	deleteFileMutex       sync.RWMutex
 	deleteFileArgsForCall []struct {
@@ -88,6 +100,68 @@ type FakeGit struct {
 	}
 	invocations      map[string][][]interface{}
 	invocationsMutex sync.RWMutex
+}
+
+func (fake *FakeGit) Clone(arg1 context.Context, arg2 git.RemoteURL) error {
+	fake.cloneMutex.Lock()
+	ret, specificReturn := fake.cloneReturnsOnCall[len(fake.cloneArgsForCall)]
+	fake.cloneArgsForCall = append(fake.cloneArgsForCall, struct {
+		arg1 context.Context
+		arg2 git.RemoteURL
+	}{arg1, arg2})
+	stub := fake.CloneStub
+	fakeReturns := fake.cloneReturns
+	fake.recordInvocation("Clone", []interface{}{arg1, arg2})
+	fake.cloneMutex.Unlock()
+	if stub != nil {
+		return stub(arg1, arg2)
+	}
+	if specificReturn {
+		return ret.result1
+	}
+	return fakeReturns.result1
+}
+
+func (fake *FakeGit) CloneCallCount() int {
+	fake.cloneMutex.RLock()
+	defer fake.cloneMutex.RUnlock()
+	return len(fake.cloneArgsForCall)
+}
+
+func (fake *FakeGit) CloneCalls(stub func(context.Context, git.RemoteURL) error) {
+	fake.cloneMutex.Lock()
+	defer fake.cloneMutex.Unlock()
+	fake.CloneStub = stub
+}
+
+func (fake *FakeGit) CloneArgsForCall(i int) (context.Context, git.RemoteURL) {
+	fake.cloneMutex.RLock()
+	defer fake.cloneMutex.RUnlock()
+	argsForCall := fake.cloneArgsForCall[i]
+	return argsForCall.arg1, argsForCall.arg2
+}
+
+func (fake *FakeGit) CloneReturns(result1 error) {
+	fake.cloneMutex.Lock()
+	defer fake.cloneMutex.Unlock()
+	fake.CloneStub = nil
+	fake.cloneReturns = struct {
+		result1 error
+	}{result1}
+}
+
+func (fake *FakeGit) CloneReturnsOnCall(i int, result1 error) {
+	fake.cloneMutex.Lock()
+	defer fake.cloneMutex.Unlock()
+	fake.CloneStub = nil
+	if fake.cloneReturnsOnCall == nil {
+		fake.cloneReturnsOnCall = make(map[int]struct {
+			result1 error
+		})
+	}
+	fake.cloneReturnsOnCall[i] = struct {
+		result1 error
+	}{result1}
 }
 
 func (fake *FakeGit) DeleteFile(arg1 context.Context, arg2 string) error {

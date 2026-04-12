@@ -8,6 +8,7 @@ import (
 	"context"
 	"net/http"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/bborbe/errors"
@@ -40,10 +41,15 @@ type application struct {
 	BuildGitCommit  string            `required:"false" arg:"build-git-commit"  env:"BUILD_GIT_COMMIT"  usage:"Build Git commit hash"                                       default:"none"`
 	BuildDate       *libtime.DateTime `required:"false" arg:"build-date"        env:"BUILD_DATE"        usage:"Build timestamp (RFC3339)"`
 	GitSSHKey       git.SSHKeyPath    `required:"false" arg:"git-ssh-key"       env:"GIT_SSH_KEY"       usage:"Path to SSH private key for git operations"`
+	GitRemoteURL    git.RemoteURL     `required:"false" arg:"git-remote-url"    env:"GIT_REMOTE_URL"    usage:"Git remote URL to clone from on startup"`
 }
 
 func (a *application) Run(ctx context.Context, sentryClient libsentry.Client) error {
 	metrics.NewBuildInfoMetrics(a.BuildGitVersion, a.BuildGitCommit).SetBuildInfo(a.BuildDate)
+
+	if err := a.bootstrap(ctx); err != nil {
+		return errors.Wrap(ctx, err, "bootstrap failed")
+	}
 
 	gitClient, err := a.createGitClient(ctx)
 	if err != nil {
@@ -56,9 +62,36 @@ func (a *application) Run(ctx context.Context, sentryClient libsentry.Client) er
 	)
 }
 
+func (a *application) bootstrap(ctx context.Context) error {
+	if a.GitRemoteURL == "" {
+		return nil
+	}
+
+	gitDir := filepath.Join(a.Repo, ".git")
+	if _, err := os.Stat(gitDir); err == nil {
+		return nil
+	}
+
+	if err := os.MkdirAll(a.Repo, 0o750); err != nil { //nolint:gosec
+		return errors.Wrapf(ctx, err, "create repo directory %s", a.Repo)
+	}
+
+	tmpGit := factory.CreateGitClient(
+		a.Repo,
+		metrics.NewMetrics(),
+		libtime.NewCurrentDateTime(),
+		a.GitSSHKey,
+	)
+	if err := tmpGit.Clone(ctx, a.GitRemoteURL); err != nil {
+		return errors.Wrapf(ctx, err, "clone %s", a.GitRemoteURL)
+	}
+
+	return nil
+}
+
 func (a *application) createGitClient(ctx context.Context) (git.Git, error) {
-	if _, err := os.Stat(a.Repo); err != nil {
-		return nil, errors.Wrapf(ctx, err, "os stat %s failed", a.Repo)
+	if _, err := os.Stat(filepath.Join(a.Repo, ".git")); err != nil {
+		return nil, errors.Wrapf(ctx, err, "repo %s has no .git directory", a.Repo)
 	}
 
 	if a.GitSSHKey != "" {

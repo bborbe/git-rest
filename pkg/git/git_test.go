@@ -379,6 +379,45 @@ var _ = Describe("Git SSH key", func() {
 	})
 })
 
+var _ = Describe("Git Clone", func() {
+	var ctx context.Context
+
+	BeforeEach(func() {
+		ctx = context.Background()
+	})
+
+	It("clones a local bare remote into an existing empty directory", func() {
+		remoteDir, err := os.MkdirTemp("", "git-remote-clone-*")
+		Expect(err).NotTo(HaveOccurred())
+		defer func() { _ = os.RemoveAll(remoteDir) }()
+		runGit(remoteDir, "init", "--bare")
+
+		// workDir exists but is empty (no .git)
+		workDir, err := os.MkdirTemp("", "git-work-clone-*")
+		Expect(err).NotTo(HaveOccurred())
+		defer func() { _ = os.RemoveAll(workDir) }()
+		// Clone into a subdir so the repo name is deterministic
+		targetDir := filepath.Join(workDir, "repo")
+		g := git.New(targetDir, &noopMetrics{}, libtime.NewCurrentDateTime(), "")
+
+		err = g.Clone(ctx, git.RemoteURL(remoteDir))
+		Expect(err).NotTo(HaveOccurred())
+		_, err = os.Stat(filepath.Join(targetDir, ".git"))
+		Expect(err).NotTo(HaveOccurred())
+	})
+
+	It("returns error when remote URL is invalid", func() {
+		workDir, err := os.MkdirTemp("", "git-work-clone-fail-*")
+		Expect(err).NotTo(HaveOccurred())
+		defer func() { _ = os.RemoveAll(workDir) }()
+		targetDir := filepath.Join(workDir, "repo")
+		g := git.New(targetDir, &noopMetrics{}, libtime.NewCurrentDateTime(), "")
+
+		err = g.Clone(ctx, git.RemoteURL("/nonexistent/path/that/does/not/exist"))
+		Expect(err).To(HaveOccurred())
+	})
+})
+
 var _ = Describe("Git with no remote configured", func() {
 	var ctx context.Context
 	var noRemoteDir string
