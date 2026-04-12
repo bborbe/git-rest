@@ -466,7 +466,7 @@ var _ = Describe("Git ConfigureUser", func() {
 	})
 
 	readConfig := func(key string) string {
-		cmd := exec.Command("git", "config", key)
+		cmd := exec.Command("git", "config", "--local", key)
 		cmd.Dir = repoDir
 		out, _ := cmd.Output()
 		return strings.TrimSpace(string(out))
