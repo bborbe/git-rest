@@ -1,7 +1,12 @@
 ---
-status: approved
+status: completed
+summary: Pre-initialized HTTPRequestsTotal counter for known method/path/status combinations in pkg/metrics/metrics.go and added missing factory_suite_test.go bootstrap file.
+container: git-rest-022-review-git-rest-metrics-preinit
+dark-factory-version: v0.108.0-dirty
 created: "2026-04-12T13:29:16Z"
 queued: "2026-04-12T13:49:23Z"
+started: "2026-04-12T14:50:33Z"
+completed: "2026-04-12T14:54:59Z"
 ---
 
 <summary>
