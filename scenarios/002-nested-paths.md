@@ -9,8 +9,10 @@ Validates that git-rest handles nested directory paths correctly, creating paren
 ## Setup
 
 ```bash
+REMOTE_DIR=$(mktemp -d)
+git init -q --bare "$REMOTE_DIR"
 WORK_DIR=$(mktemp -d)
-cd "$WORK_DIR" && git init && git commit --allow-empty -m "init"
+cd "$WORK_DIR" && git init -q && git remote add origin "$REMOTE_DIR" && git commit -q --allow-empty -m "init" && git push -q -u origin master
 PORT=$(python3 -c "import socket; s=socket.socket(); s.bind(('', 0)); print(s.getsockname()[1]); s.close()")
 BASE=http://localhost:$PORT
 ```
@@ -47,5 +49,5 @@ sleep 2
 
 ```bash
 kill $SERVER_PID 2>/dev/null
-rm -rf "$WORK_DIR"
+rm -rf "$WORK_DIR" "$REMOTE_DIR"
 ```

@@ -16,12 +16,6 @@ type BuildInfoMetrics interface {
 	SetBuildInfo(buildDate *libtime.DateTime)
 }
 
-type buildInfoMetrics struct {
-	gauge   *prometheus.GaugeVec
-	version string
-	commit  string
-}
-
 // NewBuildInfoMetrics returns a BuildInfoMetrics that registers a git_rest_build_info gauge.
 func NewBuildInfoMetrics(version, commit string) BuildInfoMetrics {
 	return &buildInfoMetrics{
@@ -29,6 +23,12 @@ func NewBuildInfoMetrics(version, commit string) BuildInfoMetrics {
 		version: version,
 		commit:  commit,
 	}
+}
+
+type buildInfoMetrics struct {
+	gauge   *prometheus.GaugeVec
+	version string
+	commit  string
 }
 
 func (b *buildInfoMetrics) SetBuildInfo(buildDate *libtime.DateTime) {

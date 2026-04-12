@@ -21,8 +21,6 @@ import (
 	"github.com/bborbe/git-rest/pkg/metrics"
 )
 
-//counterfeiter:generate -o ../../mocks/git.go --fake-name FakeGit . Git
-
 // ErrNotFound is returned when a requested file does not exist in the repository.
 var ErrNotFound = stderrors.New("file not found")
 
@@ -38,6 +36,8 @@ type Status struct {
 }
 
 // Git abstracts all git shell operations on a local repository.
+//
+//counterfeiter:generate -o ../../mocks/git.go --fake-name FakeGit . Git
 type Git interface {
 	WriteFile(ctx context.Context, path string, content []byte) error
 	DeleteFile(ctx context.Context, path string) error

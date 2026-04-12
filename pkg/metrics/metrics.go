@@ -34,9 +34,9 @@ func init() {
 	}
 }
 
-//counterfeiter:generate -o ../../mocks/metrics.go --fake-name FakeMetrics . Metrics
-
 // Metrics records git operation instrumentation.
+//
+//counterfeiter:generate -o ../../mocks/metrics.go --fake-name FakeMetrics . Metrics
 type Metrics interface {
 	ObserveGitOperation(operation string, duration float64)
 	IncGitOperationError(operation string)
