@@ -1,11 +1,12 @@
 ---
-status: failed
+status: completed
+summary: Replaced all errors.Wrapf calls without format verbs with errors.Wrap in main.go and pkg/git/git.go (7 occurrences total).
 container: git-rest-018-review-git-rest-error-wrapping
 dark-factory-version: v0.108.0-dirty
 created: "2026-04-12T13:29:16Z"
 queued: "2026-04-12T13:49:12Z"
-started: "2026-04-12T13:49:14Z"
-completed: "2026-04-12T13:53:28Z"
+started: "2026-04-12T14:30:14Z"
+completed: "2026-04-12T14:36:45Z"
 lastFailReason: 'validate completion report: completion report status: partial'
 ---
 
