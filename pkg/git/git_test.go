@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 
 	libtime "github.com/bborbe/time"
 	. "github.com/onsi/ginkgo/v2"
@@ -445,5 +446,57 @@ var _ = Describe("Git with no remote configured", func() {
 		s, err := noRemoteGit.Status(ctx)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(s.NoPushPending).To(BeTrue())
+	})
+})
+
+var _ = Describe("Git ConfigureUser", func() {
+	var ctx context.Context
+	var repoDir string
+	var g git.Git
+
+	BeforeEach(func() {
+		ctx = context.Background()
+		var err error
+		repoDir, err = os.MkdirTemp("", "git-configure-user-*")
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(func() { _ = os.RemoveAll(repoDir) })
+
+		runGit(repoDir, "init")
+		g = git.New(repoDir, &noopMetrics{}, libtime.NewCurrentDateTime(), "")
+	})
+
+	readConfig := func(key string) string {
+		cmd := exec.Command("git", "config", key)
+		cmd.Dir = repoDir
+		out, _ := cmd.Output()
+		return strings.TrimSpace(string(out))
+	}
+
+	It("sets both name and email when both are provided", func() {
+		err := g.ConfigureUser(ctx, "Alice", "alice@example.com")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(readConfig("user.name")).To(Equal("Alice"))
+		Expect(readConfig("user.email")).To(Equal("alice@example.com"))
+	})
+
+	It("sets only name when email is empty", func() {
+		err := g.ConfigureUser(ctx, "Bob", "")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(readConfig("user.name")).To(Equal("Bob"))
+		Expect(readConfig("user.email")).To(BeEmpty())
+	})
+
+	It("sets only email when name is empty", func() {
+		err := g.ConfigureUser(ctx, "", "carol@example.com")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(readConfig("user.name")).To(BeEmpty())
+		Expect(readConfig("user.email")).To(Equal("carol@example.com"))
+	})
+
+	It("does nothing when both name and email are empty", func() {
+		err := g.ConfigureUser(ctx, "", "")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(readConfig("user.name")).To(BeEmpty())
+		Expect(readConfig("user.email")).To(BeEmpty())
 	})
 })

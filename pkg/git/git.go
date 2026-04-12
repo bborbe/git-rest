@@ -53,6 +53,7 @@ type Git interface {
 	Pull(ctx context.Context) error
 	Status(ctx context.Context) (Status, error)
 	Clone(ctx context.Context, remoteURL RemoteURL) error
+	ConfigureUser(ctx context.Context, name string, email string) error
 }
 
 // New returns a Git implementation backed by the system git binary for the given repository path.
@@ -347,6 +348,22 @@ func (g *git) Clone(ctx context.Context, remoteURL RemoteURL) error {
 		string(remoteURL),
 		filepath.Base(g.repoPath),
 	)
+}
+
+// ConfigureUser sets the git user.name and user.email in the repository config.
+// Empty strings are skipped. This runs once at startup before concurrent operations.
+func (g *git) ConfigureUser(ctx context.Context, name string, email string) error {
+	if name != "" {
+		if err := g.runCmd(ctx, g.repoPath, "config", "user.name", name); err != nil {
+			return errors.Wrapf(ctx, err, "set git user.name %s", name)
+		}
+	}
+	if email != "" {
+		if err := g.runCmd(ctx, g.repoPath, "config", "user.email", email); err != nil {
+			return errors.Wrapf(ctx, err, "set git user.email %s", email)
+		}
+	}
+	return nil
 }
 
 // Status returns the current working-tree and push-pending state.

@@ -2,6 +2,10 @@
 
 All notable changes to this project will be documented in this file.
 
+## v0.10.0
+
+- feat: Add `--git-user-name` / `GIT_USER_NAME` and `--git-user-email` / `GIT_USER_EMAIL` flags; when set, configure `user.name` and `user.email` in the repository via `git config` on startup
+
 ## v0.9.0
 
 - feat: Add `--git-remote-url` / `GIT_REMOTE_URL` flag; when set and repo has no `.git` directory, clone the remote on startup with parent directory creation via `os.MkdirAll`

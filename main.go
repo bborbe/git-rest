@@ -42,6 +42,8 @@ type application struct {
 	BuildDate       *libtime.DateTime `required:"false" arg:"build-date"        env:"BUILD_DATE"        usage:"Build timestamp (RFC3339)"`
 	GitSSHKey       git.SSHKeyPath    `required:"false" arg:"git-ssh-key"       env:"GIT_SSH_KEY"       usage:"Path to SSH private key for git operations"`
 	GitRemoteURL    git.RemoteURL     `required:"false" arg:"git-remote-url"    env:"GIT_REMOTE_URL"    usage:"Git remote URL to clone from on startup"`
+	GitUserName     string            `required:"false" arg:"git-user-name"     env:"GIT_USER_NAME"     usage:"Git author name for commits"`
+	GitUserEmail    string            `required:"false" arg:"git-user-email"    env:"GIT_USER_EMAIL"    usage:"Git author email for commits"`
 }
 
 func (a *application) Run(ctx context.Context, sentryClient libsentry.Client) error {
@@ -63,19 +65,26 @@ func (a *application) Run(ctx context.Context, sentryClient libsentry.Client) er
 }
 
 func (a *application) bootstrap(ctx context.Context) error {
+	if err := a.cloneIfNeeded(ctx); err != nil {
+		return errors.Wrap(ctx, err, "clone if needed")
+	}
+	if err := a.configureUserIfSet(ctx); err != nil {
+		return errors.Wrap(ctx, err, "configure user if set")
+	}
+	return nil
+}
+
+func (a *application) cloneIfNeeded(ctx context.Context) error {
 	if a.GitRemoteURL == "" {
 		return nil
 	}
-
 	gitDir := filepath.Join(a.Repo, ".git")
 	if _, err := os.Stat(gitDir); err == nil {
 		return nil
 	}
-
 	if err := os.MkdirAll(a.Repo, 0o750); err != nil { //nolint:gosec
 		return errors.Wrapf(ctx, err, "create repo directory %s", a.Repo)
 	}
-
 	tmpGit := factory.CreateGitClient(
 		a.Repo,
 		metrics.NewMetrics(),
@@ -85,7 +94,26 @@ func (a *application) bootstrap(ctx context.Context) error {
 	if err := tmpGit.Clone(ctx, a.GitRemoteURL); err != nil {
 		return errors.Wrapf(ctx, err, "clone %s", a.GitRemoteURL)
 	}
+	return nil
+}
 
+func (a *application) configureUserIfSet(ctx context.Context) error {
+	if a.GitUserName == "" && a.GitUserEmail == "" {
+		return nil
+	}
+	gitDir := filepath.Join(a.Repo, ".git")
+	if _, err := os.Stat(gitDir); err != nil {
+		return errors.Wrapf(ctx, err, "repo %s has no .git directory", a.Repo)
+	}
+	gitClient := factory.CreateGitClient(
+		a.Repo,
+		metrics.NewMetrics(),
+		libtime.NewCurrentDateTime(),
+		a.GitSSHKey,
+	)
+	if err := gitClient.ConfigureUser(ctx, a.GitUserName, a.GitUserEmail); err != nil {
+		return errors.Wrap(ctx, err, "configure git user")
+	}
 	return nil
 }
 

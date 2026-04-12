@@ -21,6 +21,19 @@ type FakeGit struct {
 	cloneReturnsOnCall map[int]struct {
 		result1 error
 	}
+	ConfigureUserStub        func(context.Context, string, string) error
+	configureUserMutex       sync.RWMutex
+	configureUserArgsForCall []struct {
+		arg1 context.Context
+		arg2 string
+		arg3 string
+	}
+	configureUserReturns struct {
+		result1 error
+	}
+	configureUserReturnsOnCall map[int]struct {
+		result1 error
+	}
 	DeleteFileStub        func(context.Context, string) error
 	deleteFileMutex       sync.RWMutex
 	deleteFileArgsForCall []struct {
@@ -160,6 +173,69 @@ func (fake *FakeGit) CloneReturnsOnCall(i int, result1 error) {
 		})
 	}
 	fake.cloneReturnsOnCall[i] = struct {
+		result1 error
+	}{result1}
+}
+
+func (fake *FakeGit) ConfigureUser(arg1 context.Context, arg2 string, arg3 string) error {
+	fake.configureUserMutex.Lock()
+	ret, specificReturn := fake.configureUserReturnsOnCall[len(fake.configureUserArgsForCall)]
+	fake.configureUserArgsForCall = append(fake.configureUserArgsForCall, struct {
+		arg1 context.Context
+		arg2 string
+		arg3 string
+	}{arg1, arg2, arg3})
+	stub := fake.ConfigureUserStub
+	fakeReturns := fake.configureUserReturns
+	fake.recordInvocation("ConfigureUser", []interface{}{arg1, arg2, arg3})
+	fake.configureUserMutex.Unlock()
+	if stub != nil {
+		return stub(arg1, arg2, arg3)
+	}
+	if specificReturn {
+		return ret.result1
+	}
+	return fakeReturns.result1
+}
+
+func (fake *FakeGit) ConfigureUserCallCount() int {
+	fake.configureUserMutex.RLock()
+	defer fake.configureUserMutex.RUnlock()
+	return len(fake.configureUserArgsForCall)
+}
+
+func (fake *FakeGit) ConfigureUserCalls(stub func(context.Context, string, string) error) {
+	fake.configureUserMutex.Lock()
+	defer fake.configureUserMutex.Unlock()
+	fake.ConfigureUserStub = stub
+}
+
+func (fake *FakeGit) ConfigureUserArgsForCall(i int) (context.Context, string, string) {
+	fake.configureUserMutex.RLock()
+	defer fake.configureUserMutex.RUnlock()
+	argsForCall := fake.configureUserArgsForCall[i]
+	return argsForCall.arg1, argsForCall.arg2, argsForCall.arg3
+}
+
+func (fake *FakeGit) ConfigureUserReturns(result1 error) {
+	fake.configureUserMutex.Lock()
+	defer fake.configureUserMutex.Unlock()
+	fake.ConfigureUserStub = nil
+	fake.configureUserReturns = struct {
+		result1 error
+	}{result1}
+}
+
+func (fake *FakeGit) ConfigureUserReturnsOnCall(i int, result1 error) {
+	fake.configureUserMutex.Lock()
+	defer fake.configureUserMutex.Unlock()
+	fake.ConfigureUserStub = nil
+	if fake.configureUserReturnsOnCall == nil {
+		fake.configureUserReturnsOnCall = make(map[int]struct {
+			result1 error
+		})
+	}
+	fake.configureUserReturnsOnCall[i] = struct {
 		result1 error
 	}{result1}
 }
