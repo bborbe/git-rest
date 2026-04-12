@@ -1,7 +1,8 @@
 ---
-status: generating
+status: prompted
 approved: "2026-04-12T17:34:49Z"
 generating: "2026-04-12T17:34:50Z"
+prompted: "2026-04-12T17:37:48Z"
 branch: dark-factory/local-repo-init
 ---
 
