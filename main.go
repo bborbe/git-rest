@@ -10,6 +10,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/bborbe/errors"
 	libhttp "github.com/bborbe/http"
 	"github.com/bborbe/run"
 	libsentry "github.com/bborbe/sentry"
@@ -40,25 +41,35 @@ type application struct {
 }
 
 func (a *application) Run(ctx context.Context, sentryClient libsentry.Client) error {
-	if _, err := os.Stat(a.Repo); err != nil {
-		return err
-	}
-
 	metrics.NewBuildInfoMetrics(a.BuildGitVersion, a.BuildGitCommit).SetBuildInfo(a.BuildDate)
 
-	m := metrics.NewMetrics()
-	gitClient := factory.CreateGitClient(a.Repo, m)
+	gitClient, err := a.createGitClient(ctx)
+	if err != nil {
+		return errors.Wrapf(ctx, err, "create git client failed")
+	}
 
 	return service.Run(ctx,
-		a.createHTTPServer(gitClient, m, sentryClient),
-		a.createPuller(gitClient),
+		a.createGitRefresher(gitClient),
+		a.createHTTPServer(gitClient, metrics.NewMetrics()),
 	)
+}
+
+func (a *application) createGitClient(ctx context.Context) (git.Git, error) {
+	if _, err := os.Stat(a.Repo); err != nil {
+		return nil, errors.Wrapf(ctx, err, "os stat %s failed", a.Repo)
+	}
+
+	return factory.CreateGitClient(a.Repo, metrics.NewMetrics()), nil
+}
+func (a *application) createGitRefresher(gitClient git.Git) run.Func {
+	return func(ctx context.Context) error {
+		return puller.New(gitClient, a.PullInterval).Run(ctx)
+	}
 }
 
 func (a *application) createHTTPServer(
 	gitClient git.Git,
 	m metrics.Metrics,
-	_ libsentry.Client,
 ) run.Func {
 	return func(ctx context.Context) error {
 		getH := factory.CreateFilesGetHandler(gitClient)
@@ -88,11 +99,5 @@ func (a *application) createHTTPServer(
 				o.IdleTimeout = 120 * time.Second
 			},
 		).Run(ctx)
-	}
-}
-
-func (a *application) createPuller(gitClient git.Git) run.Func {
-	return func(ctx context.Context) error {
-		return puller.New(gitClient, a.PullInterval).Run(ctx)
 	}
 }
