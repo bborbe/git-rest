@@ -1,7 +1,12 @@
 ---
-status: approved
+status: completed
+summary: Added ctx.Done() cancellation check in ListFiles range loop to respect context cancellation for large repositories.
+container: git-rest-021-review-git-rest-ctx-done-loop
+dark-factory-version: v0.108.0-dirty
 created: "2026-04-12T13:29:16Z"
 queued: "2026-04-12T13:49:20Z"
+started: "2026-04-12T14:47:06Z"
+completed: "2026-04-12T14:50:31Z"
 ---
 
 <summary>
