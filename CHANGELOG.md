@@ -2,6 +2,10 @@
 
 All notable changes to this project will be documented in this file.
 
+## v0.7.1
+
+- refactor: Replace `http.NewServeMux` with `gorilla/mux.NewRouter().SkipClean(true)` so path traversal attempts reach `validatePath` and return 400 Bad Request
+
 ## v0.7.0
 
 - feat: Pre-initialize `HTTPRequestsTotal` counter for known method/path/status combinations to ensure time series are present before first request

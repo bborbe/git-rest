@@ -16,6 +16,7 @@ import (
 	libsentry "github.com/bborbe/sentry"
 	"github.com/bborbe/service"
 	libtime "github.com/bborbe/time"
+	gorillamux "github.com/gorilla/mux"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"github.com/bborbe/git-rest/pkg/factory"
@@ -80,20 +81,18 @@ func (a *application) createHTTPServer(
 		healthzH := factory.CreateHealthzHandler()
 		readinessH := factory.CreateReadinessHandler(gitClient)
 
-		mux := http.NewServeMux()
-
-		// Files routes using Go 1.22+ method+path routing.
-		mux.Handle("GET /api/v1/files/", factory.CreateFilesDispatchHandler(getH, listH))
-		mux.Handle("POST /api/v1/files/", postH)
-		mux.Handle("DELETE /api/v1/files/", deleteH)
-
-		mux.Handle("/healthz", healthzH)
-		mux.Handle("/readiness", readinessH)
-		mux.Handle("/metrics", promhttp.Handler())
+		router := gorillamux.NewRouter().SkipClean(true)
+		router.Handle("/api/v1/files/{path:.*}", factory.CreateFilesDispatchHandler(getH, listH)).
+			Methods(http.MethodGet)
+		router.Handle("/api/v1/files/{path:.*}", postH).Methods(http.MethodPost)
+		router.Handle("/api/v1/files/{path:.*}", deleteH).Methods(http.MethodDelete)
+		router.Handle("/healthz", healthzH)
+		router.Handle("/readiness", readinessH)
+		router.Handle("/metrics", promhttp.Handler())
 
 		return libhttp.NewServer(
 			a.Listen,
-			factory.CreateMetricsMiddleware(m, mux),
+			factory.CreateMetricsMiddleware(m, router),
 			func(o *libhttp.ServerOptions) {
 				o.ReadTimeout = 60 * time.Second
 				o.WriteTimeout = 60 * time.Second
