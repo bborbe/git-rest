@@ -5,9 +5,12 @@
 package handler_test
 
 import (
+	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 
+	libhttp "github.com/bborbe/http"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
@@ -19,14 +22,16 @@ import (
 var _ = Describe("FilesGetHandler", func() {
 	var (
 		fakeGit *mocks.FakeGit
-		h       http.Handler
+		h       libhttp.WithError
 		rec     *httptest.ResponseRecorder
+		ctx     context.Context
 	)
 
 	BeforeEach(func() {
 		fakeGit = new(mocks.FakeGit)
 		h = handler.NewFilesGetHandler(fakeGit)
 		rec = httptest.NewRecorder()
+		ctx = context.Background()
 	})
 
 	Context("happy path", func() {
@@ -36,7 +41,8 @@ var _ = Describe("FilesGetHandler", func() {
 
 		It("returns 200 with file content", func() {
 			req := httptest.NewRequest(http.MethodGet, "/api/v1/files/foo.txt", nil)
-			h.ServeHTTP(rec, req)
+			err := h.ServeHTTP(ctx, rec, req)
+			Expect(err).To(BeNil())
 			Expect(rec.Code).To(Equal(http.StatusOK))
 			Expect(rec.Body.String()).To(Equal("hello world"))
 			Expect(rec.Header().Get("Content-Type")).To(Equal("application/octet-stream"))
@@ -44,7 +50,8 @@ var _ = Describe("FilesGetHandler", func() {
 
 		It("passes correct path to git", func() {
 			req := httptest.NewRequest(http.MethodGet, "/api/v1/files/subdir/file.txt", nil)
-			h.ServeHTTP(rec, req)
+			err := h.ServeHTTP(ctx, rec, req)
+			Expect(err).To(BeNil())
 			_, path := fakeGit.ReadFileArgsForCall(0)
 			Expect(path).To(Equal("subdir/file.txt"))
 		})
@@ -55,12 +62,13 @@ var _ = Describe("FilesGetHandler", func() {
 			fakeGit.ReadFileReturns(nil, git.ErrNotFound)
 		})
 
-		It("returns 404 with JSON error", func() {
+		It("returns 404 error", func() {
 			req := httptest.NewRequest(http.MethodGet, "/api/v1/files/missing.txt", nil)
-			h.ServeHTTP(rec, req)
-			Expect(rec.Code).To(Equal(http.StatusNotFound))
-			Expect(rec.Body.String()).To(ContainSubstring(`"error"`))
-			Expect(rec.Body.String()).To(ContainSubstring("not found"))
+			err := h.ServeHTTP(ctx, rec, req)
+			Expect(err).NotTo(BeNil())
+			var errWithStatus libhttp.ErrorWithStatusCode
+			Expect(errors.As(err, &errWithStatus)).To(BeTrue())
+			Expect(errWithStatus.StatusCode()).To(Equal(http.StatusNotFound))
 		})
 	})
 
@@ -68,17 +76,21 @@ var _ = Describe("FilesGetHandler", func() {
 		It("returns 400 when git returns ErrInvalidPath", func() {
 			fakeGit.ReadFileReturns(nil, git.ErrInvalidPath)
 			req := httptest.NewRequest(http.MethodGet, "/api/v1/files/../etc/passwd", nil)
-			h.ServeHTTP(rec, req)
-			Expect(rec.Code).To(Equal(http.StatusBadRequest))
-			Expect(rec.Body.String()).To(ContainSubstring(`"error"`))
+			err := h.ServeHTTP(ctx, rec, req)
+			Expect(err).NotTo(BeNil())
+			var errWithStatus libhttp.ErrorWithStatusCode
+			Expect(errors.As(err, &errWithStatus)).To(BeTrue())
+			Expect(errWithStatus.StatusCode()).To(Equal(http.StatusBadRequest))
 		})
 
 		It("returns 400 for .git path", func() {
 			fakeGit.ReadFileReturns(nil, git.ErrInvalidPath)
 			req := httptest.NewRequest(http.MethodGet, "/api/v1/files/.git/config", nil)
-			h.ServeHTTP(rec, req)
-			Expect(rec.Code).To(Equal(http.StatusBadRequest))
-			Expect(rec.Body.String()).To(ContainSubstring(`"error"`))
+			err := h.ServeHTTP(ctx, rec, req)
+			Expect(err).NotTo(BeNil())
+			var errWithStatus libhttp.ErrorWithStatusCode
+			Expect(errors.As(err, &errWithStatus)).To(BeTrue())
+			Expect(errWithStatus.StatusCode()).To(Equal(http.StatusBadRequest))
 		})
 	})
 
@@ -87,11 +99,10 @@ var _ = Describe("FilesGetHandler", func() {
 			fakeGit.ReadFileReturns(nil, errWithMessage("internal git failure"))
 		})
 
-		It("returns 500", func() {
+		It("returns internal error", func() {
 			req := httptest.NewRequest(http.MethodGet, "/api/v1/files/foo.txt", nil)
-			h.ServeHTTP(rec, req)
-			Expect(rec.Code).To(Equal(http.StatusInternalServerError))
-			Expect(rec.Body.String()).To(ContainSubstring(`"error"`))
+			err := h.ServeHTTP(ctx, rec, req)
+			Expect(err).NotTo(BeNil())
 		})
 	})
 })

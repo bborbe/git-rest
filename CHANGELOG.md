@@ -2,6 +2,10 @@
 
 All notable changes to this project will be documented in this file.
 
+## v0.6.6
+
+- refactor: Convert all HTTP handlers from `http.Handler` with manual JSON error writing to `libhttp.WithError` + `libhttp.NewJSONErrorHandler` pattern; replace `writeJSONError`/`writeJSONOK` helpers with `libhttp.WrapWithStatusCode` and `libhttp.SendJSONResponse`; replace custom healthz handler with `libhttp.NewPrintHandler("OK")`; update factory functions to wrap handlers with `NewJSONErrorHandler`
+
 ## v0.6.5
 
 - test: Add targeted tests for `pkg/git` error paths (invalid glob pattern, non-existent repo path, no-remote repo) and `pkg/handler.NewHealthzHandler` to bring `pkg/git` coverage to ≥80%

@@ -7,6 +7,8 @@ package factory
 import (
 	"net/http"
 
+	libhttp "github.com/bborbe/http"
+
 	"github.com/bborbe/git-rest/pkg/git"
 	"github.com/bborbe/git-rest/pkg/handler"
 	"github.com/bborbe/git-rest/pkg/metrics"
@@ -19,32 +21,32 @@ func CreateGitClient(repoPath string, m metrics.Metrics) git.Git {
 
 // CreateFilesGetHandler returns an http.Handler for GET /api/v1/files/{path}.
 func CreateFilesGetHandler(g git.Git) http.Handler {
-	return handler.NewFilesGetHandler(g)
+	return libhttp.NewJSONErrorHandler(handler.NewFilesGetHandler(g))
 }
 
 // CreateFilesPostHandler returns an http.Handler for POST /api/v1/files/{path}.
 func CreateFilesPostHandler(g git.Git) http.Handler {
-	return handler.NewFilesPostHandler(g)
+	return libhttp.NewJSONErrorHandler(handler.NewFilesPostHandler(g))
 }
 
 // CreateFilesDeleteHandler returns an http.Handler for DELETE /api/v1/files/{path}.
 func CreateFilesDeleteHandler(g git.Git) http.Handler {
-	return handler.NewFilesDeleteHandler(g)
+	return libhttp.NewJSONErrorHandler(handler.NewFilesDeleteHandler(g))
 }
 
 // CreateFilesListHandler returns an http.Handler for GET /api/v1/files/ with glob query param.
 func CreateFilesListHandler(g git.Git) http.Handler {
-	return handler.NewFilesListHandler(g)
+	return libhttp.NewJSONErrorHandler(handler.NewFilesListHandler(g))
 }
 
 // CreateHealthzHandler returns an http.Handler for GET /healthz.
 func CreateHealthzHandler() http.Handler {
-	return handler.NewHealthzHandler()
+	return libhttp.NewPrintHandler("OK")
 }
 
 // CreateReadinessHandler returns an http.Handler for GET /readiness.
 func CreateReadinessHandler(g git.Git) http.Handler {
-	return handler.NewReadinessHandler(g)
+	return libhttp.NewJSONErrorHandler(handler.NewReadinessHandler(g))
 }
 
 // CreateFilesDispatchHandler returns a handler that routes between get and list.

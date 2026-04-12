@@ -6,10 +6,13 @@ package handler_test
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 
+	libhttp "github.com/bborbe/http"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
@@ -21,14 +24,16 @@ import (
 var _ = Describe("FilesPostHandler", func() {
 	var (
 		fakeGit *mocks.FakeGit
-		h       http.Handler
+		h       libhttp.WithError
 		rec     *httptest.ResponseRecorder
+		ctx     context.Context
 	)
 
 	BeforeEach(func() {
 		fakeGit = new(mocks.FakeGit)
 		h = handler.NewFilesPostHandler(fakeGit)
 		rec = httptest.NewRecorder()
+		ctx = context.Background()
 	})
 
 	Context("happy path", func() {
@@ -38,7 +43,8 @@ var _ = Describe("FilesPostHandler", func() {
 				"/api/v1/files/foo.txt",
 				bytes.NewBufferString("content"),
 			)
-			h.ServeHTTP(rec, req)
+			err := h.ServeHTTP(ctx, rec, req)
+			Expect(err).To(BeNil())
 			Expect(rec.Code).To(Equal(http.StatusOK))
 			Expect(rec.Body.String()).To(ContainSubstring(`"ok"`))
 		})
@@ -49,7 +55,8 @@ var _ = Describe("FilesPostHandler", func() {
 				"/api/v1/files/dir/file.txt",
 				bytes.NewBufferString("data"),
 			)
-			h.ServeHTTP(rec, req)
+			err := h.ServeHTTP(ctx, rec, req)
+			Expect(err).To(BeNil())
 			_, path, content := fakeGit.WriteFileArgsForCall(0)
 			Expect(path).To(Equal("dir/file.txt"))
 			Expect(content).To(Equal([]byte("data")))
@@ -64,9 +71,11 @@ var _ = Describe("FilesPostHandler", func() {
 				"/api/v1/files/../etc/passwd",
 				bytes.NewBufferString("x"),
 			)
-			h.ServeHTTP(rec, req)
-			Expect(rec.Code).To(Equal(http.StatusBadRequest))
-			Expect(rec.Body.String()).To(ContainSubstring(`"error"`))
+			err := h.ServeHTTP(ctx, rec, req)
+			Expect(err).NotTo(BeNil())
+			var errWithStatus libhttp.ErrorWithStatusCode
+			Expect(errors.As(err, &errWithStatus)).To(BeTrue())
+			Expect(errWithStatus.StatusCode()).To(Equal(http.StatusBadRequest))
 		})
 
 		It("returns 400 for .git path", func() {
@@ -76,9 +85,11 @@ var _ = Describe("FilesPostHandler", func() {
 				"/api/v1/files/.git/config",
 				bytes.NewBufferString("x"),
 			)
-			h.ServeHTTP(rec, req)
-			Expect(rec.Code).To(Equal(http.StatusBadRequest))
-			Expect(rec.Body.String()).To(ContainSubstring(`"error"`))
+			err := h.ServeHTTP(ctx, rec, req)
+			Expect(err).NotTo(BeNil())
+			var errWithStatus libhttp.ErrorWithStatusCode
+			Expect(errors.As(err, &errWithStatus)).To(BeTrue())
+			Expect(errWithStatus.StatusCode()).To(Equal(http.StatusBadRequest))
 		})
 	})
 
@@ -91,23 +102,24 @@ var _ = Describe("FilesPostHandler", func() {
 				"/api/v1/files/foo.txt",
 				strings.NewReader(large),
 			)
-			h.ServeHTTP(rec, req)
-			Expect(rec.Code).To(Equal(http.StatusRequestEntityTooLarge))
-			Expect(rec.Body.String()).To(ContainSubstring("too large"))
+			err := h.ServeHTTP(ctx, rec, req)
+			Expect(err).NotTo(BeNil())
+			var errWithStatus libhttp.ErrorWithStatusCode
+			Expect(errors.As(err, &errWithStatus)).To(BeTrue())
+			Expect(errWithStatus.StatusCode()).To(Equal(http.StatusRequestEntityTooLarge))
 		})
 	})
 
 	Context("git error", func() {
-		It("returns 500", func() {
+		It("returns internal error", func() {
 			fakeGit.WriteFileReturns(errWithMessage("internal git failure"))
 			req := httptest.NewRequest(
 				http.MethodPost,
 				"/api/v1/files/foo.txt",
 				bytes.NewBufferString("content"),
 			)
-			h.ServeHTTP(rec, req)
-			Expect(rec.Code).To(Equal(http.StatusInternalServerError))
-			Expect(rec.Body.String()).To(ContainSubstring(`"error"`))
+			err := h.ServeHTTP(ctx, rec, req)
+			Expect(err).NotTo(BeNil())
 		})
 	})
 })

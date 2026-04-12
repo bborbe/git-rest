@@ -5,30 +5,34 @@
 package handler
 
 import (
+	"context"
 	"net/http"
+
+	"github.com/bborbe/errors"
+	libhttp "github.com/bborbe/http"
 
 	"github.com/bborbe/git-rest/pkg/git"
 )
 
-// NewReadinessHandler returns an http.Handler that reports readiness based on git status.
-func NewReadinessHandler(g git.Git) http.Handler {
-	return &readinessHandler{git: g}
-}
-
-type readinessHandler struct {
-	git git.Git
-}
-
-func (h *readinessHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	status, err := h.git.Status(r.Context())
-	if err != nil {
-		writeJSONError(w, http.StatusServiceUnavailable, err.Error())
-		return
-	}
-	if status.Clean && status.NoPushPending {
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("ok"))
-		return
-	}
-	writeJSONError(w, http.StatusServiceUnavailable, "not ready")
+// NewReadinessHandler returns a WithError handler that reports readiness based on git status.
+func NewReadinessHandler(g git.Git) libhttp.WithError {
+	return libhttp.WithErrorFunc(
+		func(ctx context.Context, resp http.ResponseWriter, req *http.Request) error {
+			status, err := g.Status(ctx)
+			if err != nil {
+				return libhttp.WrapWithStatusCode(
+					errors.Wrap(ctx, err, "git status"),
+					http.StatusServiceUnavailable,
+				)
+			}
+			if !status.Clean || !status.NoPushPending {
+				return libhttp.WrapWithStatusCode(
+					errors.New(ctx, "not ready"),
+					http.StatusServiceUnavailable,
+				)
+			}
+			_, _ = resp.Write([]byte("ok"))
+			return nil
+		},
+	)
 }

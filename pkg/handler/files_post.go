@@ -5,47 +5,40 @@
 package handler
 
 import (
-	"errors"
+	"context"
 	"io"
 	"net/http"
 	"strings"
+
+	"github.com/bborbe/errors"
+	libhttp "github.com/bborbe/http"
 
 	"github.com/bborbe/git-rest/pkg/git"
 )
 
 const maxBodyBytes = 10 * 1024 * 1024
 
-// NewFilesPostHandler returns an http.Handler that writes a file to the git repository.
-func NewFilesPostHandler(g git.Git) http.Handler {
-	return &filesPostHandler{git: g}
-}
-
-type filesPostHandler struct {
-	git git.Git
-}
-
-func (h *filesPostHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	path := strings.TrimPrefix(r.URL.Path, "/api/v1/files/")
-
-	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
-	body, err := io.ReadAll(r.Body)
-	if err != nil {
-		var maxBytesErr *http.MaxBytesError
-		if errors.As(err, &maxBytesErr) {
-			writeJSONError(w, http.StatusRequestEntityTooLarge, "request body too large")
-			return
-		}
-		writeJSONError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-
-	if err := h.git.WriteFile(r.Context(), path, body); err != nil {
-		if errors.Is(err, git.ErrInvalidPath) {
-			writeJSONError(w, http.StatusBadRequest, "invalid path")
-			return
-		}
-		writeJSONError(w, http.StatusInternalServerError, "internal error")
-		return
-	}
-	writeJSONOK(w)
+// NewFilesPostHandler returns a WithError handler that writes a file to the git repository.
+func NewFilesPostHandler(g git.Git) libhttp.WithError {
+	return libhttp.WithErrorFunc(
+		func(ctx context.Context, resp http.ResponseWriter, req *http.Request) error {
+			path := strings.TrimPrefix(req.URL.Path, "/api/v1/files/")
+			req.Body = http.MaxBytesReader(resp, req.Body, maxBodyBytes)
+			body, err := io.ReadAll(req.Body)
+			if err != nil {
+				var maxBytesErr *http.MaxBytesError
+				if errors.As(err, &maxBytesErr) {
+					return libhttp.WrapWithStatusCode(err, http.StatusRequestEntityTooLarge)
+				}
+				return errors.Wrap(ctx, err, "read request body")
+			}
+			if err := g.WriteFile(ctx, path, body); err != nil {
+				if errors.Is(err, git.ErrInvalidPath) {
+					return libhttp.WrapWithStatusCode(err, http.StatusBadRequest)
+				}
+				return errors.Wrap(ctx, err, "write file")
+			}
+			return libhttp.SendJSONResponse(ctx, resp, map[string]bool{"ok": true}, http.StatusOK)
+		},
+	)
 }

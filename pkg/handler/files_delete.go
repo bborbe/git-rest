@@ -5,35 +5,31 @@
 package handler
 
 import (
-	"errors"
+	"context"
 	"net/http"
 	"strings"
+
+	"github.com/bborbe/errors"
+	libhttp "github.com/bborbe/http"
 
 	"github.com/bborbe/git-rest/pkg/git"
 )
 
-// NewFilesDeleteHandler returns an http.Handler that deletes a file from the git repository.
-func NewFilesDeleteHandler(g git.Git) http.Handler {
-	return &filesDeleteHandler{git: g}
-}
-
-type filesDeleteHandler struct {
-	git git.Git
-}
-
-func (h *filesDeleteHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	path := strings.TrimPrefix(r.URL.Path, "/api/v1/files/")
-	if err := h.git.DeleteFile(r.Context(), path); err != nil {
-		if errors.Is(err, git.ErrNotFound) {
-			writeJSONError(w, http.StatusNotFound, "not found")
-			return
-		}
-		if errors.Is(err, git.ErrInvalidPath) {
-			writeJSONError(w, http.StatusBadRequest, "invalid path")
-			return
-		}
-		writeJSONError(w, http.StatusInternalServerError, "internal error")
-		return
-	}
-	writeJSONOK(w)
+// NewFilesDeleteHandler returns a WithError handler that deletes a file from the git repository.
+func NewFilesDeleteHandler(g git.Git) libhttp.WithError {
+	return libhttp.WithErrorFunc(
+		func(ctx context.Context, resp http.ResponseWriter, req *http.Request) error {
+			path := strings.TrimPrefix(req.URL.Path, "/api/v1/files/")
+			if err := g.DeleteFile(ctx, path); err != nil {
+				if errors.Is(err, git.ErrNotFound) {
+					return libhttp.WrapWithStatusCode(err, http.StatusNotFound)
+				}
+				if errors.Is(err, git.ErrInvalidPath) {
+					return libhttp.WrapWithStatusCode(err, http.StatusBadRequest)
+				}
+				return errors.Wrap(ctx, err, "delete file")
+			}
+			return libhttp.SendJSONResponse(ctx, resp, map[string]bool{"ok": true}, http.StatusOK)
+		},
+	)
 }

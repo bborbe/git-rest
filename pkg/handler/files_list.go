@@ -5,32 +5,28 @@
 package handler
 
 import (
-	"encoding/json"
+	"context"
 	"net/http"
+
+	"github.com/bborbe/errors"
+	libhttp "github.com/bborbe/http"
 
 	"github.com/bborbe/git-rest/pkg/git"
 )
 
-// NewFilesListHandler returns an http.Handler that lists files in the git repository matching a glob pattern.
-func NewFilesListHandler(g git.Git) http.Handler {
-	return &filesListHandler{git: g}
-}
-
-type filesListHandler struct {
-	git git.Git
-}
-
-func (h *filesListHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	glob := r.URL.Query().Get("glob")
-	files, err := h.git.ListFiles(r.Context(), glob)
-	if err != nil {
-		writeJSONError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	if files == nil {
-		files = []string{}
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(files)
+// NewFilesListHandler returns a WithError handler that lists files in the git repository matching a glob pattern.
+func NewFilesListHandler(g git.Git) libhttp.WithError {
+	return libhttp.WithErrorFunc(
+		func(ctx context.Context, resp http.ResponseWriter, req *http.Request) error {
+			glob := req.URL.Query().Get("glob")
+			files, err := g.ListFiles(ctx, glob)
+			if err != nil {
+				return errors.Wrap(ctx, err, "list files")
+			}
+			if files == nil {
+				files = []string{}
+			}
+			return libhttp.SendJSONResponse(ctx, resp, files, http.StatusOK)
+		},
+	)
 }

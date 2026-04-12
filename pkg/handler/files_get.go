@@ -5,39 +5,35 @@
 package handler
 
 import (
-	"errors"
+	"context"
 	"net/http"
 	"strings"
+
+	"github.com/bborbe/errors"
+	libhttp "github.com/bborbe/http"
 
 	"github.com/bborbe/git-rest/pkg/git"
 )
 
-// NewFilesGetHandler returns an http.Handler that reads a file from the git repository.
-func NewFilesGetHandler(g git.Git) http.Handler {
-	return &filesGetHandler{git: g}
-}
-
-type filesGetHandler struct {
-	git git.Git
-}
-
-func (h *filesGetHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	path := strings.TrimPrefix(r.URL.Path, "/api/v1/files/")
-	content, err := h.git.ReadFile(r.Context(), path)
-	if err != nil {
-		if errors.Is(err, git.ErrNotFound) {
-			writeJSONError(w, http.StatusNotFound, "not found")
-			return
-		}
-		if errors.Is(err, git.ErrInvalidPath) {
-			writeJSONError(w, http.StatusBadRequest, "invalid path")
-			return
-		}
-		writeJSONError(w, http.StatusInternalServerError, "internal error")
-		return
-	}
-	w.Header().Set("Content-Type", "application/octet-stream")
-	w.WriteHeader(http.StatusOK)
-	// #nosec G705 -- content is read from the git repository; Content-Type is set to application/octet-stream
-	_, _ = w.Write(content)
+// NewFilesGetHandler returns a WithError handler that reads a file from the git repository.
+func NewFilesGetHandler(g git.Git) libhttp.WithError {
+	return libhttp.WithErrorFunc(
+		func(ctx context.Context, resp http.ResponseWriter, req *http.Request) error {
+			path := strings.TrimPrefix(req.URL.Path, "/api/v1/files/")
+			content, err := g.ReadFile(ctx, path)
+			if err != nil {
+				if errors.Is(err, git.ErrNotFound) {
+					return libhttp.WrapWithStatusCode(err, http.StatusNotFound)
+				}
+				if errors.Is(err, git.ErrInvalidPath) {
+					return libhttp.WrapWithStatusCode(err, http.StatusBadRequest)
+				}
+				return errors.Wrap(ctx, err, "read file")
+			}
+			resp.Header().Set("Content-Type", "application/octet-stream")
+			// #nosec G705 -- content is read from the git repository; Content-Type is set to application/octet-stream
+			_, _ = resp.Write(content)
+			return nil
+		},
+	)
 }

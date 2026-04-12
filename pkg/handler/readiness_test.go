@@ -5,9 +5,12 @@
 package handler_test
 
 import (
+	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 
+	libhttp "github.com/bborbe/http"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
@@ -19,14 +22,16 @@ import (
 var _ = Describe("ReadinessHandler", func() {
 	var (
 		fakeGit *mocks.FakeGit
-		h       http.Handler
+		h       libhttp.WithError
 		rec     *httptest.ResponseRecorder
+		ctx     context.Context
 	)
 
 	BeforeEach(func() {
 		fakeGit = new(mocks.FakeGit)
 		h = handler.NewReadinessHandler(fakeGit)
 		rec = httptest.NewRecorder()
+		ctx = context.Background()
 	})
 
 	Context("clean and no push pending", func() {
@@ -36,7 +41,8 @@ var _ = Describe("ReadinessHandler", func() {
 
 		It("returns 200 ok", func() {
 			req := httptest.NewRequest(http.MethodGet, "/readiness", nil)
-			h.ServeHTTP(rec, req)
+			err := h.ServeHTTP(ctx, rec, req)
+			Expect(err).To(BeNil())
 			Expect(rec.Code).To(Equal(http.StatusOK))
 			Expect(rec.Body.String()).To(Equal("ok"))
 		})
@@ -47,11 +53,14 @@ var _ = Describe("ReadinessHandler", func() {
 			fakeGit.StatusReturns(git.Status{Clean: false, NoPushPending: true}, nil)
 		})
 
-		It("returns 503", func() {
+		It("returns 503 error", func() {
 			req := httptest.NewRequest(http.MethodGet, "/readiness", nil)
-			h.ServeHTTP(rec, req)
-			Expect(rec.Code).To(Equal(http.StatusServiceUnavailable))
-			Expect(rec.Body.String()).To(ContainSubstring("not ready"))
+			err := h.ServeHTTP(ctx, rec, req)
+			Expect(err).NotTo(BeNil())
+			var errWithStatus libhttp.ErrorWithStatusCode
+			Expect(errors.As(err, &errWithStatus)).To(BeTrue())
+			Expect(errWithStatus.StatusCode()).To(Equal(http.StatusServiceUnavailable))
+			Expect(err.Error()).To(ContainSubstring("not ready"))
 		})
 	})
 
@@ -60,11 +69,13 @@ var _ = Describe("ReadinessHandler", func() {
 			fakeGit.StatusReturns(git.Status{Clean: true, NoPushPending: false}, nil)
 		})
 
-		It("returns 503", func() {
+		It("returns 503 error", func() {
 			req := httptest.NewRequest(http.MethodGet, "/readiness", nil)
-			h.ServeHTTP(rec, req)
-			Expect(rec.Code).To(Equal(http.StatusServiceUnavailable))
-			Expect(rec.Body.String()).To(ContainSubstring("not ready"))
+			err := h.ServeHTTP(ctx, rec, req)
+			Expect(err).NotTo(BeNil())
+			var errWithStatus libhttp.ErrorWithStatusCode
+			Expect(errors.As(err, &errWithStatus)).To(BeTrue())
+			Expect(errWithStatus.StatusCode()).To(Equal(http.StatusServiceUnavailable))
 		})
 	})
 
@@ -73,11 +84,13 @@ var _ = Describe("ReadinessHandler", func() {
 			fakeGit.StatusReturns(git.Status{}, errWithMessage("git status failed"))
 		})
 
-		It("returns 503", func() {
+		It("returns 503 error", func() {
 			req := httptest.NewRequest(http.MethodGet, "/readiness", nil)
-			h.ServeHTTP(rec, req)
-			Expect(rec.Code).To(Equal(http.StatusServiceUnavailable))
-			Expect(rec.Body.String()).To(ContainSubstring(`"error"`))
+			err := h.ServeHTTP(ctx, rec, req)
+			Expect(err).NotTo(BeNil())
+			var errWithStatus libhttp.ErrorWithStatusCode
+			Expect(errors.As(err, &errWithStatus)).To(BeTrue())
+			Expect(errWithStatus.StatusCode()).To(Equal(http.StatusServiceUnavailable))
 		})
 	})
 })

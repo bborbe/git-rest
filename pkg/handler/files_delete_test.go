@@ -5,9 +5,12 @@
 package handler_test
 
 import (
+	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 
+	libhttp "github.com/bborbe/http"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
@@ -19,27 +22,31 @@ import (
 var _ = Describe("FilesDeleteHandler", func() {
 	var (
 		fakeGit *mocks.FakeGit
-		h       http.Handler
+		h       libhttp.WithError
 		rec     *httptest.ResponseRecorder
+		ctx     context.Context
 	)
 
 	BeforeEach(func() {
 		fakeGit = new(mocks.FakeGit)
 		h = handler.NewFilesDeleteHandler(fakeGit)
 		rec = httptest.NewRecorder()
+		ctx = context.Background()
 	})
 
 	Context("happy path", func() {
 		It("returns 200 with ok body", func() {
 			req := httptest.NewRequest(http.MethodDelete, "/api/v1/files/foo.txt", nil)
-			h.ServeHTTP(rec, req)
+			err := h.ServeHTTP(ctx, rec, req)
+			Expect(err).To(BeNil())
 			Expect(rec.Code).To(Equal(http.StatusOK))
 			Expect(rec.Body.String()).To(ContainSubstring(`"ok"`))
 		})
 
 		It("passes correct path to git", func() {
 			req := httptest.NewRequest(http.MethodDelete, "/api/v1/files/dir/file.txt", nil)
-			h.ServeHTTP(rec, req)
+			err := h.ServeHTTP(ctx, rec, req)
+			Expect(err).To(BeNil())
 			_, path := fakeGit.DeleteFileArgsForCall(0)
 			Expect(path).To(Equal("dir/file.txt"))
 		})
@@ -50,11 +57,13 @@ var _ = Describe("FilesDeleteHandler", func() {
 			fakeGit.DeleteFileReturns(git.ErrNotFound)
 		})
 
-		It("returns 404", func() {
+		It("returns 404 error", func() {
 			req := httptest.NewRequest(http.MethodDelete, "/api/v1/files/missing.txt", nil)
-			h.ServeHTTP(rec, req)
-			Expect(rec.Code).To(Equal(http.StatusNotFound))
-			Expect(rec.Body.String()).To(ContainSubstring("not found"))
+			err := h.ServeHTTP(ctx, rec, req)
+			Expect(err).NotTo(BeNil())
+			var errWithStatus libhttp.ErrorWithStatusCode
+			Expect(errors.As(err, &errWithStatus)).To(BeTrue())
+			Expect(errWithStatus.StatusCode()).To(Equal(http.StatusNotFound))
 		})
 	})
 
@@ -62,17 +71,21 @@ var _ = Describe("FilesDeleteHandler", func() {
 		It("returns 400 when git returns ErrInvalidPath", func() {
 			fakeGit.DeleteFileReturns(git.ErrInvalidPath)
 			req := httptest.NewRequest(http.MethodDelete, "/api/v1/files/../etc/passwd", nil)
-			h.ServeHTTP(rec, req)
-			Expect(rec.Code).To(Equal(http.StatusBadRequest))
-			Expect(rec.Body.String()).To(ContainSubstring(`"error"`))
+			err := h.ServeHTTP(ctx, rec, req)
+			Expect(err).NotTo(BeNil())
+			var errWithStatus libhttp.ErrorWithStatusCode
+			Expect(errors.As(err, &errWithStatus)).To(BeTrue())
+			Expect(errWithStatus.StatusCode()).To(Equal(http.StatusBadRequest))
 		})
 
 		It("returns 400 for .git path", func() {
 			fakeGit.DeleteFileReturns(git.ErrInvalidPath)
 			req := httptest.NewRequest(http.MethodDelete, "/api/v1/files/.git/config", nil)
-			h.ServeHTTP(rec, req)
-			Expect(rec.Code).To(Equal(http.StatusBadRequest))
-			Expect(rec.Body.String()).To(ContainSubstring(`"error"`))
+			err := h.ServeHTTP(ctx, rec, req)
+			Expect(err).NotTo(BeNil())
+			var errWithStatus libhttp.ErrorWithStatusCode
+			Expect(errors.As(err, &errWithStatus)).To(BeTrue())
+			Expect(errWithStatus.StatusCode()).To(Equal(http.StatusBadRequest))
 		})
 	})
 
@@ -81,11 +94,10 @@ var _ = Describe("FilesDeleteHandler", func() {
 			fakeGit.DeleteFileReturns(errWithMessage("internal git failure"))
 		})
 
-		It("returns 500", func() {
+		It("returns internal error", func() {
 			req := httptest.NewRequest(http.MethodDelete, "/api/v1/files/foo.txt", nil)
-			h.ServeHTTP(rec, req)
-			Expect(rec.Code).To(Equal(http.StatusInternalServerError))
-			Expect(rec.Body.String()).To(ContainSubstring(`"error"`))
+			err := h.ServeHTTP(ctx, rec, req)
+			Expect(err).NotTo(BeNil())
 		})
 	})
 })

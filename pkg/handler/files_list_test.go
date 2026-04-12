@@ -5,9 +5,11 @@
 package handler_test
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 
+	libhttp "github.com/bborbe/http"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
@@ -18,14 +20,16 @@ import (
 var _ = Describe("FilesListHandler", func() {
 	var (
 		fakeGit *mocks.FakeGit
-		h       http.Handler
+		h       libhttp.WithError
 		rec     *httptest.ResponseRecorder
+		ctx     context.Context
 	)
 
 	BeforeEach(func() {
 		fakeGit = new(mocks.FakeGit)
 		h = handler.NewFilesListHandler(fakeGit)
 		rec = httptest.NewRecorder()
+		ctx = context.Background()
 	})
 
 	Context("happy path with files", func() {
@@ -35,7 +39,8 @@ var _ = Describe("FilesListHandler", func() {
 
 		It("returns 200 with JSON array", func() {
 			req := httptest.NewRequest(http.MethodGet, "/api/v1/files/", nil)
-			h.ServeHTTP(rec, req)
+			err := h.ServeHTTP(ctx, rec, req)
+			Expect(err).To(BeNil())
 			Expect(rec.Code).To(Equal(http.StatusOK))
 			Expect(rec.Header().Get("Content-Type")).To(Equal("application/json"))
 			Expect(rec.Body.String()).To(ContainSubstring("a.txt"))
@@ -44,7 +49,8 @@ var _ = Describe("FilesListHandler", func() {
 
 		It("passes glob query param to git", func() {
 			req := httptest.NewRequest(http.MethodGet, "/api/v1/files/?glob=*.txt", nil)
-			h.ServeHTTP(rec, req)
+			err := h.ServeHTTP(ctx, rec, req)
+			Expect(err).To(BeNil())
 			_, pattern := fakeGit.ListFilesArgsForCall(0)
 			Expect(pattern).To(Equal("*.txt"))
 		})
@@ -57,7 +63,8 @@ var _ = Describe("FilesListHandler", func() {
 
 		It("returns [] not null", func() {
 			req := httptest.NewRequest(http.MethodGet, "/api/v1/files/", nil)
-			h.ServeHTTP(rec, req)
+			err := h.ServeHTTP(ctx, rec, req)
+			Expect(err).To(BeNil())
 			Expect(rec.Code).To(Equal(http.StatusOK))
 			Expect(rec.Body.String()).To(ContainSubstring("[]"))
 			Expect(rec.Body.String()).NotTo(ContainSubstring("null"))
@@ -69,11 +76,10 @@ var _ = Describe("FilesListHandler", func() {
 			fakeGit.ListFilesReturns(nil, errWithMessage("internal git failure"))
 		})
 
-		It("returns 500", func() {
+		It("returns internal error", func() {
 			req := httptest.NewRequest(http.MethodGet, "/api/v1/files/", nil)
-			h.ServeHTTP(rec, req)
-			Expect(rec.Code).To(Equal(http.StatusInternalServerError))
-			Expect(rec.Body.String()).To(ContainSubstring(`"error"`))
+			err := h.ServeHTTP(ctx, rec, req)
+			Expect(err).NotTo(BeNil())
 		})
 	})
 })
