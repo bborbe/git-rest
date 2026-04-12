@@ -1,7 +1,12 @@
 ---
-status: approved
+status: completed
+summary: 'Fixed file layout ordering violations: reordered struct/constructor in build_info.go to Interface→Constructor→Struct→Methods, and moved counterfeiter directives in metrics.go and git.go to be directly adjacent to their interfaces (linter reformatted to canonical Go style placing directive after GoDoc comment).'
+container: git-rest-020-review-git-rest-file-layout
+dark-factory-version: v0.108.0-dirty
 created: "2026-04-12T13:29:16Z"
 queued: "2026-04-12T13:49:18Z"
+started: "2026-04-12T14:43:13Z"
+completed: "2026-04-12T14:47:03Z"
 ---
 
 <summary>
