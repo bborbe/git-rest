@@ -1,7 +1,13 @@
 ---
-status: approved
+status: completed
+summary: Fixed errcheck violation in pkg/git/git_test.go by adding blank identifier to os.RemoveAll call in DeferCleanup; all tests pass with pkg/git at 86.3% coverage and pkg/handler at 97.7% coverage.
+container: git-rest-016-review-git-rest-git-test-coverage
+dark-factory-version: v0.108.0-dirty
 created: "2026-04-11T00:00:00Z"
 queued: "2026-04-11T21:05:58Z"
+started: "2026-04-12T11:22:26Z"
+completed: "2026-04-12T11:26:36Z"
+lastFailReason: 'validate completion report: completion report status: partial'
 ---
 
 <summary>
