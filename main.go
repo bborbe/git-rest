@@ -34,7 +34,7 @@ type application struct {
 	SentryProxy     string            `required:"false" arg:"sentry-proxy"      env:"SENTRY_PROXY"      usage:"Sentry Proxy"`
 	Listen          string            `required:"true"  arg:"listen"            env:"LISTEN"            usage:"HTTP listen address"                             default:":8080"`
 	Repo            string            `required:"true"  arg:"repo"              env:"REPO"              usage:"path to git repository on disk"`
-	PullInterval    time.Duration     `required:"false" arg:"pull-interval"     env:"PULL_INTERVAL"     usage:"git pull interval"                               default:"30s"`
+	PullInterval    libtime.Duration  `required:"false" arg:"pull-interval"     env:"PULL_INTERVAL"     usage:"git pull interval"                               default:"30s"`
 	BuildGitVersion string            `required:"false" arg:"build-git-version" env:"BUILD_GIT_VERSION" usage:"Build Git version"                               default:"dev"`
 	BuildGitCommit  string            `required:"false" arg:"build-git-commit"  env:"BUILD_GIT_COMMIT"  usage:"Build Git commit hash"                           default:"none"`
 	BuildDate       *libtime.DateTime `required:"false" arg:"build-date"        env:"BUILD_DATE"        usage:"Build timestamp (RFC3339)"`
@@ -59,7 +59,7 @@ func (a *application) createGitClient(ctx context.Context) (git.Git, error) {
 		return nil, errors.Wrapf(ctx, err, "os stat %s failed", a.Repo)
 	}
 
-	return factory.CreateGitClient(a.Repo, metrics.NewMetrics()), nil
+	return factory.CreateGitClient(a.Repo, metrics.NewMetrics(), libtime.NewCurrentDateTime()), nil
 }
 
 func (a *application) createGitRefresher(gitClient git.Git) run.Func {

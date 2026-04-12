@@ -11,28 +11,30 @@ Validates that git-rest handles nested directory paths correctly, creating paren
 ```bash
 WORK_DIR=$(mktemp -d)
 cd "$WORK_DIR" && git init && git commit --allow-empty -m "init"
+PORT=$(python3 -c "import socket; s=socket.socket(); s.bind(('', 0)); print(s.getsockname()[1]); s.close()")
+BASE=http://localhost:$PORT
 ```
 
 ```bash
-cd ~/Documents/workspaces/git-rest && go run main.go --repo "$WORK_DIR" --listen :9090 --pull-interval 60s -logtostderr &
+cd ~/Documents/workspaces/git-rest && go run main.go --repo "$WORK_DIR" --listen :$PORT --pull-interval 60s -logtostderr &
 SERVER_PID=$!
 sleep 2
 ```
 
-- [ ] `curl -s http://localhost:9090/healthz` returns `OK`
+- [ ] `curl -s $BASE/healthz` returns `OK`
 
 ## Action
 
 ### Create file in nested path
-- [ ] `curl -s -X POST http://localhost:9090/api/v1/files/30%20Analysis/dev/2026-04-12-test.md -d '# Analysis'` returns 200
+- [ ] `curl -s -X POST $BASE/api/v1/files/30%20Analysis/dev/2026-04-12-test.md -d '# Analysis'` returns 200
 - [ ] `cat "$WORK_DIR/30 Analysis/dev/2026-04-12-test.md"` shows `# Analysis`
 - [ ] Parent directories created automatically
 
 ### Read file from nested path
-- [ ] `curl -s http://localhost:9090/api/v1/files/30%20Analysis/dev/2026-04-12-test.md` returns `# Analysis`
+- [ ] `curl -s $BASE/api/v1/files/30%20Analysis/dev/2026-04-12-test.md` returns `# Analysis`
 
 ### Delete file from nested path
-- [ ] `curl -s -X DELETE http://localhost:9090/api/v1/files/30%20Analysis/dev/2026-04-12-test.md` returns 200
+- [ ] `curl -s -X DELETE $BASE/api/v1/files/30%20Analysis/dev/2026-04-12-test.md` returns 200
 - [ ] File no longer exists
 
 ## Expected

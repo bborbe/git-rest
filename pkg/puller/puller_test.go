@@ -9,6 +9,7 @@ import (
 	"errors"
 	"time"
 
+	libtime "github.com/bborbe/time"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
@@ -28,14 +29,14 @@ var _ = Describe("Puller", func() {
 
 	Describe("New", func() {
 		It("returns a Puller", func() {
-			p = puller.New(fakeGit, 10*time.Millisecond)
+			p = puller.New(fakeGit, libtime.Duration(10*time.Millisecond))
 			Expect(p).NotTo(BeNil())
 		})
 	})
 
 	Describe("Run", func() {
 		BeforeEach(func() {
-			p = puller.New(fakeGit, 10*time.Millisecond)
+			p = puller.New(fakeGit, libtime.Duration(10*time.Millisecond))
 		})
 
 		It("calls Pull on each tick and stops when context is cancelled", func() {

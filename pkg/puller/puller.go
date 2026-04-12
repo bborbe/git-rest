@@ -9,6 +9,8 @@ import (
 	"log/slog"
 	"time"
 
+	libtime "github.com/bborbe/time"
+
 	"github.com/bborbe/git-rest/pkg/git"
 )
 
@@ -20,7 +22,7 @@ type Puller interface {
 }
 
 // New returns a Puller that calls g.Pull on the given interval.
-func New(g git.Git, interval time.Duration) Puller {
+func New(g git.Git, interval libtime.Duration) Puller {
 	return &puller{
 		git:      g,
 		interval: interval,
@@ -29,12 +31,12 @@ func New(g git.Git, interval time.Duration) Puller {
 
 type puller struct {
 	git      git.Git
-	interval time.Duration
+	interval libtime.Duration
 }
 
 // Run starts the periodic pull loop. It returns when ctx is cancelled.
 func (p *puller) Run(ctx context.Context) error {
-	ticker := time.NewTicker(p.interval)
+	ticker := time.NewTicker(time.Duration(p.interval))
 	defer ticker.Stop()
 	for {
 		select {

@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 
+	libtime "github.com/bborbe/time"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
@@ -84,7 +85,7 @@ var _ = Describe("Git", func() {
 	BeforeEach(func() {
 		ctx = context.Background()
 		workDir, cleanup = initRepo()
-		g = git.New(workDir, &noopMetrics{})
+		g = git.New(workDir, &noopMetrics{}, libtime.NewCurrentDateTime())
 	})
 
 	AfterEach(func() {
@@ -313,7 +314,11 @@ var _ = Describe("Git with non-existent repo path", func() {
 
 	BeforeEach(func() {
 		ctx = context.Background()
-		brokenGit = git.New("/nonexistent/path/that/does/not/exist", &noopMetrics{})
+		brokenGit = git.New(
+			"/nonexistent/path/that/does/not/exist",
+			&noopMetrics{},
+			libtime.NewCurrentDateTime(),
+		)
 	})
 
 	It("ListFiles returns error", func() {
@@ -347,7 +352,7 @@ var _ = Describe("Git with no remote configured", func() {
 		runGit(noRemoteDir, "init")
 		runGit(noRemoteDir, "config", "user.email", "test@test.com")
 		runGit(noRemoteDir, "config", "user.name", "Test")
-		noRemoteGit = git.New(noRemoteDir, &noopMetrics{})
+		noRemoteGit = git.New(noRemoteDir, &noopMetrics{}, libtime.NewCurrentDateTime())
 	})
 
 	It("Pull returns error", func() {

@@ -11,10 +11,12 @@ Validates that git-rest handles concurrent write requests without data loss or g
 ```bash
 WORK_DIR=$(mktemp -d)
 cd "$WORK_DIR" && git init && git commit --allow-empty -m "init"
+PORT=$(python3 -c "import socket; s=socket.socket(); s.bind(('', 0)); print(s.getsockname()[1]); s.close()")
+BASE=http://localhost:$PORT
 ```
 
 ```bash
-cd ~/Documents/workspaces/git-rest && go run main.go --repo "$WORK_DIR" --listen :9090 --pull-interval 60s -logtostderr &
+cd ~/Documents/workspaces/git-rest && go run main.go --repo "$WORK_DIR" --listen :$PORT --pull-interval 60s -logtostderr &
 SERVER_PID=$!
 sleep 2
 ```
@@ -25,7 +27,7 @@ sleep 2
 - [ ] Run in parallel:
   ```bash
   for i in $(seq 1 10); do
-    curl -s -X POST http://localhost:9090/api/v1/files/file-$i.md -d "content $i" &
+    curl -s -X POST $BASE/api/v1/files/file-$i.md -d "content $i" &
   done
   wait
   ```

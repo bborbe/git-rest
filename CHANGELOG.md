@@ -2,6 +2,10 @@
 
 All notable changes to this project will be documented in this file.
 
+## v0.6.8
+
+- refactor: Inject `libtime.CurrentDateTimeGetter` into `pkg/git` to replace `time.Now()` calls; replace `time.Duration` with `libtime.Duration` in `pkg/puller` and `main.go`
+
 ## v0.6.7
 
 - refactor: Replace `errors.Wrapf` calls without format verbs with `errors.Wrap` in `main.go` and `pkg/git/git.go`

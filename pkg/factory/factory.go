@@ -8,6 +8,7 @@ import (
 	"net/http"
 
 	libhttp "github.com/bborbe/http"
+	libtime "github.com/bborbe/time"
 
 	"github.com/bborbe/git-rest/pkg/git"
 	"github.com/bborbe/git-rest/pkg/handler"
@@ -15,8 +16,12 @@ import (
 )
 
 // CreateGitClient returns a Git implementation for the given repository path.
-func CreateGitClient(repoPath string, m metrics.Metrics) git.Git {
-	return git.New(repoPath, m)
+func CreateGitClient(
+	repoPath string,
+	m metrics.Metrics,
+	currentDateTimeGetter libtime.CurrentDateTimeGetter,
+) git.Git {
+	return git.New(repoPath, m, currentDateTimeGetter)
 }
 
 // CreateFilesGetHandler returns an http.Handler for GET /api/v1/files/{path}.

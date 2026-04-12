@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/bborbe/errors"
+	libtime "github.com/bborbe/time"
 
 	"github.com/bborbe/git-rest/pkg/metrics"
 )
@@ -47,17 +48,23 @@ type Git interface {
 }
 
 // New returns a Git implementation backed by the system git binary for the given repository path.
-func New(repoPath string, m metrics.Metrics) Git {
+func New(
+	repoPath string,
+	m metrics.Metrics,
+	currentDateTimeGetter libtime.CurrentDateTimeGetter,
+) Git {
 	return &git{
-		repoPath: repoPath,
-		metrics:  m,
+		repoPath:              repoPath,
+		metrics:               m,
+		currentDateTimeGetter: currentDateTimeGetter,
 	}
 }
 
 type git struct {
-	repoPath string
-	mu       sync.Mutex
-	metrics  metrics.Metrics
+	repoPath              string
+	mu                    sync.Mutex
+	metrics               metrics.Metrics
+	currentDateTimeGetter libtime.CurrentDateTimeGetter
 }
 
 // validatePath rejects empty, absolute, path-traversal, and .git paths.
@@ -121,9 +128,9 @@ func runCmdOutput(ctx context.Context, dir string, args ...string) ([]byte, erro
 
 // WriteFile writes content to path, stages and commits it, then pushes.
 func (g *git) WriteFile(ctx context.Context, path string, content []byte) error {
-	start := time.Now()
+	start := g.currentDateTimeGetter.Now()
 	defer func() {
-		g.metrics.ObserveGitOperation("write_file", time.Since(start).Seconds())
+		g.metrics.ObserveGitOperation("write_file", time.Since(time.Time(start)).Seconds())
 	}()
 
 	if err := validatePath(ctx, path); err != nil {
@@ -173,9 +180,9 @@ func (g *git) WriteFile(ctx context.Context, path string, content []byte) error 
 
 // DeleteFile removes a file from the repository, commits and pushes the deletion.
 func (g *git) DeleteFile(ctx context.Context, path string) error {
-	start := time.Now()
+	start := g.currentDateTimeGetter.Now()
 	defer func() {
-		g.metrics.ObserveGitOperation("delete_file", time.Since(start).Seconds())
+		g.metrics.ObserveGitOperation("delete_file", time.Since(time.Time(start)).Seconds())
 	}()
 
 	if err := validatePath(ctx, path); err != nil {
@@ -212,9 +219,9 @@ func (g *git) DeleteFile(ctx context.Context, path string) error {
 
 // ReadFile reads the content of path from the working tree.
 func (g *git) ReadFile(ctx context.Context, path string) ([]byte, error) {
-	start := time.Now()
+	start := g.currentDateTimeGetter.Now()
 	defer func() {
-		g.metrics.ObserveGitOperation("read_file", time.Since(start).Seconds())
+		g.metrics.ObserveGitOperation("read_file", time.Since(time.Time(start)).Seconds())
 	}()
 
 	if err := validatePath(ctx, path); err != nil {
@@ -241,9 +248,9 @@ func (g *git) ReadFile(ctx context.Context, path string) ([]byte, error) {
 // ListFiles returns relative file paths tracked by git that match pattern.
 // If pattern is empty, all tracked files are returned.
 func (g *git) ListFiles(ctx context.Context, pattern string) ([]string, error) {
-	start := time.Now()
+	start := g.currentDateTimeGetter.Now()
 	defer func() {
-		g.metrics.ObserveGitOperation("list_files", time.Since(start).Seconds())
+		g.metrics.ObserveGitOperation("list_files", time.Since(time.Time(start)).Seconds())
 	}()
 
 	g.mu.Lock()
@@ -278,9 +285,9 @@ func (g *git) ListFiles(ctx context.Context, pattern string) ([]string, error) {
 
 // Pull fetches and integrates changes from the remote repository.
 func (g *git) Pull(ctx context.Context) error {
-	start := time.Now()
+	start := g.currentDateTimeGetter.Now()
 	defer func() {
-		g.metrics.ObserveGitOperation("pull", time.Since(start).Seconds())
+		g.metrics.ObserveGitOperation("pull", time.Since(time.Time(start)).Seconds())
 	}()
 
 	g.mu.Lock()
