@@ -1,7 +1,11 @@
 ---
-status: draft
+status: executing
 spec: ["003"]
+container: git-rest-027-spec-003-local-init
+dark-factory-version: v0.108.0-dirty
 created: "2026-04-12T18:00:00Z"
+queued: "2026-04-12T17:53:40Z"
+started: "2026-04-12T17:53:42Z"
 ---
 
 <summary>
@@ -21,10 +25,11 @@ Add a `git init` path to the startup bootstrap so that git-rest can work without
 <context>
 Read `CLAUDE.md` for project conventions.
 
-Read coding guides before implementing:
+Read coding guides before implementing (in `~/.claude/plugins/marketplaces/coding/docs/`):
 - `go-patterns.md`: Interface → Constructor → Struct pattern, error wrapping
 - `go-error-wrapping-guide.md`: never use fmt.Errorf, always bborbe/errors
 - `go-factory-pattern.md`: factory wiring rules
+- `go-testing-guide.md`: Ginkgo/Gomega test patterns
 
 Files to read before making changes:
 - `main.go` — application struct (~line 34), `bootstrap` method (~line 67), `cloneIfNeeded` (~line 77), `createGitClient` (~line 120)
@@ -51,7 +56,11 @@ func (g *git) Init(ctx context.Context) error {
 	defer g.mu.Unlock()
 	start := g.currentDateTimeGetter.Now()
 	defer func() { g.metrics.ObserveGitOperation("init", time.Since(time.Time(start)).Seconds()) }()
-	return g.runCmd(ctx, g.repoPath, "init")
+	if err := g.runCmd(ctx, g.repoPath, "init"); err != nil {
+		g.metrics.IncGitOperationError("init")
+		return errors.Wrap(ctx, err, "git init")
+	}
+	return nil
 }
 ```
 
@@ -152,9 +161,11 @@ var _ = Describe("Git Init", func() {
 
 ## 7. Add CHANGELOG entry
 
-Add a bullet under `## Unreleased` in `CHANGELOG.md`:
+In `CHANGELOG.md`, create a new `## Unreleased` section above the existing `## v0.10.0` line and add:
 ```
-- Add local repository initialization when no remote URL is configured
+## Unreleased
+
+- feat: Add local repository initialization when no remote URL is configured
 ```
 
 </requirements>

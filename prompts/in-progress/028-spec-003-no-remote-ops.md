@@ -1,7 +1,8 @@
 ---
-status: draft
+status: approved
 spec: ["003"]
 created: "2026-04-12T18:00:00Z"
+queued: "2026-04-12T17:53:40Z"
 ---
 
 <summary>
@@ -21,9 +22,10 @@ Make push and pull operations gracefully no-op when the git repository has no co
 <context>
 Read `CLAUDE.md` for project conventions.
 
-Read coding guides before implementing:
+Read coding guides before implementing (in `~/.claude/plugins/marketplaces/coding/docs/`):
 - `go-error-wrapping-guide.md`: error wrapping rules — never fmt.Errorf
 - `go-patterns.md`: method patterns, mutex usage
+- `go-testing-guide.md`: Ginkgo/Gomega test patterns
 
 Files to read before making changes:
 - `pkg/git/git.go` — `Pull` (~line 322), `WriteFile` (~line 160), `DeleteFile` (~line 212), `runCmdOutput` (~line 137)
@@ -136,7 +138,7 @@ func (g *git) Pull(ctx context.Context) error {
 }
 ```
 
-Add the `log/slog` import if not already present in `pkg/git/git.go`.
+`pkg/git/git.go` does NOT currently import `log/slog`. Add it to the import block.
 
 ## 5. Update existing no-remote Pull test
 
@@ -196,10 +198,12 @@ The `"Git with no remote configured"` BeforeEach already sets up `noRemoteDir` a
 
 ## 7. Add CHANGELOG entry
 
-Add a bullet under `## Unreleased` in `CHANGELOG.md`:
+In `CHANGELOG.md`, add a bullet under the `## Unreleased` section (created by the prior prompt):
 ```
-- Skip push and pull operations gracefully when no remote is configured
+- feat: Skip push and pull operations gracefully when no remote is configured
 ```
+
+If `## Unreleased` does not exist yet, create it above `## v0.10.0`.
 
 ## 8. Verify readiness is already correct
 
