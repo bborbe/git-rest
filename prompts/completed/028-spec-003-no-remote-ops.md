@@ -1,8 +1,13 @@
 ---
-status: approved
+status: completed
 spec: ["003"]
+summary: Added hasRemote helper to git struct and updated WriteFile, DeleteFile, and Pull to skip push/pull operations when no remote is configured, with tests updated accordingly.
+container: git-rest-028-spec-003-no-remote-ops
+dark-factory-version: v0.108.0-dirty
 created: "2026-04-12T18:00:00Z"
 queued: "2026-04-12T17:53:40Z"
+started: "2026-04-12T17:59:17Z"
+completed: "2026-04-12T18:03:46Z"
 ---
 
 <summary>
