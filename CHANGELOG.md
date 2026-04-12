@@ -2,6 +2,10 @@
 
 All notable changes to this project will be documented in this file.
 
+## v0.6.10
+
+- fix: Add `ctx.Done()` cancellation check in `ListFiles` range loop to respect context cancellation for large repositories
+
 ## v0.6.9
 
 - refactor: Fix file layout ordering in `pkg/metrics` and `pkg/git` — move counterfeiter directives directly above interfaces, reorder struct/constructor to follow Interface → Constructor → Struct → Methods pattern

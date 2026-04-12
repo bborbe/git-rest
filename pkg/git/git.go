@@ -264,6 +264,11 @@ func (g *git) ListFiles(ctx context.Context, pattern string) ([]string, error) {
 
 	var result []string
 	for _, line := range strings.Split(string(out), "\n") {
+		select {
+		case <-ctx.Done():
+			return nil, errors.Wrap(ctx, ctx.Err(), "list files cancelled")
+		default:
+		}
 		if line == "" {
 			continue
 		}
