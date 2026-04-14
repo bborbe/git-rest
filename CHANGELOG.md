@@ -8,6 +8,11 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 * MINOR version when you add functionality in a backwards-compatible manner, and
 * PATCH version when you make backwards-compatible bug fixes.
 
+## v0.12.1
+
+- docs: Rewrite README with features, quick start, configuration tables, and bootstrap modes
+- docs: Add docs/api.md (full endpoint reference) and docs/deployment.md (standalone + K8s patterns)
+
 ## v0.12.0
 
 - feat: Skip push and pull operations gracefully when no remote is configured
