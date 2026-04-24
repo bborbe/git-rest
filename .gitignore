@@ -10,6 +10,7 @@
 /data
 /ideas
 /.dark-factory.lock
+/.dark-factory.log
 /prompts/log
 /vendor
 gha-creds-*.json
