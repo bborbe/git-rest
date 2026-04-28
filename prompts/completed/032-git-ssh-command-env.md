@@ -1,11 +1,12 @@
 ---
-status: committing
+status: completed
 summary: Added GitSSHCommand field, resolveGitSSHCommand function, updated runGitCmd signature to accept sshCommand, threaded SSH command through bootstrap/recoverUntracked/syncOnStartup, exported ResolveGitSSHCommand for tests, added 4 unit test cases, and updated CHANGELOG.md.
 container: git-rest-032-git-ssh-command-env
 dark-factory-version: v0.135.19-1-gc08c946
 created: "2026-04-28T21:25:00Z"
 queued: "2026-04-28T21:11:40Z"
 started: "2026-04-28T21:15:00Z"
+completed: "2026-04-28T21:20:18Z"
 ---
 
 <summary>
