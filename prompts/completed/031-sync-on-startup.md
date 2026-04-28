@@ -1,11 +1,12 @@
 ---
-status: committing
+status: completed
 summary: Added syncOnStartup to main.go (git pull then push at boot), wired into bootstrap() after recoverUntracked, exposed via export_test.go, added 7 Ginkgo tests, and updated CHANGELOG.md.
 container: git-rest-031-sync-on-startup
 dark-factory-version: v0.135.19-1-gc08c946
 created: "2026-04-28T17:25:00Z"
 queued: "2026-04-28T19:22:46Z"
 started: "2026-04-28T20:04:57Z"
+completed: "2026-04-28T20:09:49Z"
 ---
 
 <summary>
