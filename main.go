@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -80,6 +81,9 @@ func (a *application) bootstrap(ctx context.Context) error {
 	if err := a.configureUserIfSet(ctx); err != nil {
 		return errors.Wrap(ctx, err, "configure user if set")
 	}
+	if err := recoverUntracked(ctx, a.Repo); err != nil {
+		return errors.Wrap(ctx, err, "recover untracked")
+	}
 	return nil
 }
 
@@ -114,6 +118,79 @@ func cleanupStaleLocks(ctx context.Context, repoDir string) error {
 		slog.InfoContext(ctx, "removed stale lock", "path", path)
 		return nil
 	})
+}
+
+// recoverUntracked detects untracked files in the working tree and commits
+// them with a recovery message. Called from bootstrap() after init/clone/
+// configure. git-rest is the sole writer (single-replica StatefulSet), so
+// any untracked file at startup is an orphan partial write whose `git add`
+// never ran (e.g. process killed between os.WriteFile and the commit step).
+//
+// Push is NOT performed here — the periodic puller and the next API call's
+// push already handle remote sync; doing it here would duplicate retry logic.
+//
+// Best-effort: errors are logged and do NOT abort startup. A failure here
+// just means readiness will fall back to the existing 503 wait until manual
+// intervention; that's no worse than today.
+//
+// No-op when:
+//   - .git/ does not exist (pre-init / pre-clone)
+//   - the working tree is clean (no untracked files)
+func recoverUntracked(ctx context.Context, repoDir string) error {
+	gitDir := filepath.Join(repoDir, ".git")
+	if _, err := os.Stat(gitDir); os.IsNotExist(err) {
+		return nil
+	} else if err != nil {
+		return errors.Wrapf(ctx, err, "stat %s", gitDir)
+	}
+
+	out, err := runGitCmd(ctx, repoDir, "status", "--short")
+	if err != nil {
+		slog.WarnContext(ctx, "git status failed during untracked recovery", "error", err)
+		return nil
+	}
+	if !hasUntracked(out) {
+		return nil
+	}
+
+	slog.InfoContext(ctx, "recovering untracked files from prior crash")
+	if _, err := runGitCmd(ctx, repoDir, "add", "-A"); err != nil {
+		slog.WarnContext(ctx, "git add -A failed during recovery", "error", err)
+		return nil
+	}
+	if _, err := runGitCmd(ctx, repoDir, "commit", "-m", "git-rest: recover untracked from prior crash"); err != nil {
+		slog.WarnContext(ctx, "git commit failed during recovery", "error", err)
+		return nil
+	}
+	slog.InfoContext(ctx, "recovered untracked files into a commit")
+	return nil
+}
+
+// hasUntracked reports whether `git status --short` output contains any
+// untracked-file lines (prefix `??`).
+func hasUntracked(statusOutput string) bool {
+	for _, line := range strings.Split(statusOutput, "\n") {
+		if strings.HasPrefix(line, "??") {
+			return true
+		}
+	}
+	return false
+}
+
+// runGitCmd runs `git -C repoDir <args>` and returns combined output.
+// It exists so recoverUntracked stays self-contained in main.go, matching
+// the no-pkg/git-dependency pattern used by cleanupStaleLocks.
+func runGitCmd(ctx context.Context, repoDir string, args ...string) (string, error) {
+	full := append([]string{"-C", repoDir}, args...)
+	cmd := exec.CommandContext(
+		ctx,
+		"git",
+		full...) // #nosec G204 -- args caller-controlled, internal use
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return string(out), errors.Wrapf(ctx, err, "git %v: %s", args, string(out))
+	}
+	return string(out), nil
 }
 
 func (a *application) initIfNeeded(ctx context.Context) error {

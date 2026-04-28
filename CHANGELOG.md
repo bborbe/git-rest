@@ -8,6 +8,10 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 * MINOR version when you add functionality in a backwards-compatible manner, and
 * PATCH version when you make backwards-compatible bug fixes.
 
+## v0.14.0
+
+- feat: Auto-commit untracked files in the working tree on startup. Recovers from crashes between `os.WriteFile` and `git add` (e.g. OOM mid-write) without manual intervention. Push is deferred to the existing puller / next API call.
+
 ## v0.13.0
 
 - feat: Auto-remove stale `*.lock` files in `.git/` on startup. Self-heals from prior crashes (OOM, signal kill) without manual intervention.

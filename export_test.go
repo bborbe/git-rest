@@ -6,3 +6,6 @@ package main
 
 // CleanupStaleLocks is exported for testing via the main_test package.
 var CleanupStaleLocks = cleanupStaleLocks
+
+// RecoverUntracked is exported for testing via the main_test package.
+var RecoverUntracked = recoverUntracked
