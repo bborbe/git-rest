@@ -6,9 +6,12 @@ package main
 
 import (
 	"context"
+	"io/fs"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/bborbe/errors"
@@ -65,6 +68,9 @@ func (a *application) Run(ctx context.Context, sentryClient libsentry.Client) er
 }
 
 func (a *application) bootstrap(ctx context.Context) error {
+	if err := cleanupStaleLocks(ctx, a.Repo); err != nil {
+		return errors.Wrap(ctx, err, "cleanup stale locks")
+	}
 	if err := a.initIfNeeded(ctx); err != nil {
 		return errors.Wrap(ctx, err, "init if needed")
 	}
@@ -75,6 +81,39 @@ func (a *application) bootstrap(ctx context.Context) error {
 		return errors.Wrap(ctx, err, "configure user if set")
 	}
 	return nil
+}
+
+// cleanupStaleLocks removes any *.lock files under repoDir/.git at startup.
+// Single-replica StatefulSet means any lock present at boot is stale —
+// the binary just started and holds no other handles. Best-effort:
+// individual errors are logged but never abort startup.
+// No-op when .git/ does not exist (pre-init / pre-clone).
+func cleanupStaleLocks(ctx context.Context, repoDir string) error {
+	gitDir := filepath.Join(repoDir, ".git")
+	if _, err := os.Stat(gitDir); os.IsNotExist(err) {
+		return nil
+	} else if err != nil {
+		return errors.Wrapf(ctx, err, "stat %s", gitDir)
+	}
+	return filepath.WalkDir(gitDir, func(path string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			slog.WarnContext(ctx, "walk error during lock cleanup", "path", path, "error", walkErr)
+			return nil
+		}
+		if d.IsDir() {
+			return nil
+		}
+		if !strings.HasSuffix(path, ".lock") {
+			return nil
+		}
+		rmErr := os.Remove(path) // #nosec G122 -- boot-time only, single-replica StatefulSet
+		if rmErr != nil && !os.IsNotExist(rmErr) {
+			slog.WarnContext(ctx, "failed to remove stale lock", "path", path, "error", rmErr)
+			return nil
+		}
+		slog.InfoContext(ctx, "removed stale lock", "path", path)
+		return nil
+	})
 }
 
 func (a *application) initIfNeeded(ctx context.Context) error {

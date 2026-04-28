@@ -8,6 +8,10 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 * MINOR version when you add functionality in a backwards-compatible manner, and
 * PATCH version when you make backwards-compatible bug fixes.
 
+## v0.13.0
+
+- feat: Auto-remove stale `*.lock` files in `.git/` on startup. Self-heals from prior crashes (OOM, signal kill) without manual intervention.
+
 ## v0.12.1
 
 - docs: Rewrite README with features, quick start, configuration tables, and bootstrap modes
