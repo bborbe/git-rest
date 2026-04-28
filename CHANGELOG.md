@@ -8,6 +8,11 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 * MINOR version when you add functionality in a backwards-compatible manner, and
 * PATCH version when you make backwards-compatible bug fixes.
 
+## v0.16.0
+
+- fix: `runGitCmd` now sets `GIT_SSH_COMMAND` for git network ops at startup, fixing the v0.15.0 bug where `syncOnStartup`'s pull/push failed with "Host key verification failed" because the SSH wrapper used by the periodic puller was not applied to the bootstrap path.
+- feat: New `GIT_SSH_COMMAND` env var (and `--git-ssh-command` arg) for explicit SSH wrapper override. When unset, derives from `GIT_SSH_KEY` using the same format `pkg/git` already uses (`ssh -i <key> -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no`). Existing deployments need no config change.
+
 ## v0.15.0
 
 - feat: Pull and push the configured remote at startup, after `recoverUntracked`. Closes the gap where recovery commits sat locally until the next API write (live incident 2026-04-28: `vault-obsidian-trading` recovered the orphan untracked file but readiness stayed 503 because the recovery commit was never pushed). No-op for local-only repos.

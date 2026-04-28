@@ -36,15 +36,16 @@ func main() {
 }
 
 type application struct {
-	SentryDSN       string            `required:"false" arg:"sentry-dsn"        env:"SENTRY_DSN"        usage:"Sentry DSN"                                 display:"length"`
+	SentryDSN       string            `required:"false" arg:"sentry-dsn"        env:"SENTRY_DSN"        usage:"Sentry DSN"                                                                                                              display:"length"`
 	SentryProxy     string            `required:"false" arg:"sentry-proxy"      env:"SENTRY_PROXY"      usage:"Sentry Proxy"`
-	Listen          string            `required:"true"  arg:"listen"            env:"LISTEN"            usage:"HTTP listen address"                                         default:":8080"`
+	Listen          string            `required:"true"  arg:"listen"            env:"LISTEN"            usage:"HTTP listen address"                                                                                                                      default:":8080"`
 	Repo            string            `required:"true"  arg:"repo"              env:"REPO"              usage:"path to git repository on disk"`
-	PullInterval    libtime.Duration  `required:"false" arg:"pull-interval"     env:"PULL_INTERVAL"     usage:"git pull interval"                                           default:"30s"`
-	BuildGitVersion string            `required:"false" arg:"build-git-version" env:"BUILD_GIT_VERSION" usage:"Build Git version"                                           default:"dev"`
-	BuildGitCommit  string            `required:"false" arg:"build-git-commit"  env:"BUILD_GIT_COMMIT"  usage:"Build Git commit hash"                                       default:"none"`
+	PullInterval    libtime.Duration  `required:"false" arg:"pull-interval"     env:"PULL_INTERVAL"     usage:"git pull interval"                                                                                                                        default:"30s"`
+	BuildGitVersion string            `required:"false" arg:"build-git-version" env:"BUILD_GIT_VERSION" usage:"Build Git version"                                                                                                                        default:"dev"`
+	BuildGitCommit  string            `required:"false" arg:"build-git-commit"  env:"BUILD_GIT_COMMIT"  usage:"Build Git commit hash"                                                                                                                    default:"none"`
 	BuildDate       *libtime.DateTime `required:"false" arg:"build-date"        env:"BUILD_DATE"        usage:"Build timestamp (RFC3339)"`
 	GitSSHKey       git.SSHKeyPath    `required:"false" arg:"git-ssh-key"       env:"GIT_SSH_KEY"       usage:"Path to SSH private key for git operations"`
+	GitSSHCommand   string            `required:"false" arg:"git-ssh-command"   env:"GIT_SSH_COMMAND"   usage:"Full SSH command for git network ops (overrides default derived from --git-ssh-key). Empty = derive from --git-ssh-key."`
 	GitRemoteURL    git.RemoteURL     `required:"false" arg:"git-remote-url"    env:"GIT_REMOTE_URL"    usage:"Git remote URL to clone from on startup"`
 	GitUserName     string            `required:"false" arg:"git-user-name"     env:"GIT_USER_NAME"     usage:"Git author name for commits"`
 	GitUserEmail    string            `required:"false" arg:"git-user-email"    env:"GIT_USER_EMAIL"    usage:"Git author email for commits"`
@@ -69,6 +70,8 @@ func (a *application) Run(ctx context.Context, sentryClient libsentry.Client) er
 }
 
 func (a *application) bootstrap(ctx context.Context) error {
+	sshCommand := resolveGitSSHCommand(a.GitSSHCommand, string(a.GitSSHKey))
+
 	if err := cleanupStaleLocks(ctx, a.Repo); err != nil {
 		return errors.Wrap(ctx, err, "cleanup stale locks")
 	}
@@ -81,10 +84,10 @@ func (a *application) bootstrap(ctx context.Context) error {
 	if err := a.configureUserIfSet(ctx); err != nil {
 		return errors.Wrap(ctx, err, "configure user if set")
 	}
-	if err := recoverUntracked(ctx, a.Repo); err != nil {
+	if err := recoverUntracked(ctx, a.Repo, sshCommand); err != nil {
 		return errors.Wrap(ctx, err, "recover untracked")
 	}
-	if err := syncOnStartup(ctx, a.Repo); err != nil {
+	if err := syncOnStartup(ctx, a.Repo, sshCommand); err != nil {
 		return errors.Wrap(ctx, err, "sync on startup")
 	}
 	return nil
@@ -139,7 +142,7 @@ func cleanupStaleLocks(ctx context.Context, repoDir string) error {
 // No-op when:
 //   - .git/ does not exist (pre-init / pre-clone)
 //   - the working tree is clean (no untracked files)
-func recoverUntracked(ctx context.Context, repoDir string) error {
+func recoverUntracked(ctx context.Context, repoDir, sshCommand string) error {
 	gitDir := filepath.Join(repoDir, ".git")
 	if _, err := os.Stat(gitDir); os.IsNotExist(err) {
 		return nil
@@ -147,7 +150,7 @@ func recoverUntracked(ctx context.Context, repoDir string) error {
 		return errors.Wrapf(ctx, err, "stat %s", gitDir)
 	}
 
-	out, err := runGitCmd(ctx, repoDir, "status", "--short")
+	out, err := runGitCmd(ctx, repoDir, sshCommand, "status", "--short")
 	if err != nil {
 		slog.WarnContext(ctx, "git status failed during untracked recovery", "error", err)
 		return nil
@@ -157,11 +160,11 @@ func recoverUntracked(ctx context.Context, repoDir string) error {
 	}
 
 	slog.InfoContext(ctx, "recovering untracked files from prior crash")
-	if _, err := runGitCmd(ctx, repoDir, "add", "-A"); err != nil {
+	if _, err := runGitCmd(ctx, repoDir, sshCommand, "add", "-A"); err != nil {
 		slog.WarnContext(ctx, "git add -A failed during recovery", "error", err)
 		return nil
 	}
-	if _, err := runGitCmd(ctx, repoDir, "commit", "-m", "git-rest: recover untracked from prior crash"); err != nil {
+	if _, err := runGitCmd(ctx, repoDir, sshCommand, "commit", "-m", "git-rest: recover untracked from prior crash"); err != nil {
 		slog.WarnContext(ctx, "git commit failed during recovery", "error", err)
 		return nil
 	}
@@ -193,7 +196,7 @@ const syncOnStartupTimeout = 60 * time.Second
 //
 // Best-effort: only the catastrophic os.Stat(.git) error returns non-nil.
 // All git network errors are warn-logged and never abort startup.
-func syncOnStartup(parentCtx context.Context, repoDir string) error {
+func syncOnStartup(parentCtx context.Context, repoDir, sshCommand string) error {
 	gitDir := filepath.Join(repoDir, ".git")
 	if _, err := os.Stat(gitDir); os.IsNotExist(err) {
 		return nil
@@ -204,7 +207,7 @@ func syncOnStartup(parentCtx context.Context, repoDir string) error {
 	ctx, cancel := context.WithTimeout(parentCtx, syncOnStartupTimeout)
 	defer cancel()
 
-	out, err := runGitCmd(ctx, repoDir, "remote")
+	out, err := runGitCmd(ctx, repoDir, sshCommand, "remote")
 	if err != nil {
 		slog.WarnContext(ctx, "git remote check failed during startup sync", "error", err)
 		return nil
@@ -214,13 +217,13 @@ func syncOnStartup(parentCtx context.Context, repoDir string) error {
 		return nil
 	}
 
-	if _, err := runGitCmd(ctx, repoDir, "pull"); err != nil {
+	if _, err := runGitCmd(ctx, repoDir, sshCommand, "pull"); err != nil {
 		slog.WarnContext(ctx, "startup git pull failed (puller will retry)", "error", err)
 	} else {
 		slog.InfoContext(ctx, "startup git pull succeeded")
 	}
 
-	if _, err := runGitCmd(ctx, repoDir, "push"); err != nil {
+	if _, err := runGitCmd(ctx, repoDir, sshCommand, "push"); err != nil {
 		slog.WarnContext(ctx, "startup git push failed (next API write will retry)", "error", err)
 		return nil
 	}
@@ -228,15 +231,43 @@ func syncOnStartup(parentCtx context.Context, repoDir string) error {
 	return nil
 }
 
+// resolveGitSSHCommand returns the SSH command git should use for network
+// operations. Precedence:
+//
+//  1. Explicit override (gitSSHCommand non-empty)        — used as-is
+//  2. Derived from sshKeyPath (sshKeyPath non-empty)     — `ssh -i <key>
+//     -o UserKnownHostsFile=/dev/null
+//     -o StrictHostKeyChecking=no`
+//  3. Both empty (local-only deployment)                 — empty string;
+//     callers MUST NOT
+//     set GIT_SSH_COMMAND
+//     when this is empty
+//
+// The derived form matches the format used by pkg/git/git.go's runCmd so the
+// boot-time path and the periodic puller authenticate identically.
+func resolveGitSSHCommand(gitSSHCommand, sshKeyPath string) string {
+	if gitSSHCommand != "" {
+		return gitSSHCommand
+	}
+	if sshKeyPath != "" {
+		return "ssh -i " + sshKeyPath + " -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no"
+	}
+	return ""
+}
+
 // runGitCmd runs `git -C repoDir <args>` and returns combined output.
 // It exists so recoverUntracked stays self-contained in main.go, matching
 // the no-pkg/git-dependency pattern used by cleanupStaleLocks.
-func runGitCmd(ctx context.Context, repoDir string, args ...string) (string, error) {
+// When sshCommand is non-empty, GIT_SSH_COMMAND is set on the child process.
+func runGitCmd(ctx context.Context, repoDir, sshCommand string, args ...string) (string, error) {
 	full := append([]string{"-C", repoDir}, args...)
 	cmd := exec.CommandContext(
 		ctx,
 		"git",
 		full...) // #nosec G204 -- args caller-controlled, internal use
+	if sshCommand != "" {
+		cmd.Env = append(os.Environ(), "GIT_SSH_COMMAND="+sshCommand)
+	}
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return string(out), errors.Wrapf(ctx, err, "git %v: %s", args, string(out))
