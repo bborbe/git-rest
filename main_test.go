@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -210,6 +211,219 @@ var _ = Describe("RecoverUntracked", func() {
 			Expect(main.RecoverUntracked(ctx, repoDir)).To(Succeed())
 			Expect(isTracked("orphan.md")).To(BeTrue())
 			Expect(lastCommitMsg()).To(ContainSubstring("recover untracked from prior crash"))
+		})
+	})
+})
+
+var _ = Describe("SyncOnStartup", func() {
+	var (
+		ctx     context.Context
+		repoDir string
+	)
+
+	BeforeEach(func() {
+		ctx = context.Background()
+		repoDir = GinkgoT().TempDir()
+	})
+
+	initRepoWithLocalRemote := func() (string, string) {
+		remoteDir := filepath.Join(GinkgoT().TempDir(), "remote.git")
+		localDir := filepath.Join(GinkgoT().TempDir(), "repo")
+		run := func(dir string, args ...string) {
+			full := append([]string{"-C", dir}, args...)
+			cmd := exec.Command("git", full...)
+			out, err := cmd.CombinedOutput()
+			Expect(err).NotTo(HaveOccurred(), string(out))
+		}
+		Expect(os.MkdirAll(remoteDir, 0o755)).To(Succeed())
+		cmd := exec.Command("git", "init", "--bare", "--initial-branch=main", remoteDir)
+		Expect(cmd.Run()).To(Succeed())
+
+		cmd = exec.Command("git", "clone", remoteDir, localDir)
+		Expect(cmd.Run()).To(Succeed())
+		run(localDir, "config", "user.email", "test@example.com")
+		run(localDir, "config", "user.name", "Test")
+		run(localDir, "checkout", "-b", "main")
+		Expect(os.WriteFile(filepath.Join(localDir, ".gitkeep"), nil, 0o644)).To(Succeed())
+		run(localDir, "add", ".gitkeep")
+		run(localDir, "commit", "-m", "init")
+		run(localDir, "push", "-u", "origin", "main")
+		return remoteDir, localDir
+	}
+
+	remoteLogCount := func(remoteDir string) int {
+		cmd := exec.Command("git", "-C", remoteDir, "log", "--oneline")
+		out, err := cmd.Output()
+		Expect(err).NotTo(HaveOccurred())
+		lines := 0
+		for _, l := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+			if l != "" {
+				lines++
+			}
+		}
+		return lines
+	}
+
+	localLogCount := func(dir string) int {
+		cmd := exec.Command("git", "-C", dir, "log", "--oneline")
+		out, err := cmd.Output()
+		Expect(err).NotTo(HaveOccurred())
+		lines := 0
+		for _, l := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+			if l != "" {
+				lines++
+			}
+		}
+		return lines
+	}
+
+	Context("when .git/ does not exist", func() {
+		It("returns nil", func() {
+			Expect(main.SyncOnStartup(ctx, repoDir)).To(Succeed())
+		})
+	})
+
+	Context("when .git/ exists but no remote configured", func() {
+		BeforeEach(func() {
+			run := func(args ...string) {
+				full := append([]string{"-C", repoDir}, args...)
+				cmd := exec.Command("git", full...)
+				out, err := cmd.CombinedOutput()
+				Expect(err).NotTo(HaveOccurred(), string(out))
+			}
+			run("init")
+			run("config", "user.email", "test@example.com")
+			run("config", "user.name", "Test")
+			Expect(os.WriteFile(filepath.Join(repoDir, ".gitkeep"), nil, 0o644)).To(Succeed())
+			run("add", ".gitkeep")
+			run("commit", "-m", "init")
+		})
+		It("returns nil without error", func() {
+			Expect(main.SyncOnStartup(ctx, repoDir)).To(Succeed())
+		})
+	})
+
+	Context("when repo has remote and working tree is clean and synced", func() {
+		It("returns nil", func() {
+			_, localDir := initRepoWithLocalRemote()
+			Expect(main.SyncOnStartup(ctx, localDir)).To(Succeed())
+		})
+	})
+
+	Context("when repo has one local commit ahead of remote", func() {
+		It("pushes the commit and returns nil", func() {
+			remoteDir, localDir := initRepoWithLocalRemote()
+			before := remoteLogCount(remoteDir)
+
+			run := func(args ...string) {
+				full := append([]string{"-C", localDir}, args...)
+				cmd := exec.Command("git", full...)
+				out, err := cmd.CombinedOutput()
+				Expect(err).NotTo(HaveOccurred(), string(out))
+			}
+			Expect(
+				os.WriteFile(filepath.Join(localDir, "recovery.md"), []byte("data"), 0o644),
+			).To(Succeed())
+			run("add", "recovery.md")
+			run("commit", "-m", "git-rest: recover untracked from prior crash")
+
+			Expect(main.SyncOnStartup(ctx, localDir)).To(Succeed())
+			Expect(remoteLogCount(remoteDir)).To(Equal(before + 1))
+		})
+	})
+
+	Context("when remote has a new commit ahead of local", func() {
+		It("pulls the commit and returns nil", func() {
+			remoteDir, localDir := initRepoWithLocalRemote()
+
+			// Add a commit directly to the remote via a second clone
+			secondDir := filepath.Join(GinkgoT().TempDir(), "second")
+			cmd := exec.Command("git", "clone", remoteDir, secondDir)
+			Expect(cmd.Run()).To(Succeed())
+			run2 := func(args ...string) {
+				full := append([]string{"-C", secondDir}, args...)
+				c := exec.Command("git", full...)
+				out, err := c.CombinedOutput()
+				Expect(err).NotTo(HaveOccurred(), string(out))
+			}
+			run2("config", "user.email", "test@example.com")
+			run2("config", "user.name", "Test")
+			Expect(
+				os.WriteFile(filepath.Join(secondDir, "remote-file.md"), []byte("remote"), 0o644),
+			).To(Succeed())
+			run2("add", "remote-file.md")
+			run2("commit", "-m", "remote commit")
+			run2("push", "origin", "main")
+
+			before := localLogCount(localDir)
+			Expect(main.SyncOnStartup(ctx, localDir)).To(Succeed())
+			Expect(localLogCount(localDir)).To(Equal(before + 1))
+		})
+	})
+
+	Context("when both local and remote have new commits (disjoint files)", func() {
+		It("returns nil (pull warns, push is non-fast-forward, both warn-logged)", func() {
+			remoteDir, localDir := initRepoWithLocalRemote()
+
+			// Local commit
+			run := func(args ...string) {
+				full := append([]string{"-C", localDir}, args...)
+				cmd := exec.Command("git", full...)
+				out, err := cmd.CombinedOutput()
+				Expect(err).NotTo(HaveOccurred(), string(out))
+			}
+			Expect(
+				os.WriteFile(filepath.Join(localDir, "local-file.md"), []byte("local"), 0o644),
+			).To(Succeed())
+			run("add", "local-file.md")
+			run("commit", "-m", "local commit")
+
+			// Remote commit via second clone
+			secondDir := filepath.Join(GinkgoT().TempDir(), "second")
+			cmd := exec.Command("git", "clone", remoteDir, secondDir)
+			Expect(cmd.Run()).To(Succeed())
+			run2 := func(args ...string) {
+				full := append([]string{"-C", secondDir}, args...)
+				c := exec.Command("git", full...)
+				out, err := c.CombinedOutput()
+				Expect(err).NotTo(HaveOccurred(), string(out))
+			}
+			run2("config", "user.email", "test@example.com")
+			run2("config", "user.name", "Test")
+			Expect(
+				os.WriteFile(filepath.Join(secondDir, "remote-file.md"), []byte("remote"), 0o644),
+			).To(Succeed())
+			run2("add", "remote-file.md")
+			run2("commit", "-m", "remote commit")
+			run2("push", "origin", "main")
+
+			// Pull will fail (divergent branches, no strategy configured); push will also
+			// fail (non-fast-forward). Both must be warn-logged; function must return nil.
+			Expect(main.SyncOnStartup(ctx, localDir)).To(Succeed())
+		})
+	})
+
+	Context("when pull fails (broken remote)", func() {
+		It("still returns nil", func() {
+			_, localDir := initRepoWithLocalRemote()
+
+			// Create a local commit ahead of remote
+			run := func(args ...string) {
+				full := append([]string{"-C", localDir}, args...)
+				cmd := exec.Command("git", full...)
+				out, err := cmd.CombinedOutput()
+				Expect(err).NotTo(HaveOccurred(), string(out))
+			}
+			Expect(
+				os.WriteFile(filepath.Join(localDir, "recovery.md"), []byte("data"), 0o644),
+			).To(Succeed())
+			run("add", "recovery.md")
+			run("commit", "-m", "git-rest: recover untracked from prior crash")
+
+			// Break the remote URL
+			run("remote", "set-url", "origin", "/nonexistent/path")
+
+			Expect(main.SyncOnStartup(ctx, localDir)).To(Succeed())
 		})
 	})
 })

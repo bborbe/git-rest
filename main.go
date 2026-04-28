@@ -84,6 +84,9 @@ func (a *application) bootstrap(ctx context.Context) error {
 	if err := recoverUntracked(ctx, a.Repo); err != nil {
 		return errors.Wrap(ctx, err, "recover untracked")
 	}
+	if err := syncOnStartup(ctx, a.Repo); err != nil {
+		return errors.Wrap(ctx, err, "sync on startup")
+	}
 	return nil
 }
 
@@ -175,6 +178,54 @@ func hasUntracked(statusOutput string) bool {
 		}
 	}
 	return false
+}
+
+// syncOnStartupTimeout is the hard ceiling for the boot-time sync.
+const syncOnStartupTimeout = 60 * time.Second
+
+// syncOnStartup runs `git pull` and then `git push` once at startup, after
+// recoverUntracked. Brings the local working copy fully in sync with the
+// remote before the HTTP server starts serving.
+//
+// No-op when:
+//   - .git/ does not exist (pre-init)
+//   - no remote is configured (local-only mode)
+//
+// Best-effort: only the catastrophic os.Stat(.git) error returns non-nil.
+// All git network errors are warn-logged and never abort startup.
+func syncOnStartup(parentCtx context.Context, repoDir string) error {
+	gitDir := filepath.Join(repoDir, ".git")
+	if _, err := os.Stat(gitDir); os.IsNotExist(err) {
+		return nil
+	} else if err != nil {
+		return errors.Wrapf(parentCtx, err, "stat %s", gitDir)
+	}
+
+	ctx, cancel := context.WithTimeout(parentCtx, syncOnStartupTimeout)
+	defer cancel()
+
+	out, err := runGitCmd(ctx, repoDir, "remote")
+	if err != nil {
+		slog.WarnContext(ctx, "git remote check failed during startup sync", "error", err)
+		return nil
+	}
+	if strings.TrimSpace(out) == "" {
+		slog.InfoContext(ctx, "no remote configured, skipping startup sync")
+		return nil
+	}
+
+	if _, err := runGitCmd(ctx, repoDir, "pull"); err != nil {
+		slog.WarnContext(ctx, "startup git pull failed (puller will retry)", "error", err)
+	} else {
+		slog.InfoContext(ctx, "startup git pull succeeded")
+	}
+
+	if _, err := runGitCmd(ctx, repoDir, "push"); err != nil {
+		slog.WarnContext(ctx, "startup git push failed (next API write will retry)", "error", err)
+		return nil
+	}
+	slog.InfoContext(ctx, "startup git push succeeded")
+	return nil
 }
 
 // runGitCmd runs `git -C repoDir <args>` and returns combined output.

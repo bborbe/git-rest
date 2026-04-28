@@ -9,3 +9,6 @@ var CleanupStaleLocks = cleanupStaleLocks
 
 // RecoverUntracked is exported for testing via the main_test package.
 var RecoverUntracked = recoverUntracked
+
+// SyncOnStartup is exported for testing via the main_test package.
+var SyncOnStartup = syncOnStartup

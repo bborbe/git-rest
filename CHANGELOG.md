@@ -8,6 +8,10 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 * MINOR version when you add functionality in a backwards-compatible manner, and
 * PATCH version when you make backwards-compatible bug fixes.
 
+## v0.15.0
+
+- feat: Pull and push the configured remote at startup, after `recoverUntracked`. Closes the gap where recovery commits sat locally until the next API write (live incident 2026-04-28: `vault-obsidian-trading` recovered the orphan untracked file but readiness stayed 503 because the recovery commit was never pushed). No-op for local-only repos.
+
 ## v0.14.0
 
 - feat: Auto-commit untracked files in the working tree on startup. Recovers from crashes between `os.WriteFile` and `git add` (e.g. OOM mid-write) without manual intervention. Push is deferred to the existing puller / next API call.
