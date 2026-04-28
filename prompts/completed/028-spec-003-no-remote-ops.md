@@ -1,6 +1,6 @@
 ---
 status: completed
-spec: ["003"]
+spec: [003-local-repo-init]
 summary: Added hasRemote helper to git struct and updated WriteFile, DeleteFile, and Pull to skip push/pull operations when no remote is configured, with tests updated accordingly.
 container: git-rest-028-spec-003-no-remote-ops
 dark-factory-version: v0.108.0-dirty

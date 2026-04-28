@@ -1,6 +1,6 @@
 ---
 status: completed
-spec: ["002"]
+spec: [002-auto-clone-and-git-config]
 summary: Added auto-clone capability via --git-remote-url flag with RemoteURL type, Clone method on Git interface, and bootstrap logic in main.go that clones on startup when .git directory is absent
 container: git-rest-025-spec-002-auto-clone
 dark-factory-version: v0.108.0-dirty

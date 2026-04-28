@@ -1,6 +1,6 @@
 ---
 status: completed
-spec: ["002"]
+spec: [002-auto-clone-and-git-config]
 summary: Added ConfigureUser method to Git interface and implementation, GitUserName/GitUserEmail CLI flags, bootstrap integration via extracted helper methods, and tests for all ConfigureUser code paths.
 container: git-rest-026-spec-002-git-user-config
 dark-factory-version: v0.108.0-dirty
