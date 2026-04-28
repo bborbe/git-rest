@@ -1,11 +1,12 @@
 ---
-status: committing
+status: completed
 summary: 'Added recoverUntracked helper to main.go that detects untracked files at startup and commits them, wired it into bootstrap() after configureUserIfSet, exposed via export_test.go, added 5 Ginkgo test cases in main_test.go, and added CHANGELOG entry under ## Unreleased.'
 container: git-rest-030-recover-untracked-on-startup
 dark-factory-version: v0.135.19-1-gc08c946
 created: "2026-04-28T15:35:00Z"
 queued: "2026-04-28T15:40:58Z"
 started: "2026-04-28T15:48:45Z"
+completed: "2026-04-28T15:53:38Z"
 ---
 
 <summary>
