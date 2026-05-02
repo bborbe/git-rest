@@ -64,3 +64,10 @@ func CreateFilesDispatchHandler(getH, listH http.Handler) http.Handler {
 func CreateMetricsMiddleware(m metrics.Metrics, next http.Handler) http.Handler {
 	return handler.NewMetricsMiddleware(m, next)
 }
+
+// CreateGatewaySecretMiddleware returns a gorilla mux-compatible middleware that
+// validates X-Gateway-Secret and X-Gateway-Initator request headers.
+// Mount with: subrouter.Use(CreateGatewaySecretMiddleware(secret))
+func CreateGatewaySecretMiddleware(secret string) func(http.Handler) http.Handler {
+	return handler.NewGatewaySecretMiddleware(secret)
+}

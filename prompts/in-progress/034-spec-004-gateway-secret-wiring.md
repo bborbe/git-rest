@@ -1,7 +1,8 @@
 ---
-status: draft
+status: approved
 spec: [004-gateway-secret-auth]
 created: "2026-05-02T19:35:00Z"
+queued: "2026-05-02T19:47:24Z"
 branch: dark-factory/gateway-secret-auth
 ---
 
@@ -154,7 +155,10 @@ Add the following imports to `main_test.go` if not already present:
 - `"net/http/httptest"`
 - `"strings"`
 - `gorillamux "github.com/gorilla/mux"`
+- `"github.com/bborbe/git-rest/mocks"`
 - `"github.com/bborbe/git-rest/pkg/factory"`
+
+The integration test wraps the gorilla router with `factory.CreateMetricsMiddleware(fakeMetrics, router)` — exactly mirroring the production composition order in `createHTTPServer`. This is what verifies the spec AC "Existing HTTP metrics observe `401` and `500` auth-failure responses": after a request with bad auth headers, the `mocks.FakeMetrics` records the failure status as a label, proving auth wraps INSIDE the metrics middleware (i.e. metrics see auth's response code, not a synthetic `200`).
 
 Test block:
 
@@ -163,17 +167,20 @@ var _ = Describe("GatewaySecretRouting", func() {
     const secret = "routing-test-secret"
 
     var (
-        router *gorillamux.Router
-        rec    *httptest.ResponseRecorder
+        wrapped     http.Handler
+        fakeMetrics *mocks.FakeMetrics
+        rec         *httptest.ResponseRecorder
     )
 
     BeforeEach(func() {
         rec = httptest.NewRecorder()
+        fakeMetrics = &mocks.FakeMetrics{}
 
         // Mirror the topology of createHTTPServer:
         // - /api/v1 subrouter with auth middleware
         // - probe routes on root router (no auth)
-        router = gorillamux.NewRouter().SkipClean(true)
+        // - metrics middleware wraps EVERYTHING so it sees auth failures too
+        router := gorillamux.NewRouter().SkipClean(true)
 
         apiRouter := router.PathPrefix("/api/v1").Subrouter()
         apiRouter.Use(factory.CreateGatewaySecretMiddleware(secret))
@@ -193,14 +200,26 @@ var _ = Describe("GatewaySecretRouting", func() {
         router.HandleFunc("/readiness", func(w http.ResponseWriter, r *http.Request) {
             w.WriteHeader(http.StatusOK)
         })
+
+        wrapped = factory.CreateMetricsMiddleware(fakeMetrics, router)
     })
 
     Context("API routes — missing X-Gateway-Initator", func() {
         It("returns 500 with exact body", func() {
             req := httptest.NewRequest(http.MethodGet, "/api/v1/files/README.md", nil)
-            router.ServeHTTP(rec, req)
+            wrapped.ServeHTTP(rec, req)
             Expect(rec.Code).To(Equal(http.StatusInternalServerError))
             Expect(strings.TrimSpace(rec.Body.String())).To(Equal("header 'X-Gateway-Initator' missing"))
+        })
+
+        It("metrics middleware records the 500", func() {
+            req := httptest.NewRequest(http.MethodGet, "/api/v1/files/README.md", nil)
+            wrapped.ServeHTTP(rec, req)
+            Expect(fakeMetrics.IncHTTPRequestCallCount()).To(Equal(1))
+            method, path, status := fakeMetrics.IncHTTPRequestArgsForCall(0)
+            Expect(method).To(Equal(http.MethodGet))
+            Expect(path).To(Equal("/api/v1/files/{path}"))
+            Expect(status).To(Equal("500"))
         })
     })
 
@@ -209,9 +228,21 @@ var _ = Describe("GatewaySecretRouting", func() {
             req := httptest.NewRequest(http.MethodGet, "/api/v1/files/README.md", nil)
             req.Header.Set("X-Gateway-Initator", "integration-test")
             req.Header.Set("X-Gateway-Secret", "wrong-secret")
-            router.ServeHTTP(rec, req)
+            wrapped.ServeHTTP(rec, req)
             Expect(rec.Code).To(Equal(http.StatusUnauthorized))
             Expect(strings.TrimSpace(rec.Body.String())).To(Equal("secret in header 'X-Gateway-Secret' is invalid => access denied"))
+        })
+
+        It("metrics middleware records the 401", func() {
+            req := httptest.NewRequest(http.MethodGet, "/api/v1/files/README.md", nil)
+            req.Header.Set("X-Gateway-Initator", "integration-test")
+            req.Header.Set("X-Gateway-Secret", "wrong-secret")
+            wrapped.ServeHTTP(rec, req)
+            Expect(fakeMetrics.IncHTTPRequestCallCount()).To(Equal(1))
+            method, path, status := fakeMetrics.IncHTTPRequestArgsForCall(0)
+            Expect(method).To(Equal(http.MethodGet))
+            Expect(path).To(Equal("/api/v1/files/{path}"))
+            Expect(status).To(Equal("401"))
         })
     })
 
@@ -220,7 +251,7 @@ var _ = Describe("GatewaySecretRouting", func() {
             req := httptest.NewRequest(http.MethodGet, "/api/v1/files/README.md", nil)
             req.Header.Set("X-Gateway-Initator", "integration-test")
             req.Header.Set("X-Gateway-Secret", secret)
-            router.ServeHTTP(rec, req)
+            wrapped.ServeHTTP(rec, req)
             // Inner handler returns 200 only when X-Gateway-Secret is absent
             Expect(rec.Code).To(Equal(http.StatusOK))
         })
@@ -229,13 +260,13 @@ var _ = Describe("GatewaySecretRouting", func() {
     Context("probe routes — always unauthenticated", func() {
         It("/healthz returns 200 with no headers", func() {
             req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
-            router.ServeHTTP(rec, req)
+            wrapped.ServeHTTP(rec, req)
             Expect(rec.Code).To(Equal(http.StatusOK))
         })
 
         It("/readiness returns 200 with no headers", func() {
             req := httptest.NewRequest(http.MethodGet, "/readiness", nil)
-            router.ServeHTTP(rec, req)
+            wrapped.ServeHTTP(rec, req)
             Expect(rec.Code).To(Equal(http.StatusOK))
         })
     })
@@ -307,7 +338,7 @@ Spot-check the new integration tests specifically:
 ```bash
 cd /workspace && go test . -v -run "GatewaySecretRouting"
 ```
-Expected: all 5 It blocks pass.
+Expected: all 7 It blocks pass (missing-initiator + body, missing-initiator metrics, wrong-secret + body, wrong-secret metrics, correct-headers + strip, /healthz, /readiness).
 
 Verify the new flag appears in help output:
 ```bash

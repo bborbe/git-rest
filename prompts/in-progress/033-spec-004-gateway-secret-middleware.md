@@ -1,7 +1,12 @@
 ---
-status: draft
+status: committing
 spec: [004-gateway-secret-auth]
+summary: Implemented NewGatewaySecretMiddleware in pkg/handler/ and CreateGatewaySecretMiddleware in pkg/factory/, with 7 unit tests covering all error and success paths including header-strip verification.
+container: git-rest-033-spec-004-gateway-secret-middleware
+dark-factory-version: v0.143.0-5-g73d1db8
 created: "2026-05-02T19:35:00Z"
+queued: "2026-05-02T19:47:21Z"
+started: "2026-05-02T19:49:52Z"
 branch: dark-factory/gateway-secret-auth
 ---
 
@@ -51,6 +56,16 @@ import (
 	"net/http"
 )
 
+// HeaderGatewayInitator is the request-header name the auth middleware
+// expects to carry caller identity. The misspelling (missing the second
+// 'i' in "Initator") is deliberate — it matches the existing caller-side
+// convention and is part of the frozen public contract. Do not "fix" it.
+const HeaderGatewayInitator = "X-Gateway-Initator"
+
+// HeaderGatewaySecret is the request-header name the auth middleware
+// expects to carry the shared secret value.
+const HeaderGatewaySecret = "X-Gateway-Secret"
+
 // NewGatewaySecretMiddleware returns a gorilla mux-compatible middleware
 // (func(http.Handler) http.Handler) that enforces shared-secret header auth.
 //
@@ -65,26 +80,25 @@ import (
 //
 // X-Gateway-Secret is deleted from the request before the inner handler is
 // called so it cannot appear in downstream request logs or metrics labels.
-//
-// Note: header name X-Gateway-Initator is intentionally spelt without the
-// second 'i' — this matches the caller-side convention and must not be changed.
 func NewGatewaySecretMiddleware(secret string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.Header.Get("X-Gateway-Initator") == "" {
+			if r.Header.Get(HeaderGatewayInitator) == "" {
 				http.Error(w, "header 'X-Gateway-Initator' missing", http.StatusInternalServerError)
 				return
 			}
-			if r.Header.Get("X-Gateway-Secret") != secret {
+			if r.Header.Get(HeaderGatewaySecret) != secret {
 				http.Error(w, "secret in header 'X-Gateway-Secret' is invalid => access denied", http.StatusUnauthorized)
 				return
 			}
-			r.Header.Del("X-Gateway-Secret")
+			r.Header.Del(HeaderGatewaySecret)
 			next.ServeHTTP(w, r)
 		})
 	}
 }
 ```
+
+The two `const` declarations centralize the header names so the deliberate `Initator` misspelling is referenced in exactly one place per name. Body strings remain literal (the spec freezes them, and `http.Error` already controls them).
 
 Imports: `"net/http"` only.
 

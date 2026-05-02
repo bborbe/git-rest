@@ -8,6 +8,10 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 * MINOR version when you add functionality in a backwards-compatible manner, and
 * PATCH version when you make backwards-compatible bug fixes.
 
+## v0.17.0
+
+- feat: Add `NewGatewaySecretMiddleware` in `pkg/handler/` and `CreateGatewaySecretMiddleware` in `pkg/factory/` enforcing `X-Gateway-Initator` (500) and `X-Gateway-Secret` (401) header checks, stripping the secret before forwarding to the inner handler
+
 ## v0.16.0
 
 - fix: `runGitCmd` now sets `GIT_SSH_COMMAND` for git network ops at startup, fixing the v0.15.0 bug where `syncOnStartup`'s pull/push failed with "Host key verification failed" because the SSH wrapper used by the periodic puller was not applied to the bootstrap path.
