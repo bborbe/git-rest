@@ -1,5 +1,5 @@
 ---
-status: idea
+status: active
 ---
 
 # Scenario 009: Gateway-Secret unset — auth disabled, startup warning

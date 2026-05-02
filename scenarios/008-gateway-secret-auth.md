@@ -1,5 +1,5 @@
 ---
-status: idea
+status: active
 ---
 
 # Scenario 008: Gateway-Secret HTTP auth — wrong / missing / correct headers

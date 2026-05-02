@@ -6,6 +6,8 @@ package main_test
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,12 +15,15 @@ import (
 	"testing"
 	"time"
 
+	gorillamux "github.com/gorilla/mux"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"github.com/onsi/gomega/format"
 	"github.com/onsi/gomega/gexec"
 
 	main "github.com/bborbe/git-rest"
+	"github.com/bborbe/git-rest/mocks"
+	"github.com/bborbe/git-rest/pkg/factory"
 )
 
 //go:generate go run -mod=mod github.com/maxbrunsfeld/counterfeiter/v6 -generate
@@ -455,6 +460,119 @@ var _ = Describe("ResolveGitSSHCommand", func() {
 		It("returns gitSSHCommand verbatim (override wins)", func() {
 			result := main.ResolveGitSSHCommand("ssh -vvv -i /custom/key", "/ssh/id_ed25519")
 			Expect(result).To(Equal("ssh -vvv -i /custom/key"))
+		})
+	})
+})
+
+var _ = Describe("GatewaySecretRouting", func() {
+	const secret = "routing-test-secret"
+
+	var (
+		wrapped     http.Handler
+		fakeMetrics *mocks.FakeMetrics
+		rec         *httptest.ResponseRecorder
+	)
+
+	BeforeEach(func() {
+		rec = httptest.NewRecorder()
+		fakeMetrics = &mocks.FakeMetrics{}
+
+		// Mirror the topology of createHTTPServer:
+		// - /api/v1 subrouter with auth middleware
+		// - probe routes on root router (no auth)
+		// - metrics middleware wraps EVERYTHING so it sees auth failures too
+		router := gorillamux.NewRouter().SkipClean(true)
+
+		apiRouter := router.PathPrefix("/api/v1").Subrouter()
+		apiRouter.Use(factory.CreateGatewaySecretMiddleware(secret))
+
+		apiRouter.HandleFunc("/files/{path:.*}", func(w http.ResponseWriter, r *http.Request) {
+			// Echo whether X-Gateway-Secret reached the inner handler.
+			if r.Header.Get("X-Gateway-Secret") != "" {
+				w.WriteHeader(http.StatusInternalServerError) // test signal: secret leaked
+				return
+			}
+			w.WriteHeader(http.StatusOK)
+		})
+
+		router.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		})
+		router.HandleFunc("/readiness", func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		})
+
+		wrapped = factory.CreateMetricsMiddleware(fakeMetrics, router)
+	})
+
+	Context("API routes — missing X-Gateway-Initator", func() {
+		It("returns 500 with exact body", func() {
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/files/README.md", nil)
+			wrapped.ServeHTTP(rec, req)
+			Expect(rec.Code).To(Equal(http.StatusInternalServerError))
+			Expect(
+				strings.TrimSpace(rec.Body.String()),
+			).To(Equal("header 'X-Gateway-Initator' missing"))
+		})
+
+		It("metrics middleware records the 500", func() {
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/files/README.md", nil)
+			wrapped.ServeHTTP(rec, req)
+			Expect(fakeMetrics.IncHTTPRequestCallCount()).To(Equal(1))
+			method, path, status := fakeMetrics.IncHTTPRequestArgsForCall(0)
+			Expect(method).To(Equal(http.MethodGet))
+			Expect(path).To(Equal("/api/v1/files/{path}"))
+			Expect(status).To(Equal("500"))
+		})
+	})
+
+	Context("API routes — wrong X-Gateway-Secret", func() {
+		It("returns 401 with exact body", func() {
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/files/README.md", nil)
+			req.Header.Set("X-Gateway-Initator", "integration-test")
+			req.Header.Set("X-Gateway-Secret", "wrong-secret")
+			wrapped.ServeHTTP(rec, req)
+			Expect(rec.Code).To(Equal(http.StatusUnauthorized))
+			Expect(
+				strings.TrimSpace(rec.Body.String()),
+			).To(Equal("secret in header 'X-Gateway-Secret' is invalid => access denied"))
+		})
+
+		It("metrics middleware records the 401", func() {
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/files/README.md", nil)
+			req.Header.Set("X-Gateway-Initator", "integration-test")
+			req.Header.Set("X-Gateway-Secret", "wrong-secret")
+			wrapped.ServeHTTP(rec, req)
+			Expect(fakeMetrics.IncHTTPRequestCallCount()).To(Equal(1))
+			method, path, status := fakeMetrics.IncHTTPRequestArgsForCall(0)
+			Expect(method).To(Equal(http.MethodGet))
+			Expect(path).To(Equal("/api/v1/files/{path}"))
+			Expect(status).To(Equal("401"))
+		})
+	})
+
+	Context("API routes — correct headers", func() {
+		It("reaches the inner handler and strips X-Gateway-Secret", func() {
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/files/README.md", nil)
+			req.Header.Set("X-Gateway-Initator", "integration-test")
+			req.Header.Set("X-Gateway-Secret", secret)
+			wrapped.ServeHTTP(rec, req)
+			// Inner handler returns 200 only when X-Gateway-Secret is absent
+			Expect(rec.Code).To(Equal(http.StatusOK))
+		})
+	})
+
+	Context("probe routes — always unauthenticated", func() {
+		It("/healthz returns 200 with no headers", func() {
+			req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+			wrapped.ServeHTTP(rec, req)
+			Expect(rec.Code).To(Equal(http.StatusOK))
+		})
+
+		It("/readiness returns 200 with no headers", func() {
+			req := httptest.NewRequest(http.MethodGet, "/readiness", nil)
+			wrapped.ServeHTTP(rec, req)
+			Expect(rec.Code).To(Equal(http.StatusOK))
 		})
 	})
 })

@@ -49,6 +49,7 @@ type application struct {
 	GitRemoteURL    git.RemoteURL     `required:"false" arg:"git-remote-url"    env:"GIT_REMOTE_URL"    usage:"Git remote URL to clone from on startup"`
 	GitUserName     string            `required:"false" arg:"git-user-name"     env:"GIT_USER_NAME"     usage:"Git author name for commits"`
 	GitUserEmail    string            `required:"false" arg:"git-user-email"    env:"GIT_USER_EMAIL"    usage:"Git author email for commits"`
+	GatewaySecret   string            `required:"false" arg:"gateway-secret"    env:"GATEWAY_SECRET"    usage:"Shared secret required in X-Gateway-Secret header for /api/v1/* requests. Empty = no auth (backward compatible)."        display:"length"`
 }
 
 func (a *application) Run(ctx context.Context, sentryClient libsentry.Client) error {
@@ -56,6 +57,10 @@ func (a *application) Run(ctx context.Context, sentryClient libsentry.Client) er
 
 	if err := a.bootstrap(ctx); err != nil {
 		return errors.Wrap(ctx, err, "bootstrap failed")
+	}
+
+	if a.GatewaySecret == "" {
+		slog.WarnContext(ctx, "gateway-secret not set", "reason", "git-rest API is unauthenticated")
 	}
 
 	gitClient, err := a.createGitClient(ctx)
@@ -386,10 +391,19 @@ func (a *application) createHTTPServer(
 		readinessH := factory.CreateReadinessHandler(gitClient)
 
 		router := gorillamux.NewRouter().SkipClean(true)
-		router.Handle("/api/v1/files/{path:.*}", factory.CreateFilesDispatchHandler(getH, listH)).
+
+		// API subrouter — optionally wrapped with gateway secret auth.
+		// Probes are NOT registered here so they are never wrapped by auth.
+		apiRouter := router.PathPrefix("/api/v1").Subrouter()
+		if a.GatewaySecret != "" {
+			apiRouter.Use(factory.CreateGatewaySecretMiddleware(a.GatewaySecret))
+		}
+		apiRouter.Handle("/files/{path:.*}", factory.CreateFilesDispatchHandler(getH, listH)).
 			Methods(http.MethodGet)
-		router.Handle("/api/v1/files/{path:.*}", postH).Methods(http.MethodPost)
-		router.Handle("/api/v1/files/{path:.*}", deleteH).Methods(http.MethodDelete)
+		apiRouter.Handle("/files/{path:.*}", postH).Methods(http.MethodPost)
+		apiRouter.Handle("/files/{path:.*}", deleteH).Methods(http.MethodDelete)
+
+		// Probe routes — always unauthenticated (kubelet + Prometheus have no secret).
 		router.Handle("/healthz", healthzH)
 		router.Handle("/readiness", readinessH)
 		router.Handle("/metrics", promhttp.Handler())

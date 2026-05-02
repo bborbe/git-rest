@@ -8,6 +8,10 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 * MINOR version when you add functionality in a backwards-compatible manner, and
 * PATCH version when you make backwards-compatible bug fixes.
 
+## v0.18.0
+
+- feat: Optional shared-secret HTTP auth on `/api/v1/*` via `--gateway-secret` / `GATEWAY_SECRET`. Missing or wrong `X-Gateway-Secret` → 401; missing `X-Gateway-Initator` → 500. Probes (`/healthz`, `/readiness`, `/metrics`) remain unauthenticated. Empty secret (default) disables auth and logs a startup warning — no behavior change for existing deployments.
+
 ## v0.17.0
 
 - feat: Add `NewGatewaySecretMiddleware` in `pkg/handler/` and `CreateGatewaySecretMiddleware` in `pkg/factory/` enforcing `X-Gateway-Initator` (500) and `X-Gateway-Secret` (401) header checks, stripping the secret before forwarding to the inner handler
