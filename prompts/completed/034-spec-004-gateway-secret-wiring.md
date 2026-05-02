@@ -1,5 +1,5 @@
 ---
-status: committing
+status: completed
 spec: [004-gateway-secret-auth]
 summary: Wired GatewaySecret into createHTTPServer via gorilla mux subrouter, added startup warning, integration tests, activated scenarios 008/009, updated CHANGELOG
 container: git-rest-034-spec-004-gateway-secret-wiring
@@ -7,6 +7,7 @@ dark-factory-version: v0.143.0-5-g73d1db8
 created: "2026-05-02T19:35:00Z"
 queued: "2026-05-02T19:47:24Z"
 started: "2026-05-02T19:53:58Z"
+completed: "2026-05-02T19:58:48Z"
 branch: dark-factory/gateway-secret-auth
 ---
 
