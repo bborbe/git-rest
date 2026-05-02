@@ -1,5 +1,5 @@
 ---
-status: draft
+status: active
 ---
 
 # Scenario 001: File CRUD — create, read, update, delete

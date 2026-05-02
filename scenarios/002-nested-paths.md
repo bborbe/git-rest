@@ -1,5 +1,5 @@
 ---
-status: draft
+status: active
 ---
 
 # Scenario 002: Nested paths — create and read files in subdirectories

@@ -1,10 +1,10 @@
 ---
-status: draft
+status: active
 ---
 
 # Scenario 007: Path traversal and security boundaries
 
-Validates that git-rest rejects path traversal attempts, absolute paths, and .git directory access with 400 Bad Request.
+Validates that git-rest rejects path traversal attempts, absolute paths, and .git directory access. Encoded traversal and absolute paths reach the file handler and return `400` (handler-level rejection). Unencoded `../` paths are normalised by Go's `net/http` BEFORE routing, so they resolve outside the `/api/v1/files/` prefix and return `404` (no route match) — both 400 and 404 mean "request rejected, no file access," and either is acceptable for unencoded traversal cases.
 
 ## Setup
 
@@ -32,21 +32,21 @@ sleep 3
 
 ## Action
 
-### Path traversal via ../
+### Path traversal via ../  (unencoded — Go normalises before routing → 400 or 404)
 
-- [ ] `curl -s -o /dev/null -w '%{http_code}' $BASE/api/v1/files/../../../etc/passwd` returns `400`
-- [ ] `curl -s -o /dev/null -w '%{http_code}' -X POST $BASE/api/v1/files/../../../tmp/evil.md -d 'pwned'` returns `400`
-- [ ] `curl -s -o /dev/null -w '%{http_code}' -X DELETE $BASE/api/v1/files/../../../etc/passwd` returns `400`
+- [ ] `curl -s -o /dev/null -w '%{http_code}' $BASE/api/v1/files/../../../etc/passwd` returns `400` or `404`
+- [ ] `curl -s -o /dev/null -w '%{http_code}' -X POST $BASE/api/v1/files/../../../tmp/evil.md -d 'pwned'` returns `400` or `404`
+- [ ] `curl -s -o /dev/null -w '%{http_code}' -X DELETE $BASE/api/v1/files/../../../etc/passwd` returns `400` or `404`
 
 ### Path traversal via encoded ../
 
 - [ ] `curl -s -o /dev/null -w '%{http_code}' $BASE/api/v1/files/..%2F..%2F..%2Fetc%2Fpasswd` returns `400`
 - [ ] `curl -s -o /dev/null -w '%{http_code}' -X POST $BASE/api/v1/files/docs%2F..%2F..%2Fevil.md -d 'pwned'` returns `400`
 
-### Path traversal mid-path
+### Path traversal mid-path  (unencoded — Go normalises before routing → 400 or 404)
 
-- [ ] `curl -s -o /dev/null -w '%{http_code}' $BASE/api/v1/files/docs/../../../etc/passwd` returns `400`
-- [ ] `curl -s -o /dev/null -w '%{http_code}' -X POST $BASE/api/v1/files/a/b/../../../../../../tmp/evil.md -d 'pwned'` returns `400`
+- [ ] `curl -s -o /dev/null -w '%{http_code}' $BASE/api/v1/files/docs/../../../etc/passwd` returns `400` or `404`
+- [ ] `curl -s -o /dev/null -w '%{http_code}' -X POST $BASE/api/v1/files/a/b/../../../../../../tmp/evil.md -d 'pwned'` returns `400` or `404`
 
 ### .git directory access
 

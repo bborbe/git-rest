@@ -1,5 +1,5 @@
 ---
-status: draft
+status: active
 ---
 
 # Scenario 004: Concurrent writes — no data loss under parallel requests

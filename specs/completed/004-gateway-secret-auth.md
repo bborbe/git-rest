@@ -1,8 +1,10 @@
 ---
-status: prompted
+status: completed
 approved: "2026-05-02T19:34:03Z"
 generating: "2026-05-02T19:34:07Z"
 prompted: "2026-05-02T19:40:40Z"
+verifying: "2026-05-02T19:58:48Z"
+completed: "2026-05-02T20:40:02Z"
 branch: dark-factory/gateway-secret-auth
 ---
 

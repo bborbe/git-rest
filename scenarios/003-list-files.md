@@ -1,5 +1,5 @@
 ---
-status: draft
+status: active
 ---
 
 # Scenario 003: List files — glob pattern matching
