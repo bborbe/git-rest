@@ -1,5 +1,5 @@
 ---
-status: committing
+status: completed
 spec: [004-gateway-secret-auth]
 summary: Implemented NewGatewaySecretMiddleware in pkg/handler/ and CreateGatewaySecretMiddleware in pkg/factory/, with 7 unit tests covering all error and success paths including header-strip verification.
 container: git-rest-033-spec-004-gateway-secret-middleware
@@ -7,6 +7,7 @@ dark-factory-version: v0.143.0-5-g73d1db8
 created: "2026-05-02T19:35:00Z"
 queued: "2026-05-02T19:47:21Z"
 started: "2026-05-02T19:49:52Z"
+completed: "2026-05-02T19:53:56Z"
 branch: dark-factory/gateway-secret-auth
 ---
 
