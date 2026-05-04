@@ -1,5 +1,5 @@
 ---
-status: committing
+status: completed
 spec: [005-bug-readiness-blocks-on-pull-mutex]
 summary: Introduced PullStateCache in pkg/puller/pull_state.go, updated puller.New to 4-arg signature with pullTimeout and PullStateWriter, added --pull-timeout flag to main.go, created PullStateCache in Run() with 3×PullInterval threshold, generated FakePullStateWriter mock, and added comprehensive Ginkgo tests for both PullStateCache and the updated puller.
 container: git-rest-035-spec-005-pull-state
@@ -7,6 +7,7 @@ dark-factory-version: v0.147.2-1-g30ba42f
 created: "2026-05-04T09:15:00Z"
 queued: "2026-05-04T13:48:59Z"
 started: "2026-05-04T13:49:25Z"
+completed: "2026-05-04T13:55:25Z"
 branch: dark-factory/bug-readiness-blocks-on-pull-mutex
 ---
 
