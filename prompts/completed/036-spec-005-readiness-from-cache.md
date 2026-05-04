@@ -1,5 +1,5 @@
 ---
-status: committing
+status: completed
 spec: [005-bug-readiness-blocks-on-pull-mutex]
 summary: Replaced git.Git dependency in readiness handler with ReadinessStateReader interface backed by PullStateCache, eliminating pull mutex contention from Kubernetes readiness probes.
 container: git-rest-036-spec-005-readiness-from-cache
@@ -7,6 +7,7 @@ dark-factory-version: v0.147.2-1-g30ba42f
 created: "2026-05-04T09:15:00Z"
 queued: "2026-05-04T13:48:59Z"
 started: "2026-05-04T13:55:27Z"
+completed: "2026-05-04T14:00:37Z"
 branch: dark-factory/bug-readiness-blocks-on-pull-mutex
 ---
 
