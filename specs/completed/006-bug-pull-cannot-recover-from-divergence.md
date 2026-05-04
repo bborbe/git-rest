@@ -1,5 +1,5 @@
 ---
-status: prompted
+status: completed
 tags:
     - dark-factory
     - spec
@@ -7,6 +7,8 @@ tags:
 approved: "2026-05-04T19:55:21Z"
 generating: "2026-05-04T19:55:22Z"
 prompted: "2026-05-04T20:05:39Z"
+verifying: "2026-05-04T20:23:48Z"
+completed: "2026-05-04T20:42:44Z"
 branch: dark-factory/bug-pull-cannot-recover-from-divergence
 ---
 

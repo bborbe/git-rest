@@ -1,5 +1,5 @@
 pr: false
-worktree: false
+workflow: direct
 testCommand: "make test"
 validationPrompt: docs/dod.md
 autoRelease: true
