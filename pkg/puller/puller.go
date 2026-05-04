@@ -22,16 +22,27 @@ type Puller interface {
 }
 
 // New returns a Puller that calls g.Pull on the given interval.
-func New(g git.Git, interval libtime.Duration) Puller {
+// pullTimeout bounds each individual pull subprocess; 0 means no timeout.
+// state receives the outcome of every pull attempt.
+func New(
+	g git.Git,
+	interval libtime.Duration,
+	pullTimeout time.Duration,
+	state PullStateWriter,
+) Puller {
 	return &puller{
-		git:      g,
-		interval: interval,
+		git:         g,
+		interval:    interval,
+		pullTimeout: pullTimeout,
+		state:       state,
 	}
 }
 
 type puller struct {
-	git      git.Git
-	interval libtime.Duration
+	git         git.Git
+	interval    libtime.Duration
+	pullTimeout time.Duration
+	state       PullStateWriter
 }
 
 // Run starts the periodic pull loop. It returns when ctx is cancelled.
@@ -43,9 +54,23 @@ func (p *puller) Run(ctx context.Context) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-ticker.C:
-			if err := p.git.Pull(ctx); err != nil {
-				slog.WarnContext(ctx, "git pull failed", "error", err)
-			}
+			p.runOnce(ctx)
 		}
+	}
+}
+
+// runOnce executes one pull attempt, bounded by pullTimeout, and records the outcome.
+func (p *puller) runOnce(ctx context.Context) {
+	pullCtx := ctx
+	var cancel context.CancelFunc
+	if p.pullTimeout > 0 {
+		pullCtx, cancel = context.WithTimeout(ctx, p.pullTimeout)
+		defer cancel()
+	}
+
+	err := p.git.Pull(pullCtx)
+	p.state.RecordPull(err)
+	if err != nil {
+		slog.WarnContext(ctx, "git pull failed", "error", err)
 	}
 }

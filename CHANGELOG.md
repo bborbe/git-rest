@@ -2,6 +2,10 @@
 
 All notable changes to this project will be documented in this file.
 
+## v0.19.0
+
+- feat: Introduce `PullStateCache` in `pkg/puller/pull_state.go` recording every pull outcome (success timestamp + last error) with a configurable freshness threshold; add `--pull-timeout` / `PULL_TIMEOUT` flag (default 60s) bounding each per-pull subprocess so a stalled SSH connection cannot hold the git mutex indefinitely
+
 Please choose versions by [Semantic Versioning](http://semver.org/).
 
 * MAJOR version when you make incompatible API changes,

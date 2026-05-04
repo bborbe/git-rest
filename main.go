@@ -41,6 +41,7 @@ type application struct {
 	Listen          string            `required:"true"  arg:"listen"            env:"LISTEN"            usage:"HTTP listen address"                                                                                                                      default:":8080"`
 	Repo            string            `required:"true"  arg:"repo"              env:"REPO"              usage:"path to git repository on disk"`
 	PullInterval    libtime.Duration  `required:"false" arg:"pull-interval"     env:"PULL_INTERVAL"     usage:"git pull interval"                                                                                                                        default:"30s"`
+	PullTimeout     libtime.Duration  `required:"false" arg:"pull-timeout"      env:"PULL_TIMEOUT"      usage:"per-pull timeout; subprocess is aborted if it exceeds this duration (0 = no timeout)"                                                     default:"60s"`
 	BuildGitVersion string            `required:"false" arg:"build-git-version" env:"BUILD_GIT_VERSION" usage:"Build Git version"                                                                                                                        default:"dev"`
 	BuildGitCommit  string            `required:"false" arg:"build-git-commit"  env:"BUILD_GIT_COMMIT"  usage:"Build Git commit hash"                                                                                                                    default:"none"`
 	BuildDate       *libtime.DateTime `required:"false" arg:"build-date"        env:"BUILD_DATE"        usage:"Build timestamp (RFC3339)"`
@@ -68,8 +69,13 @@ func (a *application) Run(ctx context.Context, sentryClient libsentry.Client) er
 		return errors.Wrap(ctx, err, "create git client failed")
 	}
 
+	pullState := puller.NewPullStateCache(
+		libtime.NewCurrentDateTime(),
+		3*time.Duration(a.PullInterval),
+	)
+
 	return service.Run(ctx,
-		a.createGitRefresher(gitClient),
+		a.createGitRefresher(gitClient, pullState),
 		a.createHTTPServer(gitClient, metrics.NewMetrics()),
 	)
 }
@@ -372,9 +378,9 @@ func (a *application) createGitClient(ctx context.Context) (git.Git, error) {
 	), nil
 }
 
-func (a *application) createGitRefresher(gitClient git.Git) run.Func {
+func (a *application) createGitRefresher(gitClient git.Git, state puller.PullStateWriter) run.Func {
 	return func(ctx context.Context) error {
-		return puller.New(gitClient, a.PullInterval).Run(ctx)
+		return puller.New(gitClient, a.PullInterval, time.Duration(a.PullTimeout), state).Run(ctx)
 	}
 }
 
