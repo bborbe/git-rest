@@ -2,6 +2,10 @@
 
 All notable changes to this project will be documented in this file.
 
+## v0.19.1
+
+- fix: Decouple `/readiness` from the pull mutex. Readiness now reads a `PullStateCache` written by the background puller — the handler never invokes a git subprocess. Before the first successful pull the probe returns 503 `no successful pull yet`; after a stale cache it returns 503 with the last pull error. Body never contains `context canceled`. Fixes false-NotReady during SSH timeouts (prod incident 2026-05-03, `vault-obsidian-openclaw-0`).
+
 ## v0.19.0
 
 - feat: Introduce `PullStateCache` in `pkg/puller/pull_state.go` recording every pull outcome (success timestamp + last error) with a configurable freshness threshold; add `--pull-timeout` / `PULL_TIMEOUT` flag (default 60s) bounding each per-pull subprocess so a stalled SSH connection cannot hold the git mutex indefinitely

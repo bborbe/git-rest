@@ -6,7 +6,6 @@ package handler_test
 
 import (
 	"context"
-	"errors"
 	"net/http"
 	"net/http/httptest"
 
@@ -15,82 +14,93 @@ import (
 	. "github.com/onsi/gomega"
 
 	"github.com/bborbe/git-rest/mocks"
-	"github.com/bborbe/git-rest/pkg/git"
 	"github.com/bborbe/git-rest/pkg/handler"
 )
 
 var _ = Describe("ReadinessHandler", func() {
 	var (
-		fakeGit *mocks.FakeGit
-		h       libhttp.WithError
-		rec     *httptest.ResponseRecorder
-		ctx     context.Context
+		fakeState *mocks.FakeReadinessStateReader
+		h         libhttp.WithError
+		rec       *httptest.ResponseRecorder
+		ctx       context.Context
 	)
 
 	BeforeEach(func() {
-		fakeGit = new(mocks.FakeGit)
-		h = handler.NewReadinessHandler(fakeGit)
+		fakeState = &mocks.FakeReadinessStateReader{}
+		h = handler.NewReadinessHandler(fakeState)
 		rec = httptest.NewRecorder()
 		ctx = context.Background()
 	})
 
-	Context("clean and no push pending", func() {
+	Context("when ReadinessStatus returns ready", func() {
 		BeforeEach(func() {
-			fakeGit.StatusReturns(git.Status{Clean: true, NoPushPending: true}, nil)
+			fakeState.ReadinessStatusReturns(true, "ok")
 		})
 
-		It("returns 200 ok", func() {
+		It("returns 200", func() {
 			req := httptest.NewRequest(http.MethodGet, "/readiness", nil)
 			err := h.ServeHTTP(ctx, rec, req)
 			Expect(err).To(BeNil())
 			Expect(rec.Code).To(Equal(http.StatusOK))
+		})
+
+		It("returns body 'ok'", func() {
+			req := httptest.NewRequest(http.MethodGet, "/readiness", nil)
+			_ = h.ServeHTTP(ctx, rec, req)
 			Expect(rec.Body.String()).To(Equal("ok"))
 		})
 	})
 
-	Context("not clean", func() {
+	Context("when ReadinessStatus returns not ready: no successful pull yet", func() {
 		BeforeEach(func() {
-			fakeGit.StatusReturns(git.Status{Clean: false, NoPushPending: true}, nil)
+			fakeState.ReadinessStatusReturns(false, "no successful pull yet")
 		})
 
-		It("returns 503 error", func() {
+		It("returns 503", func() {
 			req := httptest.NewRequest(http.MethodGet, "/readiness", nil)
 			err := h.ServeHTTP(ctx, rec, req)
-			Expect(err).NotTo(BeNil())
-			var errWithStatus libhttp.ErrorWithStatusCode
-			Expect(errors.As(err, &errWithStatus)).To(BeTrue())
-			Expect(errWithStatus.StatusCode()).To(Equal(http.StatusServiceUnavailable))
-			Expect(err.Error()).To(ContainSubstring("not ready"))
+			Expect(err).To(BeNil())
+			Expect(rec.Code).To(Equal(http.StatusServiceUnavailable))
+		})
+
+		It("body contains 'no successful pull yet'", func() {
+			req := httptest.NewRequest(http.MethodGet, "/readiness", nil)
+			_ = h.ServeHTTP(ctx, rec, req)
+			Expect(rec.Body.String()).To(ContainSubstring("no successful pull yet"))
+		})
+
+		It("body does not contain 'context canceled'", func() {
+			req := httptest.NewRequest(http.MethodGet, "/readiness", nil)
+			_ = h.ServeHTTP(ctx, rec, req)
+			Expect(rec.Body.String()).NotTo(ContainSubstring("context canceled"))
 		})
 	})
 
-	Context("push pending", func() {
+	Context("when ReadinessStatus returns not ready: stale cache", func() {
 		BeforeEach(func() {
-			fakeGit.StatusReturns(git.Status{Clean: true, NoPushPending: false}, nil)
+			fakeState.ReadinessStatusReturns(
+				false,
+				"last successful pull stale (2m30s ago): last pull failed: ssh timeout",
+			)
 		})
 
-		It("returns 503 error", func() {
+		It("returns 503", func() {
 			req := httptest.NewRequest(http.MethodGet, "/readiness", nil)
 			err := h.ServeHTTP(ctx, rec, req)
-			Expect(err).NotTo(BeNil())
-			var errWithStatus libhttp.ErrorWithStatusCode
-			Expect(errors.As(err, &errWithStatus)).To(BeTrue())
-			Expect(errWithStatus.StatusCode()).To(Equal(http.StatusServiceUnavailable))
-		})
-	})
-
-	Context("status error", func() {
-		BeforeEach(func() {
-			fakeGit.StatusReturns(git.Status{}, errWithMessage("git status failed"))
+			Expect(err).To(BeNil())
+			Expect(rec.Code).To(Equal(http.StatusServiceUnavailable))
 		})
 
-		It("returns 503 error", func() {
+		It("body contains the stale reason", func() {
 			req := httptest.NewRequest(http.MethodGet, "/readiness", nil)
-			err := h.ServeHTTP(ctx, rec, req)
-			Expect(err).NotTo(BeNil())
-			var errWithStatus libhttp.ErrorWithStatusCode
-			Expect(errors.As(err, &errWithStatus)).To(BeTrue())
-			Expect(errWithStatus.StatusCode()).To(Equal(http.StatusServiceUnavailable))
+			_ = h.ServeHTTP(ctx, rec, req)
+			Expect(rec.Body.String()).To(ContainSubstring("last successful pull stale"))
+		})
+
+		It("body does not contain 'context canceled'", func() {
+			req := httptest.NewRequest(http.MethodGet, "/readiness", nil)
+			_ = h.ServeHTTP(ctx, rec, req)
+			Expect(rec.Body.String()).NotTo(ContainSubstring("context canceled"))
 		})
 	})
 })

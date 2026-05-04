@@ -76,7 +76,7 @@ func (a *application) Run(ctx context.Context, sentryClient libsentry.Client) er
 
 	return service.Run(ctx,
 		a.createGitRefresher(gitClient, pullState),
-		a.createHTTPServer(gitClient, metrics.NewMetrics()),
+		a.createHTTPServer(gitClient, metrics.NewMetrics(), pullState),
 	)
 }
 
@@ -387,6 +387,7 @@ func (a *application) createGitRefresher(gitClient git.Git, state puller.PullSta
 func (a *application) createHTTPServer(
 	gitClient git.Git,
 	m metrics.Metrics,
+	pullState *puller.PullStateCache,
 ) run.Func {
 	return func(ctx context.Context) error {
 		getH := factory.CreateFilesGetHandler(gitClient)
@@ -394,7 +395,7 @@ func (a *application) createHTTPServer(
 		deleteH := factory.CreateFilesDeleteHandler(gitClient)
 		listH := factory.CreateFilesListHandler(gitClient)
 		healthzH := factory.CreateHealthzHandler()
-		readinessH := factory.CreateReadinessHandler(gitClient)
+		readinessH := factory.CreateReadinessHandler(pullState)
 
 		router := gorillamux.NewRouter().SkipClean(true)
 

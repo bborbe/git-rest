@@ -8,28 +8,27 @@ import (
 	"context"
 	"net/http"
 
-	"github.com/bborbe/errors"
 	libhttp "github.com/bborbe/http"
-
-	"github.com/bborbe/git-rest/pkg/git"
 )
 
-// NewReadinessHandler returns a WithError handler that reports readiness based on git status.
-func NewReadinessHandler(g git.Git) libhttp.WithError {
+//counterfeiter:generate -o ../../mocks/readiness_state_reader.go --fake-name FakeReadinessStateReader . ReadinessStateReader
+
+// ReadinessStateReader is the interface the readiness handler reads from.
+// Implemented by *puller.PullStateCache.
+type ReadinessStateReader interface {
+	ReadinessStatus() (bool, string)
+}
+
+// NewReadinessHandler returns a handler that reports readiness based on cached pull state.
+// It never invokes a git subprocess and never blocks on the pull mutex.
+func NewReadinessHandler(s ReadinessStateReader) libhttp.WithError {
 	return libhttp.WithErrorFunc(
 		func(ctx context.Context, resp http.ResponseWriter, req *http.Request) error {
-			status, err := g.Status(ctx)
-			if err != nil {
-				return libhttp.WrapWithStatusCode(
-					errors.Wrap(ctx, err, "git status"),
-					http.StatusServiceUnavailable,
-				)
-			}
-			if !status.Clean || !status.NoPushPending {
-				return libhttp.WrapWithStatusCode(
-					errors.New(ctx, "not ready"),
-					http.StatusServiceUnavailable,
-				)
+			ready, reason := s.ReadinessStatus()
+			if !ready {
+				resp.WriteHeader(http.StatusServiceUnavailable)
+				_, _ = resp.Write([]byte(reason))
+				return nil
 			}
 			_, _ = resp.Write([]byte("ok"))
 			return nil

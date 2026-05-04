@@ -51,8 +51,8 @@ func CreateHealthzHandler() http.Handler {
 }
 
 // CreateReadinessHandler returns an http.Handler for GET /readiness.
-func CreateReadinessHandler(g git.Git) http.Handler {
-	return libhttp.NewJSONErrorHandler(handler.NewReadinessHandler(g))
+func CreateReadinessHandler(s handler.ReadinessStateReader) http.Handler {
+	return libhttp.NewJSONErrorHandler(handler.NewReadinessHandler(s))
 }
 
 // CreateFilesDispatchHandler returns a handler that routes between get and list.
