@@ -1,5 +1,5 @@
 ---
-status: committing
+status: completed
 spec: [006-bug-pull-cannot-recover-from-divergence]
 summary: Updated PullStateCache to return 503 immediately on *git.RebaseConflictError with sticky lastConflict field, added 9 conflict-immediate tests in pkg/puller/pull_state_test.go, and added Unreleased CHANGELOG entry.
 container: git-rest-038-spec-006-readiness-conflict-path
@@ -7,6 +7,7 @@ dark-factory-version: v0.147.2-1-g30ba42f
 created: "2026-05-04T20:00:00Z"
 queued: "2026-05-04T20:12:59Z"
 started: "2026-05-04T20:19:42Z"
+completed: "2026-05-04T20:23:48Z"
 branch: dark-factory/bug-pull-cannot-recover-from-divergence
 ---
 
