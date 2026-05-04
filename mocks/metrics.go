@@ -20,6 +20,10 @@ type FakeMetrics struct {
 		arg2 string
 		arg3 string
 	}
+	IncRebaseConflictStub        func()
+	incRebaseConflictMutex       sync.RWMutex
+	incRebaseConflictArgsForCall []struct {
+	}
 	ObserveGitOperationStub        func(string, float64)
 	observeGitOperationMutex       sync.RWMutex
 	observeGitOperationArgsForCall []struct {
@@ -94,6 +98,30 @@ func (fake *FakeMetrics) IncHTTPRequestArgsForCall(i int) (string, string, strin
 	defer fake.incHTTPRequestMutex.RUnlock()
 	argsForCall := fake.incHTTPRequestArgsForCall[i]
 	return argsForCall.arg1, argsForCall.arg2, argsForCall.arg3
+}
+
+func (fake *FakeMetrics) IncRebaseConflict() {
+	fake.incRebaseConflictMutex.Lock()
+	fake.incRebaseConflictArgsForCall = append(fake.incRebaseConflictArgsForCall, struct {
+	}{})
+	stub := fake.IncRebaseConflictStub
+	fake.recordInvocation("IncRebaseConflict", []interface{}{})
+	fake.incRebaseConflictMutex.Unlock()
+	if stub != nil {
+		fake.IncRebaseConflictStub()
+	}
+}
+
+func (fake *FakeMetrics) IncRebaseConflictCallCount() int {
+	fake.incRebaseConflictMutex.RLock()
+	defer fake.incRebaseConflictMutex.RUnlock()
+	return len(fake.incRebaseConflictArgsForCall)
+}
+
+func (fake *FakeMetrics) IncRebaseConflictCalls(stub func()) {
+	fake.incRebaseConflictMutex.Lock()
+	defer fake.incRebaseConflictMutex.Unlock()
+	fake.IncRebaseConflictStub = stub
 }
 
 func (fake *FakeMetrics) ObserveGitOperation(arg1 string, arg2 float64) {

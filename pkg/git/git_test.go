@@ -16,6 +16,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
+	"github.com/bborbe/git-rest/mocks"
 	"github.com/bborbe/git-rest/pkg/git"
 )
 
@@ -37,6 +38,8 @@ func (n *noopMetrics) ObserveGitOperation(_ string, _ float64) {}
 func (n *noopMetrics) IncGitOperationError(_ string) {}
 
 func (n *noopMetrics) IncHTTPRequest(_, _, _ string) {}
+
+func (n *noopMetrics) IncRebaseConflict() {}
 
 // initRepo creates a temporary git repo with a local bare remote so that push works.
 func initRepo() (workDir string, cleanup func()) {
@@ -507,6 +510,209 @@ var _ = Describe("Git Init", func() {
 		)
 		err := g.Init(ctx)
 		Expect(err).To(HaveOccurred())
+	})
+})
+
+// setupPullFixture creates a working repo backed by a local bare remote.
+// Returns workDir, a function to simulate external pushes, and a cleanup func.
+func setupPullFixture() (workDir string, externalPush func(file, content string), cleanup func()) {
+	remoteDir, err := os.MkdirTemp("", "git-remote-*")
+	if err != nil {
+		panic(err)
+	}
+	workDir, err = os.MkdirTemp("", "git-work-*")
+	if err != nil {
+		panic(err)
+	}
+
+	rg := func(dir string, args ...string) {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			panic(string(out))
+		}
+	}
+
+	rg(remoteDir, "init", "--bare")
+	rg(workDir, "init")
+	rg(workDir, "config", "user.email", "test@example.com")
+	rg(workDir, "config", "user.name", "Test User")
+	rg(workDir, "remote", "add", "origin", remoteDir)
+	rg(workDir, "commit", "--allow-empty", "-m", "init")
+	rg(workDir, "push", "-u", "origin", "HEAD")
+
+	externalPush = func(file, content string) {
+		extDir, err := os.MkdirTemp("", "git-ext-*")
+		if err != nil {
+			panic(err)
+		}
+		defer func() { _ = os.RemoveAll(extDir) }()
+		rg(extDir, "clone", remoteDir, ".")
+		rg(extDir, "config", "user.email", "ext@example.com")
+		rg(extDir, "config", "user.name", "External")
+		if err := os.WriteFile(filepath.Join(extDir, file), []byte(content), 0600); err != nil {
+			panic(err)
+		}
+		rg(extDir, "add", file)
+		rg(extDir, "commit", "-m", "external: "+file)
+		rg(extDir, "push", "origin")
+	}
+
+	cleanup = func() {
+		_ = os.RemoveAll(workDir)
+		_ = os.RemoveAll(remoteDir)
+	}
+	return
+}
+
+// writeLocalCommit stages and commits a new file in workDir without pushing.
+func writeLocalCommit(workDir, file, content string) {
+	if err := os.WriteFile(filepath.Join(workDir, file), []byte(content), 0600); err != nil {
+		panic(err)
+	}
+	runGit(workDir, "add", file)
+	runGit(workDir, "commit", "-m", "local: "+file)
+}
+
+// gitOutputStr runs a git command in dir and returns combined output as a string. Panics on error.
+func gitOutputStr(dir string, args ...string) string {
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		panic(string(out))
+	}
+	return string(out)
+}
+
+var _ = Describe("Pull state machine", func() {
+	var (
+		workDir      string
+		externalPush func(file, content string)
+		pullCleanup  func()
+		fakeMetrics  *mocks.FakeMetrics
+		pg           git.Git
+		ctx          context.Context
+	)
+
+	BeforeEach(func() {
+		ctx = context.Background()
+		workDir, externalPush, pullCleanup = setupPullFixture()
+		fakeMetrics = &mocks.FakeMetrics{}
+		pg = git.New(workDir, fakeMetrics, libtime.NewCurrentDateTime(), "")
+	})
+
+	AfterEach(func() {
+		pullCleanup()
+	})
+
+	Context("local clean, remote unchanged (no-op)", func() {
+		It("returns nil and does not change HEAD", func() {
+			headBefore := strings.TrimSpace(gitOutputStr(workDir, "rev-parse", "HEAD"))
+			Expect(pg.Pull(ctx)).To(BeNil())
+			Expect(
+				strings.TrimSpace(gitOutputStr(workDir, "rev-parse", "HEAD")),
+			).To(Equal(headBefore))
+		})
+	})
+
+	Context("local clean, remote has new commits (fast-forward)", func() {
+		BeforeEach(func() {
+			externalPush("remote.txt", "from remote\n")
+		})
+
+		It("fast-forwards local to include the remote commit", func() {
+			Expect(pg.Pull(ctx)).To(BeNil())
+			content, err := pg.ReadFile(ctx, "remote.txt")
+			Expect(err).To(BeNil())
+			Expect(string(content)).To(Equal("from remote\n"))
+		})
+
+		It("leaves nothing unpushed", func() {
+			Expect(pg.Pull(ctx)).To(BeNil())
+			unpushed := strings.TrimSpace(gitOutputStr(workDir, "log", "@{u}..HEAD", "--oneline"))
+			Expect(unpushed).To(BeEmpty())
+		})
+	})
+
+	Context("local ahead, remote unchanged (push)", func() {
+		BeforeEach(func() {
+			writeLocalCommit(workDir, "local.txt", "local only\n")
+		})
+
+		It("pushes the local commit to remote", func() {
+			Expect(pg.Pull(ctx)).To(BeNil())
+			unpushed := strings.TrimSpace(gitOutputStr(workDir, "log", "@{u}..HEAD", "--oneline"))
+			Expect(unpushed).To(BeEmpty())
+		})
+	})
+
+	Context("diverged, no content conflict (rebase+push)", func() {
+		BeforeEach(func() {
+			externalPush("remote.txt", "from remote\n")
+			writeLocalCommit(workDir, "local.txt", "local only\n")
+		})
+
+		It("rebases and pushes, leaving linear history with both commits", func() {
+			Expect(pg.Pull(ctx)).To(BeNil())
+			log := gitOutputStr(workDir, "log", "--oneline")
+			Expect(log).To(ContainSubstring("remote.txt"))
+			Expect(log).To(ContainSubstring("local.txt"))
+			Expect(log).NotTo(ContainSubstring("Merge branch"))
+		})
+
+		It("leaves nothing unpushed after rebase", func() {
+			Expect(pg.Pull(ctx)).To(BeNil())
+			unpushed := strings.TrimSpace(gitOutputStr(workDir, "log", "@{u}..HEAD", "--oneline"))
+			Expect(unpushed).To(BeEmpty())
+		})
+	})
+
+	Context("HEAD has no upstream tracking ref", func() {
+		BeforeEach(func() {
+			runGit(workDir, "branch", "--unset-upstream")
+		})
+
+		It("returns an error wrapping 'no upstream configured'", func() {
+			err := pg.Pull(ctx)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("no upstream configured"))
+		})
+
+		It("does not attempt rebase/push", func() {
+			_ = pg.Pull(ctx)
+			Expect(fakeMetrics.IncRebaseConflictCallCount()).To(Equal(0))
+			Expect(fakeMetrics.IncGitOperationErrorCallCount()).To(BeNumerically(">=", 1))
+		})
+	})
+
+	Context("diverged, content conflict during rebase", func() {
+		BeforeEach(func() {
+			externalPush("conflict.txt", "remote content\n")
+			writeLocalCommit(workDir, "conflict.txt", "local content\n")
+		})
+
+		It("returns a RebaseConflictError with the conflicting path", func() {
+			err := pg.Pull(ctx)
+			Expect(err).To(HaveOccurred())
+			var conflictErr *git.RebaseConflictError
+			Expect(errors.As(err, &conflictErr)).To(BeTrue())
+			Expect(conflictErr.Path).To(Equal("conflict.txt"))
+		})
+
+		It("does not contain the git config hint substring", func() {
+			err := pg.Pull(ctx)
+			Expect(err).To(HaveOccurred())
+			Expect(
+				err.Error(),
+			).NotTo(ContainSubstring("Need to specify how to reconcile divergent branches"))
+		})
+
+		It("increments the rebase conflict metric exactly once", func() {
+			_ = pg.Pull(ctx)
+			Expect(fakeMetrics.IncRebaseConflictCallCount()).To(Equal(1))
+		})
 	})
 })
 

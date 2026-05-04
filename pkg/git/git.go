@@ -35,6 +35,30 @@ var ErrNotFound = stderrors.New("file not found")
 // ErrInvalidPath is returned when the requested path fails validation.
 var ErrInvalidPath = stderrors.New("invalid path")
 
+// RebaseConflictError is returned by Pull when git rebase encounters a content conflict.
+// The repo is left in its conflicted state for human inspection.
+// git rebase --abort is NEVER invoked automatically.
+type RebaseConflictError struct {
+	Path string // conflicted file path, from "CONFLICT (content): Merge conflict in <path>"
+}
+
+func (e *RebaseConflictError) Error() string {
+	return "rebase conflict at " + e.Path
+}
+
+// parseRebaseConflictPath extracts the first conflicting file path from git rebase output.
+// git rebase emits "CONFLICT (content): Merge conflict in <path>" on content conflicts.
+// Returns empty string if no conflict line is found (non-conflict failure).
+func parseRebaseConflictPath(output string) string {
+	const prefix = "Merge conflict in "
+	for _, line := range strings.Split(output, "\n") {
+		if idx := strings.Index(line, prefix); idx >= 0 {
+			return strings.TrimSpace(line[idx+len(prefix):])
+		}
+	}
+	return ""
+}
+
 // Status represents the current state of the git working tree.
 type Status struct {
 	// Clean is true when the working tree has no uncommitted changes.
@@ -156,6 +180,29 @@ func (g *git) runCmdOutput(ctx context.Context, dir string, args ...string) ([]b
 		return nil, errors.Wrapf(ctx, err, "git %v: %s", args, stderr.String())
 	}
 	return stdout.Bytes(), nil
+}
+
+// runCmdRaw executes a git subcommand in dir and returns combined stdout+stderr
+// regardless of exit code. Use when the output must be inspected on failure
+// (e.g., detecting rebase conflict paths from git rebase output).
+func (g *git) runCmdRaw(ctx context.Context, dir string, args ...string) ([]byte, error) {
+	// #nosec G204 -- binary is hardcoded to "git"; args are internal subcommands, not user input
+	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd.Dir = dir
+	if g.sshKeyPath != "" {
+		cmd.Env = append(
+			os.Environ(),
+			fmt.Sprintf(
+				"GIT_SSH_COMMAND=ssh -i %s -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no",
+				string(g.sshKeyPath),
+			),
+		)
+	}
+	var buf bytes.Buffer
+	cmd.Stdout = &buf
+	cmd.Stderr = &buf
+	err := cmd.Run()
+	return buf.Bytes(), err
 }
 
 // WriteFile writes content to path, stages and commits it, then pushes.
@@ -324,7 +371,64 @@ func (g *git) ListFiles(ctx context.Context, pattern string) ([]string, error) {
 	return result, nil
 }
 
-// Pull fetches and integrates changes from the remote repository.
+// pullFetchSHAs fetches from remote and returns the three SHAs needed for state detection.
+func (g *git) pullFetchSHAs(
+	ctx context.Context,
+	upstream string,
+) (localSHA, remoteSHA, baseSHA string, err error) {
+	if fetchErr := g.runCmd(ctx, g.repoPath, "fetch"); fetchErr != nil {
+		g.metrics.IncGitOperationError("fetch")
+		return "", "", "", errors.Wrap(ctx, fetchErr, "fetch failed")
+	}
+	localOut, e := g.runCmdOutput(ctx, g.repoPath, "rev-parse", "HEAD")
+	if e != nil {
+		g.metrics.IncGitOperationError("pull")
+		return "", "", "", errors.Wrap(ctx, e, "rev-parse HEAD failed")
+	}
+	remoteOut, e := g.runCmdOutput(ctx, g.repoPath, "rev-parse", upstream)
+	if e != nil {
+		g.metrics.IncGitOperationError("pull")
+		return "", "", "", errors.Wrapf(ctx, e, "rev-parse %s failed", upstream)
+	}
+	baseOut, e := g.runCmdOutput(ctx, g.repoPath, "merge-base", "HEAD", upstream)
+	if e != nil {
+		g.metrics.IncGitOperationError("pull")
+		return "", "", "", errors.Wrap(ctx, e, "merge-base failed")
+	}
+	return strings.TrimSpace(string(localOut)),
+		strings.TrimSpace(string(remoteOut)),
+		strings.TrimSpace(string(baseOut)),
+		nil
+}
+
+// pullRebaseAndPush rebases the current branch onto upstream, then pushes.
+// Returns *RebaseConflictError on content conflicts (repo left in conflicted state).
+func (g *git) pullRebaseAndPush(ctx context.Context, upstream string) error {
+	out, rebaseErr := g.runCmdRaw(ctx, g.repoPath, "rebase", upstream)
+	if rebaseErr != nil {
+		if conflictPath := parseRebaseConflictPath(string(out)); conflictPath != "" {
+			g.metrics.IncRebaseConflict()
+			return &RebaseConflictError{Path: conflictPath}
+		}
+		g.metrics.IncGitOperationError("rebase")
+		return errors.Wrapf(ctx, rebaseErr, "rebase %s: %s", upstream, out)
+	}
+	if err := g.runCmd(ctx, g.repoPath, "push"); err != nil {
+		g.metrics.IncGitOperationError("push")
+		return errors.Wrap(ctx, err, "push after rebase failed")
+	}
+	return nil
+}
+
+// Pull implements a deterministic 4-state sync:
+//   - local == remote        → no-op
+//   - local clean, remote new → fast-forward (git merge --ff-only)
+//   - local ahead, remote same → push
+//   - diverged (both ahead)  → rebase onto remote tracking ref, then push
+//
+// On a rebase content conflict, Pull returns *RebaseConflictError and leaves
+// the repo in its conflicted state. git rebase --abort is NEVER invoked.
+// Branch name is derived from HEAD's upstream tracking ref, never hardcoded.
 func (g *git) Pull(ctx context.Context) error {
 	start := g.currentDateTimeGetter.Now()
 	defer func() {
@@ -339,11 +443,38 @@ func (g *git) Pull(ctx context.Context) error {
 		return nil
 	}
 
-	if err := g.runCmd(ctx, g.repoPath, "pull"); err != nil {
+	upstreamOut, err := g.runCmdOutput(
+		ctx, g.repoPath, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}",
+	)
+	if err != nil {
 		g.metrics.IncGitOperationError("pull")
-		return errors.Wrap(ctx, err, "git pull")
+		return errors.Wrap(ctx, err, "no upstream configured")
 	}
-	return nil
+	upstream := strings.TrimSpace(string(upstreamOut))
+
+	localSHA, remoteSHA, baseSHA, err := g.pullFetchSHAs(ctx, upstream)
+	if err != nil {
+		return err
+	}
+
+	switch {
+	case localSHA == remoteSHA:
+		return nil
+	case localSHA == baseSHA:
+		if err := g.runCmd(ctx, g.repoPath, "merge", "--ff-only", upstream); err != nil {
+			g.metrics.IncGitOperationError("pull")
+			return errors.Wrap(ctx, err, "fast-forward merge failed")
+		}
+		return nil
+	case remoteSHA == baseSHA:
+		if err := g.runCmd(ctx, g.repoPath, "push"); err != nil {
+			g.metrics.IncGitOperationError("push")
+			return errors.Wrap(ctx, err, "push failed")
+		}
+		return nil
+	default:
+		return g.pullRebaseAndPush(ctx, upstream)
+	}
 }
 
 // Clone clones remoteURL into the repository path.

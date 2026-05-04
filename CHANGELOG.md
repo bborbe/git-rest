@@ -2,6 +2,10 @@
 
 All notable changes to this project will be documented in this file.
 
+## v0.19.2
+
+- fix: Replace plain `git pull` with a deterministic 4-state sync (no-op / fast-forward / push / rebase+push). Divergence between local and remote is now auto-resolved via rebase without operator intervention. Rebase content conflicts return a typed `RebaseConflictError{Path}` — repo left for human inspection, no auto-abort. The `git_rest_git_operation_errors_total` counter gains a `conflict` label; rebase conflicts increment `{operation="rebase",conflict="true"}`. Fixes the "Need to specify how to reconcile divergent branches" forever-loop (prod incident 2026-05-04, `vault-obsidian-openclaw-0`).
+
 ## v0.19.1
 
 - fix: Decouple `/readiness` from the pull mutex. Readiness now reads a `PullStateCache` written by the background puller — the handler never invokes a git subprocess. Before the first successful pull the probe returns 503 `no successful pull yet`; after a stale cache it returns 503 with the last pull error. Body never contains `context canceled`. Fixes false-NotReady during SSH timeouts (prod incident 2026-05-03, `vault-obsidian-openclaw-0`).

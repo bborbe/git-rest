@@ -166,5 +166,5 @@ Key metrics: request count + latency histogram, git operation durations, build i
 ## Operational notes
 
 - **Auto-commit noise**: every write produces a commit. For high-write workloads, upstream consumers should accept this or batch through a higher-level API.
-- **Conflict handling**: git-rest has no rebase/merge-conflict strategy — if a periodic pull encounters divergence, the push will fail and the pod will go unready until resolved manually.
+- **Conflict handling**: git-rest auto-recovers from divergence (local ahead AND remote ahead, no content conflict) by rebase + push within one PullInterval. Real content conflicts during rebase leave the repo in conflicted state, readiness reports 503 with the conflict path (`last pull failed: rebase conflict at <path>`), and require human inspection (`kubectl exec` + manual resolve, or PVC reset for recoverable churn).
 - **Backups**: since data lives in the remote, the PVC is effectively a cache. Losing it triggers a re-clone on next bootstrap.

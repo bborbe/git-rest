@@ -21,17 +21,18 @@ var GitOperationDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 	Buckets: prometheus.DefBuckets,
 }, []string{"operation"})
 
-// GitOperationErrors counts git operation errors by operation type.
+// GitOperationErrors counts git operation errors by operation type and conflict status.
 var GitOperationErrors = prometheus.NewCounterVec(prometheus.CounterOpts{
 	Name: "git_rest_git_operation_errors_total",
 	Help: "Total git operation errors by operation type.",
-}, []string{"operation"})
+}, []string{"operation", "conflict"})
 
 func init() {
 	prometheus.MustRegister(HTTPRequestsTotal, GitOperationDuration, GitOperationErrors)
-	for _, op := range []string{"write_file", "delete_file", "read_file", "list_files", "pull"} {
-		GitOperationErrors.WithLabelValues(op).Add(0)
+	for _, op := range []string{"write_file", "delete_file", "read_file", "list_files", "pull", "fetch", "push", "rebase"} {
+		GitOperationErrors.WithLabelValues(op, "").Add(0)
 	}
+	GitOperationErrors.WithLabelValues("rebase", "true").Add(0)
 	for _, combo := range []struct{ method, path string }{
 		{"GET", "/api/v1/files/{path}"},
 		{"POST", "/api/v1/files/{path}"},
@@ -53,6 +54,7 @@ type Metrics interface {
 	ObserveGitOperation(operation string, duration float64)
 	IncGitOperationError(operation string)
 	IncHTTPRequest(method, path, statusCode string)
+	IncRebaseConflict()
 }
 
 // NewMetrics returns a Prometheus-backed Metrics implementation.
@@ -67,7 +69,11 @@ func (p *prometheusMetrics) ObserveGitOperation(operation string, duration float
 }
 
 func (p *prometheusMetrics) IncGitOperationError(operation string) {
-	GitOperationErrors.WithLabelValues(operation).Inc()
+	GitOperationErrors.WithLabelValues(operation, "").Inc()
+}
+
+func (p *prometheusMetrics) IncRebaseConflict() {
+	GitOperationErrors.WithLabelValues("rebase", "true").Inc()
 }
 
 func (p *prometheusMetrics) IncHTTPRequest(method, path, statusCode string) {
