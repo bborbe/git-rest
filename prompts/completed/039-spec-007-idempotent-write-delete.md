@@ -1,5 +1,5 @@
 ---
-status: committing
+status: completed
 spec: [007-bug-write-file-no-content-change-returns-500]
 summary: 'WriteFile and DeleteFile made idempotent: same-content writes return 200 (no-op) and absent-file deletes return 200 instead of 404/500.'
 container: git-rest-039-spec-007-idempotent-write-delete
@@ -7,6 +7,7 @@ dark-factory-version: v0.148.4-3-gc45254a
 created: "2026-05-06T15:30:00Z"
 queued: "2026-05-06T15:28:00Z"
 started: "2026-05-06T15:28:36Z"
+completed: "2026-05-06T15:32:19Z"
 branch: dark-factory/bug-write-file-no-content-change-returns-500
 ---
 
