@@ -2,6 +2,10 @@
 
 All notable changes to this project will be documented in this file.
 
+## v0.19.4
+
+- fix: `WriteFile` and `DeleteFile` are now idempotent. Re-writing a file with identical content returns 200 and logs "no changes to commit" at INFO instead of returning 500 "nothing to commit, working tree clean". Re-deleting an already-absent file returns 200 instead of 404. Fixes CQRS retry loops in `bborbe/agent` task-controller that read the 500/404 as failure and retried up to 5 times (prod incident 2026-05-06, `vault-obsidian-openclaw-0`).
+
 ## v0.19.3
 
 - fix: `PullStateCache.ReadinessStatus()` now returns 503 immediately on `*git.RebaseConflictError`, naming the conflict path in the body (`last pull failed: rebase conflict at <path>`). Transient errors (network, auth) retain the freshness-threshold approach. A subsequent successful pull restores readiness automatically.

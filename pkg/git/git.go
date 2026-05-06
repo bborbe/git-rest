@@ -244,9 +244,19 @@ func (g *git) WriteFile(ctx context.Context, path string, content []byte) error 
 		commitMsg = "git-rest: update " + path
 	}
 
-	if err := g.runCmd(ctx, g.repoPath, "commit", "-m", commitMsg); err != nil {
+	commitOut, err := g.runCmdRaw(ctx, g.repoPath, "commit", "-m", commitMsg)
+	if err != nil {
+		if strings.Contains(string(commitOut), "nothing to commit") {
+			slog.InfoContext(
+				ctx,
+				"write file: no changes to commit (content unchanged)",
+				"path",
+				path,
+			)
+			return nil
+		}
 		g.metrics.IncGitOperationError("write_file")
-		return errors.Wrap(ctx, err, "git commit")
+		return errors.Wrapf(ctx, err, "git commit: %s", strings.TrimSpace(string(commitOut)))
 	}
 
 	if g.hasRemote(ctx) {
@@ -276,7 +286,13 @@ func (g *git) DeleteFile(ctx context.Context, path string) error {
 
 	fullPath := filepath.Join(g.repoPath, path)
 	if _, err := os.Stat(fullPath); os.IsNotExist(err) {
-		return ErrNotFound
+		slog.InfoContext(
+			ctx,
+			"delete file: no changes to commit (file already absent)",
+			"path",
+			path,
+		)
+		return nil
 	}
 
 	if err := g.runCmd(ctx, g.repoPath, "rm", path); err != nil {

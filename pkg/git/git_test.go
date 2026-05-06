@@ -202,6 +202,50 @@ var _ = Describe("Git", func() {
 				Expect(err).NotTo(HaveOccurred())
 				Expect(got).To(Equal([]byte("nested")))
 			})
+
+			It("returns nil on second write with identical body (no-op)", func() {
+				Expect(g.WriteFile(ctx, "idempotent.txt", []byte("hello"))).To(Succeed())
+				Expect(g.WriteFile(ctx, "idempotent.txt", []byte("hello"))).To(Succeed())
+			})
+
+			It("does not create a second commit when content is unchanged", func() {
+				Expect(g.WriteFile(ctx, "same.txt", []byte("content"))).To(Succeed())
+				Expect(g.WriteFile(ctx, "same.txt", []byte("content"))).To(Succeed())
+
+				out, err := exec.Command("git", "-C", workDir, "log", "--oneline", "--", "same.txt").
+					Output()
+				Expect(err).NotTo(HaveOccurred())
+				lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+				var nonEmpty []string
+				for _, l := range lines {
+					if l != "" {
+						nonEmpty = append(nonEmpty, l)
+					}
+				}
+				Expect(
+					nonEmpty,
+				).To(HaveLen(1), "expected exactly one commit for same.txt, got: %s", string(out))
+			})
+
+			It("creates a new commit when content changes after a same-content write", func() {
+				Expect(g.WriteFile(ctx, "evolving.txt", []byte("v1"))).To(Succeed())
+				Expect(g.WriteFile(ctx, "evolving.txt", []byte("v1"))).To(Succeed()) // no-op
+				Expect(g.WriteFile(ctx, "evolving.txt", []byte("v2"))).To(Succeed()) // real update
+
+				out, err := exec.Command("git", "-C", workDir, "log", "--oneline", "--", "evolving.txt").
+					Output()
+				Expect(err).NotTo(HaveOccurred())
+				lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+				var nonEmpty []string
+				for _, l := range lines {
+					if l != "" {
+						nonEmpty = append(nonEmpty, l)
+					}
+				}
+				Expect(
+					nonEmpty,
+				).To(HaveLen(2), "expected create + update commits, got: %s", string(out))
+			})
 		})
 	})
 
@@ -228,9 +272,15 @@ var _ = Describe("Git", func() {
 			})
 		})
 
-		It("returns ErrNotFound for non-existent file", func() {
+		It("returns nil for a non-existent file (idempotent delete)", func() {
 			err := g.DeleteFile(ctx, "doesnotexist.txt")
-			Expect(err).To(MatchError(git.ErrNotFound))
+			Expect(err).To(BeNil())
+		})
+
+		It("returns nil on second delete of the same file (idempotent delete)", func() {
+			Expect(g.WriteFile(ctx, "gone.txt", []byte("bye"))).To(Succeed())
+			Expect(g.DeleteFile(ctx, "gone.txt")).To(Succeed())
+			Expect(g.DeleteFile(ctx, "gone.txt")).To(Succeed())
 		})
 
 		It("deletes an existing file and uses delete commit message", func() {
