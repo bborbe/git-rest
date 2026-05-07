@@ -1,8 +1,10 @@
 ---
-status: prompted
+status: completed
 approved: "2026-05-06T15:14:55Z"
 generating: "2026-05-06T15:21:46Z"
 prompted: "2026-05-06T15:25:38Z"
+verifying: "2026-05-06T15:32:19Z"
+completed: "2026-05-06T19:55:45Z"
 branch: dark-factory/bug-write-file-no-content-change-returns-500
 ---
 
