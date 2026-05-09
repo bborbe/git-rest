@@ -1,6 +1,9 @@
 ---
-status: idea
-kind: bug
+status: prompted
+approved: "2026-05-09T23:08:38Z"
+generating: "2026-05-09T23:08:39Z"
+prompted: "2026-05-09T23:10:08Z"
+branch: dark-factory/bug-pid1-no-init-leaks-grandchild-zombies
 ---
 
 # bug: /main runs as PID 1 with no reaper, leaks git grandchild zombies
