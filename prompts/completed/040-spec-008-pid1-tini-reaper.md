@@ -1,5 +1,5 @@
 ---
-status: committing
+status: completed
 spec: [008-bug-pid1-no-init-leaks-grandchild-zombies]
 summary: 'Added tini to Alpine runtime stage in Dockerfile (apk install line + ENTRYPOINT) and added CHANGELOG ## Unreleased entry documenting the zombie-reaping fix.'
 container: git-rest-040-spec-008-pid1-tini-reaper
@@ -7,6 +7,7 @@ dark-factory-version: v0.156.1-1-g04f3863-dirty
 created: "2026-05-10T00:00:00Z"
 queued: "2026-05-09T23:19:21Z"
 started: "2026-05-09T23:19:23Z"
+completed: "2026-05-09T23:22:27Z"
 branch: dark-factory/bug-pid1-no-init-leaks-grandchild-zombies
 ---
 
