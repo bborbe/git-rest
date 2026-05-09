@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## v0.19.5
+
+- Update Go runtime from 1.26.2 to 1.26.3
+- Update core bborbe/* dependencies (errors, http, run, sentry, service, time)
+- Update golangci-lint to v2.12.2 and osv-scanner to v2.3.8
+- Replace jingyugao/rowserrcheck with golangci/rowserrcheck
+- Add docs/verifying-specs.md for spec verification workflow
+
 ## v0.19.4
 
 - fix: `WriteFile` and `DeleteFile` are now idempotent. Re-writing a file with identical content returns 200 and logs "no changes to commit" at INFO instead of returning 500 "nothing to commit, working tree clean". Re-deleting an already-absent file returns 200 instead of 404. Fixes CQRS retry loops in `bborbe/agent` task-controller that read the 500/404 as failure and retried up to 5 times (prod incident 2026-05-06, `vault-obsidian-openclaw-0`).
