@@ -2,6 +2,10 @@
 
 All notable changes to this project will be documented in this file.
 
+## v0.19.6
+
+- fix: Install `tini` as PID 1 init reaper in Docker image to prevent zombie `[git] <defunct>` accumulation. With `/main` running as PID 1, grandchild processes spawned by `git` (ssh helpers, credential helpers) were reparented to `/main` on exit but never reaped — growing to ~18,000 zombies per pod after 3 days at `PULL_INTERVAL=30s` and blocking `k3s-killall.sh` node shutdown. `tini` reaps all orphaned children and forwards SIGTERM to `/main` for graceful shutdown (prod incident 2026-05-09, `vault-obsidian-trading-0`).
+
 ## v0.19.5
 
 - Update Go runtime from 1.26.2 to 1.26.3

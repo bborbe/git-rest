@@ -9,6 +9,7 @@ RUN apk --no-cache add \
     git \
     gnupg \
     openssh-client \
+    tini \
     tzdata \
     && rm -rf /var/cache/apk/*
 ARG BUILD_GIT_VERSION=dev
@@ -18,4 +19,4 @@ COPY --from=build /main /main
 ENV BUILD_GIT_VERSION=${BUILD_GIT_VERSION}
 ENV BUILD_GIT_COMMIT=${BUILD_GIT_COMMIT}
 ENV BUILD_DATE=${BUILD_DATE}
-ENTRYPOINT ["/main"]
+ENTRYPOINT ["/sbin/tini", "--", "/main"]
