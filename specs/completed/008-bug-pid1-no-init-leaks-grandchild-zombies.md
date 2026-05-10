@@ -1,9 +1,10 @@
 ---
-status: verifying
+status: completed
 approved: "2026-05-09T23:08:38Z"
 generating: "2026-05-09T23:08:39Z"
 prompted: "2026-05-09T23:10:08Z"
 verifying: "2026-05-09T23:22:27Z"
+completed: "2026-05-10T09:29:40Z"
 branch: dark-factory/bug-pid1-no-init-leaks-grandchild-zombies
 ---
 
