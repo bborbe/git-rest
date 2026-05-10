@@ -1,8 +1,9 @@
 ---
-status: prompted
+status: verifying
 approved: "2026-05-09T23:08:38Z"
 generating: "2026-05-09T23:08:39Z"
 prompted: "2026-05-09T23:10:08Z"
+verifying: "2026-05-09T23:22:27Z"
 branch: dark-factory/bug-pid1-no-init-leaks-grandchild-zombies
 ---
 
@@ -163,3 +164,17 @@ cd ~/Documents/workspaces/git-rest && make precommit
 ```
 
 Plus the runtime verification from `## Acceptance Criteria` against the deployed image — replay the original repro on a fresh pod for ≥ 1h and confirm zombie count stays at 0. Per [bug-workflow.md](../../../dark-factory/docs/bug-workflow.md), tests passing alone is NOT sufficient evidence to mark this complete; the bug is a runtime symptom and verification must exercise the runtime path.
+
+## Verification Result
+
+**Verified:** 2026-05-10T09:28:33Z (HEAD d3a16a7)
+**Binary:** dark-factory v0.156.1-1-g04f3863-dirty (installed)
+**Scenario:** kubectl exec on 4 pods (dev/prod × trading/openclaw) capturing `/proc/1/comm`, zombie count, and uptime from `/proc/1/stat` field 22 after rolling restart with tini-built image.
+**Evidence:**
+- All 4 pods: `PID1=tini, ZOMBIES=0` (dev/vault-obsidian-trading-0, dev/vault-obsidian-openclaw-0, prod/vault-obsidian-trading-0, prod/vault-obsidian-openclaw-0)
+- Uptime 24-26 min at sample time → ~50 pull cycles at PULL_INTERVAL=30s per pod
+- Dockerfile:12 installs `tini`; Dockerfile:22 `ENTRYPOINT ["/sbin/tini", "--", "/main"]`
+- CHANGELOG.md v0.19.6 entry documents the fix and prod incident
+- Buggy v0.19.4 baseline: ~4.2 zombies/min (~18,000 / 3 days); expected ~105 zombies/pod at 25 min on broken build, observed 0
+**Deviation:** AC #5 literal threshold (≥60 min / ≥120 cycles) relaxed to ~25 min / ~50 cycles per pod based on directional zero-zombie evidence (binary fix: PID1 reaps or doesn't) and explicit operator sign-off. ACs #3, #4, #6 (local docker run/stop/image-size) operator-deferred per prompt's verification block.
+**Verdict:** PASS
