@@ -8,6 +8,11 @@ import (
 )
 
 type FakeMetrics struct {
+	IncConflictPathsStub        func(int)
+	incConflictPathsMutex       sync.RWMutex
+	incConflictPathsArgsForCall []struct {
+		arg1 int
+	}
 	IncGitOperationErrorStub        func(string)
 	incGitOperationErrorMutex       sync.RWMutex
 	incGitOperationErrorArgsForCall []struct {
@@ -19,6 +24,11 @@ type FakeMetrics struct {
 		arg1 string
 		arg2 string
 		arg3 string
+	}
+	IncMergeOutcomeStub        func(string)
+	incMergeOutcomeMutex       sync.RWMutex
+	incMergeOutcomeArgsForCall []struct {
+		arg1 string
 	}
 	IncRebaseConflictStub        func()
 	incRebaseConflictMutex       sync.RWMutex
@@ -32,6 +42,38 @@ type FakeMetrics struct {
 	}
 	invocations      map[string][][]interface{}
 	invocationsMutex sync.RWMutex
+}
+
+func (fake *FakeMetrics) IncConflictPaths(arg1 int) {
+	fake.incConflictPathsMutex.Lock()
+	fake.incConflictPathsArgsForCall = append(fake.incConflictPathsArgsForCall, struct {
+		arg1 int
+	}{arg1})
+	stub := fake.IncConflictPathsStub
+	fake.recordInvocation("IncConflictPaths", []interface{}{arg1})
+	fake.incConflictPathsMutex.Unlock()
+	if stub != nil {
+		fake.IncConflictPathsStub(arg1)
+	}
+}
+
+func (fake *FakeMetrics) IncConflictPathsCallCount() int {
+	fake.incConflictPathsMutex.RLock()
+	defer fake.incConflictPathsMutex.RUnlock()
+	return len(fake.incConflictPathsArgsForCall)
+}
+
+func (fake *FakeMetrics) IncConflictPathsCalls(stub func(int)) {
+	fake.incConflictPathsMutex.Lock()
+	defer fake.incConflictPathsMutex.Unlock()
+	fake.IncConflictPathsStub = stub
+}
+
+func (fake *FakeMetrics) IncConflictPathsArgsForCall(i int) int {
+	fake.incConflictPathsMutex.RLock()
+	defer fake.incConflictPathsMutex.RUnlock()
+	argsForCall := fake.incConflictPathsArgsForCall[i]
+	return argsForCall.arg1
 }
 
 func (fake *FakeMetrics) IncGitOperationError(arg1 string) {
@@ -98,6 +140,38 @@ func (fake *FakeMetrics) IncHTTPRequestArgsForCall(i int) (string, string, strin
 	defer fake.incHTTPRequestMutex.RUnlock()
 	argsForCall := fake.incHTTPRequestArgsForCall[i]
 	return argsForCall.arg1, argsForCall.arg2, argsForCall.arg3
+}
+
+func (fake *FakeMetrics) IncMergeOutcome(arg1 string) {
+	fake.incMergeOutcomeMutex.Lock()
+	fake.incMergeOutcomeArgsForCall = append(fake.incMergeOutcomeArgsForCall, struct {
+		arg1 string
+	}{arg1})
+	stub := fake.IncMergeOutcomeStub
+	fake.recordInvocation("IncMergeOutcome", []interface{}{arg1})
+	fake.incMergeOutcomeMutex.Unlock()
+	if stub != nil {
+		fake.IncMergeOutcomeStub(arg1)
+	}
+}
+
+func (fake *FakeMetrics) IncMergeOutcomeCallCount() int {
+	fake.incMergeOutcomeMutex.RLock()
+	defer fake.incMergeOutcomeMutex.RUnlock()
+	return len(fake.incMergeOutcomeArgsForCall)
+}
+
+func (fake *FakeMetrics) IncMergeOutcomeCalls(stub func(string)) {
+	fake.incMergeOutcomeMutex.Lock()
+	defer fake.incMergeOutcomeMutex.Unlock()
+	fake.IncMergeOutcomeStub = stub
+}
+
+func (fake *FakeMetrics) IncMergeOutcomeArgsForCall(i int) string {
+	fake.incMergeOutcomeMutex.RLock()
+	defer fake.incMergeOutcomeMutex.RUnlock()
+	argsForCall := fake.incMergeOutcomeArgsForCall[i]
+	return argsForCall.arg1
 }
 
 func (fake *FakeMetrics) IncRebaseConflict() {

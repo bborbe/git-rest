@@ -43,6 +43,10 @@ func (n *noopMetrics) IncHTTPRequest(_, _, _ string) {}
 
 func (n *noopMetrics) IncRebaseConflict() {}
 
+func (n *noopMetrics) IncMergeOutcome(_ string) {}
+
+func (n *noopMetrics) IncConflictPaths(_ int) {}
+
 // initRepo creates a temporary git repo with a local bare remote so that push works.
 func initRepo() (workDir string, cleanup func()) {
 	remoteDir, err := os.MkdirTemp("", "git-remote-*")

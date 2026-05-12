@@ -1,6 +1,7 @@
 ---
-status: executing
+status: committing
 spec: [010-merge-with-conflict-resolver]
+summary: Added ConflictResolver interface, MarkerResolver implementation, ErrConflictResolutionFailed sentinel, two new Prometheus counters with Metrics interface methods, regenerated mocks, and integration tests — all with zero compile errors and make precommit exit code 0.
 container: git-rest-042-spec-010-resolver-interface
 dark-factory-version: v0.156.1-1-g04f3863-dirty
 created: "2026-05-12T21:00:00Z"

@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## v0.20.0
+
+- feat: Add `ConflictResolver` interface and `MarkerResolver` implementation for pluggable merge conflict resolution; `ErrConflictResolutionFailed` sentinel for `errors.Is` detection
+- feat: Add `git_rest_merge_outcome_total` (by result label: clean/resolved/aborted) and `git_rest_conflict_paths_total` Prometheus counters with `Metrics` interface methods `IncMergeOutcome`/`IncConflictPaths`
+
 ## v0.19.7
 
 - fix: `Pull` now auto-recovers from abandoned-rebase (`.git/rebase-merge/` or `.git/rebase-apply/` present) and bare-detached-HEAD states on entry. Previously any path leaving HEAD detached permanently wedged the puller with "fatal: HEAD does not point to a branch" until manual `kubectl exec` recovery. New `ErrRepoUnrecoverable` sentinel returned for unrecoverable states (missing `refs/remotes/origin/HEAD`, failed `git rebase --abort`); callers use `errors.Is`. Recovery actions log at INFO with `"branch"` field. Fixes `vault-obsidian-openclaw-0` stuck 0/1 Running for 2d2h (prod incident 2026-05-12).

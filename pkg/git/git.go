@@ -41,6 +41,11 @@ var ErrInvalidPath = stderrors.New("invalid path")
 // Callers detect this via errors.Is(err, ErrRepoUnrecoverable).
 var ErrRepoUnrecoverable = stderrors.New("repo state unrecoverable")
 
+// ErrConflictResolutionFailed is returned by Pull when the ConflictResolver returns an error.
+// The merge is aborted before returning so the repo is left in a clean state.
+// Callers detect this via errors.Is(err, ErrConflictResolutionFailed).
+var ErrConflictResolutionFailed = stderrors.New("conflict resolution failed")
+
 // RebaseConflictError is returned by Pull when git rebase encounters a content conflict.
 // The repo is left in its conflicted state for human inspection.
 // git rebase --abort is NEVER invoked automatically.
