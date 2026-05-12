@@ -5,8 +5,10 @@
 package git_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -763,6 +765,193 @@ var _ = Describe("Pull state machine", func() {
 			_ = pg.Pull(ctx)
 			Expect(fakeMetrics.IncRebaseConflictCallCount()).To(Equal(1))
 		})
+	})
+})
+
+// captureSlogLogs swaps slog.Default() to a buffer-backed text handler for the
+// duration of a test. Returns the buffer and a restore func (use with defer).
+func captureSlogLogs() (*bytes.Buffer, func()) {
+	buf := &bytes.Buffer{}
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(buf, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	return buf, func() { slog.SetDefault(prev) }
+}
+
+var _ = Describe("Entry-state recovery", func() {
+	var ctx context.Context
+
+	BeforeEach(func() {
+		ctx = context.Background()
+	})
+
+	Context("AC1: abandoned rebase (.git/rebase-merge/ present)", func() {
+		It("aborts the abandoned rebase and completes pull successfully", func() {
+			workDir, externalPush, cleanup := setupPullFixture()
+			defer cleanup()
+
+			// Non-conflicting divergence: remote pushes remote.txt, local commits local.txt.
+			externalPush("remote.txt", "from remote\n")
+			writeLocalCommit(workDir, "local.txt", "local only\n")
+			runGit(workDir, "fetch")
+
+			// Derive the upstream tracking ref without hardcoding "main".
+			upstream := strings.TrimSpace(
+				gitOutputStr(workDir, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"),
+			)
+
+			// Force abandoned-rebase state via --exec false: git pauses the rebase after
+			// the first commit (exec failure), leaving .git/rebase-merge/ populated.
+			// Since the files don't conflict, after git rebase --abort the re-attempted
+			// rebase in Pull will succeed cleanly.
+			forceCmd := exec.Command("git", "rebase", "--exec", "false", upstream)
+			forceCmd.Dir = workDir
+			_ = forceCmd.Run() // error expected — we only want the side-effect
+
+			_, statErr := os.Stat(filepath.Join(workDir, ".git", "rebase-merge"))
+			Expect(
+				statErr,
+			).NotTo(HaveOccurred(), ".git/rebase-merge should exist after --exec false")
+
+			logs, restore := captureSlogLogs()
+			defer restore()
+
+			pg := git.New(workDir, &noopMetrics{}, libtime.NewCurrentDateTime(), "")
+			err := pg.Pull(ctx)
+
+			Expect(err).NotTo(HaveOccurred(), "Pull should succeed after aborting abandoned rebase")
+			head := strings.TrimSpace(gitOutputStr(workDir, "rev-parse", "--abbrev-ref", "HEAD"))
+			Expect(head).NotTo(Equal("HEAD"), "HEAD must be on a branch after recovery")
+			u := strings.TrimSpace(
+				gitOutputStr(workDir, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"),
+			)
+			Expect(u).To(ContainSubstring("origin/"), "@{u} must resolve after recovery")
+
+			// AC4b: exactly one structured-log line for the recovery.
+			logStr := logs.String()
+			Expect(strings.Count(logStr, "recovered from abandoned rebase")).To(Equal(1),
+				"expected exactly one 'recovered from abandoned rebase' log line, got: %s", logStr)
+			Expect(logStr).To(ContainSubstring("branch="), "log line must include branch key")
+		})
+	})
+
+	Context("AC2: bare detached HEAD (no rebase in progress, origin/HEAD set)", func() {
+		It("checks out the default branch, sets upstream, and completes pull", func() {
+			// Use git clone so refs/remotes/origin/HEAD is set automatically.
+			remoteDir, err := os.MkdirTemp("", "git-remote-*")
+			Expect(err).NotTo(HaveOccurred())
+
+			// Seed the bare remote via a temp clone.
+			seedDir, seedErr := os.MkdirTemp("", "git-seed-*")
+			Expect(seedErr).NotTo(HaveOccurred())
+			defer func() { _ = os.RemoveAll(seedDir) }()
+
+			rg := func(dir string, args ...string) {
+				cmd := exec.Command("git", args...)
+				cmd.Dir = dir
+				out, e := cmd.CombinedOutput()
+				if e != nil {
+					panic(string(out))
+				}
+			}
+			rg(remoteDir, "init", "--bare")
+			rg(seedDir, "init")
+			rg(seedDir, "config", "user.email", "test@example.com")
+			rg(seedDir, "config", "user.name", "Test")
+			rg(seedDir, "remote", "add", "origin", remoteDir)
+			rg(seedDir, "commit", "--allow-empty", "-m", "init")
+			rg(seedDir, "push", "-u", "origin", "HEAD")
+
+			// Clone so origin/HEAD is set automatically (git init+push does NOT set it).
+			workDir, wdErr := os.MkdirTemp("", "git-work-*")
+			Expect(wdErr).NotTo(HaveOccurred())
+			defer func() {
+				_ = os.RemoveAll(workDir)
+				_ = os.RemoveAll(remoteDir)
+			}()
+			rg(workDir, "clone", remoteDir, ".")
+			rg(workDir, "config", "user.email", "test@example.com")
+			rg(workDir, "config", "user.name", "Test")
+
+			// Detach HEAD (simulates operator running `git checkout HEAD --detach`).
+			runGit(workDir, "checkout", "--detach", "HEAD")
+			Expect(strings.TrimSpace(gitOutputStr(workDir, "rev-parse", "--abbrev-ref", "HEAD"))).
+				To(Equal("HEAD"), "fixture sanity: HEAD should be detached before Pull")
+
+			logs, restore := captureSlogLogs()
+			defer restore()
+
+			pg := git.New(workDir, &noopMetrics{}, libtime.NewCurrentDateTime(), "")
+			pullErr := pg.Pull(ctx)
+
+			Expect(pullErr).NotTo(HaveOccurred())
+			head := strings.TrimSpace(gitOutputStr(workDir, "rev-parse", "--abbrev-ref", "HEAD"))
+			Expect(head).NotTo(Equal("HEAD"), "HEAD should be on a branch after recovery")
+			u := strings.TrimSpace(
+				gitOutputStr(workDir, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"),
+			)
+			Expect(
+				u,
+			).To(ContainSubstring("origin/"), "@{u} must resolve after detached-HEAD recovery")
+
+			// AC4b: exactly one structured-log line for the recovery.
+			logStr := logs.String()
+			Expect(strings.Count(logStr, "recovered from detached HEAD")).To(Equal(1),
+				"expected exactly one 'recovered from detached HEAD' log line, got: %s", logStr)
+			Expect(logStr).To(ContainSubstring("branch="), "log line must include branch key")
+		})
+	})
+
+	Context("AC3 + AC4d: detached HEAD, refs/remotes/origin/HEAD absent", func() {
+		It("returns ErrRepoUnrecoverable and errors.Is matches", func() {
+			// setupPullFixture uses git-init+push, NOT git-clone, so origin/HEAD is not set.
+			workDir, _, cleanup := setupPullFixture()
+			defer cleanup()
+
+			// Detach HEAD; explicitly delete origin/HEAD to guarantee it is absent.
+			runGit(workDir, "checkout", "--detach", "HEAD")
+			// git remote set-head --delete is idempotent (ok if ref didn't exist).
+			delCmd := exec.Command("git", "remote", "set-head", "origin", "--delete")
+			delCmd.Dir = workDir
+			_ = delCmd.Run()
+
+			pg := git.New(workDir, &noopMetrics{}, libtime.NewCurrentDateTime(), "")
+			pullErr := pg.Pull(ctx)
+
+			Expect(pullErr).To(HaveOccurred())
+			Expect(errors.Is(pullErr, git.ErrRepoUnrecoverable)).To(BeTrue(),
+				"expected ErrRepoUnrecoverable, got: %v", pullErr)
+		})
+	})
+
+	Context("AC4a: healthy repo — state check is a no-op", func() {
+		It(
+			"Pull succeeds twice; HEAD stays on a branch, no side effects, no recovery logs",
+			func() {
+				workDir, _, cleanup := setupPullFixture()
+				defer cleanup()
+
+				pg := git.New(workDir, &noopMetrics{}, libtime.NewCurrentDateTime(), "")
+				headBefore := strings.TrimSpace(gitOutputStr(workDir, "rev-parse", "HEAD"))
+
+				logs, restore := captureSlogLogs()
+				defer restore()
+
+				Expect(pg.Pull(ctx)).NotTo(HaveOccurred())
+				Expect(pg.Pull(ctx)).NotTo(HaveOccurred())
+
+				headAfter := strings.TrimSpace(gitOutputStr(workDir, "rev-parse", "HEAD"))
+				Expect(headAfter).To(Equal(headBefore), "HEAD SHA must not change on no-op pulls")
+				head := strings.TrimSpace(
+					gitOutputStr(workDir, "rev-parse", "--abbrev-ref", "HEAD"),
+				)
+				Expect(head).NotTo(Equal("HEAD"), "HEAD must remain on a branch")
+
+				// AC4a: healthy repo emits ZERO recovery log lines.
+				logStr := logs.String()
+				Expect(logStr).NotTo(ContainSubstring("recovered from"),
+					"healthy repo must not emit recovery log lines, got: %s", logStr)
+			},
+		)
 	})
 })
 

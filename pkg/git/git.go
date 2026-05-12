@@ -35,6 +35,12 @@ var ErrNotFound = stderrors.New("file not found")
 // ErrInvalidPath is returned when the requested path fails validation.
 var ErrInvalidPath = stderrors.New("invalid path")
 
+// ErrRepoUnrecoverable is returned by Pull when the repository is in a state
+// that cannot be automatically healed (e.g., git rebase --abort fails, or
+// refs/remotes/origin/HEAD is missing for detached-HEAD recovery).
+// Callers detect this via errors.Is(err, ErrRepoUnrecoverable).
+var ErrRepoUnrecoverable = stderrors.New("repo state unrecoverable")
+
 // RebaseConflictError is returned by Pull when git rebase encounters a content conflict.
 // The repo is left in its conflicted state for human inspection.
 // git rebase --abort is NEVER invoked automatically.
@@ -436,6 +442,91 @@ func (g *git) pullRebaseAndPush(ctx context.Context, upstream string) error {
 	return nil
 }
 
+// recoverRepoState checks whether the repository is in an abandoned-rebase or
+// bare-detached-HEAD state and heals it before the normal pull flow runs.
+// Returns nil for a healthy repo (no-op, emits no log lines).
+// Returns errors.Wrap(ErrRepoUnrecoverable, ...) for states that cannot be healed.
+func (g *git) recoverRepoState(ctx context.Context) error {
+	rebaseMergeDir := filepath.Join(g.repoPath, ".git", "rebase-merge")
+	rebaseApplyDir := filepath.Join(g.repoPath, ".git", "rebase-apply")
+
+	_, errMerge := os.Stat(rebaseMergeDir)
+	_, errApply := os.Stat(rebaseApplyDir)
+
+	if errMerge == nil || errApply == nil {
+		// Abandoned rebase: abort it so Pull can run the normal fetch→state-machine flow.
+		out, err := g.runCmdRaw(ctx, g.repoPath, "rebase", "--abort")
+		if err != nil {
+			return errors.Wrapf(
+				ctx,
+				ErrRepoUnrecoverable,
+				"git rebase --abort failed: %s",
+				strings.TrimSpace(string(out)),
+			)
+		}
+		headOut, _ := g.runCmdOutput(ctx, g.repoPath, "rev-parse", "--abbrev-ref", "HEAD")
+		slog.InfoContext(
+			ctx,
+			"git-rest: recovered from abandoned rebase",
+			"branch",
+			strings.TrimSpace(string(headOut)),
+		)
+		return nil
+	}
+
+	// Check if HEAD is detached (no rebase in progress).
+	headOut, err := g.runCmdOutput(ctx, g.repoPath, "rev-parse", "--abbrev-ref", "HEAD")
+	if err != nil {
+		// Cannot determine HEAD state — let Pull's @{u} resolution surface the error.
+		return nil
+	}
+	if strings.TrimSpace(string(headOut)) != "HEAD" {
+		// HEAD is on a branch — healthy state, no-op.
+		return nil
+	}
+
+	// Bare detached HEAD: resolve the default branch from refs/remotes/origin/HEAD.
+	symrefOut, err := g.runCmdOutput(ctx, g.repoPath, "symbolic-ref", "refs/remotes/origin/HEAD")
+	if err != nil {
+		return errors.Wrap(
+			ctx,
+			ErrRepoUnrecoverable,
+			"cannot determine default branch: refs/remotes/origin/HEAD not set",
+		)
+	}
+	// symrefOut = "refs/remotes/origin/main\n" — strip the known prefix.
+	const remotePrefix = "refs/remotes/origin/"
+	trimmed := strings.TrimSpace(string(symrefOut))
+	if !strings.HasPrefix(trimmed, remotePrefix) {
+		return errors.Wrapf(
+			ctx,
+			ErrRepoUnrecoverable,
+			"unexpected symbolic-ref format: %s",
+			trimmed,
+		)
+	}
+	branch := strings.TrimPrefix(trimmed, remotePrefix)
+
+	if err := g.runCmd(ctx, g.repoPath, "checkout", branch); err != nil {
+		return errors.Wrapf(
+			ctx,
+			ErrRepoUnrecoverable,
+			"git checkout %s failed during detached-HEAD recovery",
+			branch,
+		)
+	}
+	if err := g.runCmd(ctx, g.repoPath, "branch", "--set-upstream-to=origin/"+branch, branch); err != nil {
+		return errors.Wrapf(
+			ctx,
+			ErrRepoUnrecoverable,
+			"git branch --set-upstream-to=origin/%s failed",
+			branch,
+		)
+	}
+	slog.InfoContext(ctx, "git-rest: recovered from detached HEAD", "branch", branch)
+	return nil
+}
+
 // Pull implements a deterministic 4-state sync:
 //   - local == remote        → no-op
 //   - local clean, remote new → fast-forward (git merge --ff-only)
@@ -457,6 +548,13 @@ func (g *git) Pull(ctx context.Context) error {
 	if !g.hasRemote(ctx) {
 		slog.DebugContext(ctx, "git pull skipped: no remote configured")
 		return nil
+	}
+
+	// Entry-state recovery: abort any abandoned rebase or restore a detached HEAD
+	// before @{u} resolution, which fails on any non-branch HEAD.
+	if err := g.recoverRepoState(ctx); err != nil {
+		g.metrics.IncGitOperationError("pull")
+		return err
 	}
 
 	upstreamOut, err := g.runCmdOutput(

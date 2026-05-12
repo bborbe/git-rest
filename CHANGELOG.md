@@ -2,6 +2,10 @@
 
 All notable changes to this project will be documented in this file.
 
+## v0.19.7
+
+- fix: `Pull` now auto-recovers from abandoned-rebase (`.git/rebase-merge/` or `.git/rebase-apply/` present) and bare-detached-HEAD states on entry. Previously any path leaving HEAD detached permanently wedged the puller with "fatal: HEAD does not point to a branch" until manual `kubectl exec` recovery. New `ErrRepoUnrecoverable` sentinel returned for unrecoverable states (missing `refs/remotes/origin/HEAD`, failed `git rebase --abort`); callers use `errors.Is`. Recovery actions log at INFO with `"branch"` field. Fixes `vault-obsidian-openclaw-0` stuck 0/1 Running for 2d2h (prod incident 2026-05-12).
+
 ## v0.19.6
 
 - fix: Install `tini` as PID 1 init reaper in Docker image to prevent zombie `[git] <defunct>` accumulation. With `/main` running as PID 1, grandchild processes spawned by `git` (ssh helpers, credential helpers) were reparented to `/main` on exit but never reaped — growing to ~18,000 zombies per pod after 3 days at `PULL_INTERVAL=30s` and blocking `k3s-killall.sh` node shutdown. `tini` reaps all orphaned children and forwards SIGTERM to `/main` for graceful shutdown (prod incident 2026-05-09, `vault-obsidian-trading-0`).
