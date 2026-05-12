@@ -95,7 +95,13 @@ var _ = Describe("Git", func() {
 	BeforeEach(func() {
 		ctx = context.Background()
 		workDir, cleanup = initRepo()
-		g = git.New(workDir, &noopMetrics{}, libtime.NewCurrentDateTime(), "")
+		g = git.New(
+			workDir,
+			&noopMetrics{},
+			libtime.NewCurrentDateTime(),
+			"",
+			git.NewMarkerResolver(workDir),
+		)
 	})
 
 	AfterEach(func() {
@@ -379,6 +385,7 @@ var _ = Describe("Git with non-existent repo path", func() {
 			&noopMetrics{},
 			libtime.NewCurrentDateTime(),
 			"",
+			git.NewMarkerResolver("/nonexistent/path/that/does/not/exist"),
 		)
 	})
 
@@ -409,7 +416,13 @@ var _ = Describe("Git SSH key", func() {
 		It("does not set GIT_SSH_COMMAND environment variable", func() {
 			workDir, cleanup := initRepo()
 			defer cleanup()
-			g := git.New(workDir, &noopMetrics{}, libtime.NewCurrentDateTime(), "")
+			g := git.New(
+				workDir,
+				&noopMetrics{},
+				libtime.NewCurrentDateTime(),
+				"",
+				git.NewMarkerResolver(workDir),
+			)
 			// Pull succeeds without GIT_SSH_COMMAND set
 			err := g.Pull(ctx)
 			Expect(err).NotTo(HaveOccurred())
@@ -431,6 +444,7 @@ var _ = Describe("Git SSH key", func() {
 				&noopMetrics{},
 				libtime.NewCurrentDateTime(),
 				git.SSHKeyPath(keyFile.Name()),
+				git.NewMarkerResolver(workDir),
 			)
 			// Pull will use GIT_SSH_COMMAND; the local file:// remote doesn't need SSH, so it still works
 			err = g.Pull(ctx)
@@ -458,7 +472,13 @@ var _ = Describe("Git Clone", func() {
 		defer func() { _ = os.RemoveAll(workDir) }()
 		// Clone into a subdir so the repo name is deterministic
 		targetDir := filepath.Join(workDir, "repo")
-		g := git.New(targetDir, &noopMetrics{}, libtime.NewCurrentDateTime(), "")
+		g := git.New(
+			targetDir,
+			&noopMetrics{},
+			libtime.NewCurrentDateTime(),
+			"",
+			git.NewMarkerResolver(targetDir),
+		)
 
 		err = g.Clone(ctx, git.RemoteURL(remoteDir))
 		Expect(err).NotTo(HaveOccurred())
@@ -471,7 +491,13 @@ var _ = Describe("Git Clone", func() {
 		Expect(err).NotTo(HaveOccurred())
 		defer func() { _ = os.RemoveAll(workDir) }()
 		targetDir := filepath.Join(workDir, "repo")
-		g := git.New(targetDir, &noopMetrics{}, libtime.NewCurrentDateTime(), "")
+		g := git.New(
+			targetDir,
+			&noopMetrics{},
+			libtime.NewCurrentDateTime(),
+			"",
+			git.NewMarkerResolver(targetDir),
+		)
 
 		err = g.Clone(ctx, git.RemoteURL("/nonexistent/path/that/does/not/exist"))
 		Expect(err).To(HaveOccurred())
@@ -493,7 +519,13 @@ var _ = Describe("Git with no remote configured", func() {
 		runGit(noRemoteDir, "init")
 		runGit(noRemoteDir, "config", "user.email", "test@test.com")
 		runGit(noRemoteDir, "config", "user.name", "Test")
-		noRemoteGit = git.New(noRemoteDir, &noopMetrics{}, libtime.NewCurrentDateTime(), "")
+		noRemoteGit = git.New(
+			noRemoteDir,
+			&noopMetrics{},
+			libtime.NewCurrentDateTime(),
+			"",
+			git.NewMarkerResolver(noRemoteDir),
+		)
 	})
 
 	It("Pull succeeds and skips when no remote configured", func() {
@@ -550,7 +582,13 @@ var _ = Describe("Git Init", func() {
 		Expect(err).NotTo(HaveOccurred())
 		defer func() { _ = os.RemoveAll(dir) }()
 
-		g := git.New(dir, &noopMetrics{}, libtime.NewCurrentDateTime(), "")
+		g := git.New(
+			dir,
+			&noopMetrics{},
+			libtime.NewCurrentDateTime(),
+			"",
+			git.NewMarkerResolver(dir),
+		)
 		err = g.Init(ctx)
 		Expect(err).NotTo(HaveOccurred())
 		_, err = os.Stat(filepath.Join(dir, ".git"))
@@ -563,6 +601,7 @@ var _ = Describe("Git Init", func() {
 			&noopMetrics{},
 			libtime.NewCurrentDateTime(),
 			"",
+			git.NewMarkerResolver("/nonexistent/path/that/does/not/exist/repo"),
 		)
 		err := g.Init(ctx)
 		Expect(err).To(HaveOccurred())
@@ -656,7 +695,13 @@ var _ = Describe("Pull state machine", func() {
 		ctx = context.Background()
 		workDir, externalPush, pullCleanup = setupPullFixture()
 		fakeMetrics = &mocks.FakeMetrics{}
-		pg = git.New(workDir, fakeMetrics, libtime.NewCurrentDateTime(), "")
+		pg = git.New(
+			workDir,
+			fakeMetrics,
+			libtime.NewCurrentDateTime(),
+			"",
+			git.NewMarkerResolver(workDir),
+		)
 	})
 
 	AfterEach(func() {
@@ -704,21 +749,27 @@ var _ = Describe("Pull state machine", func() {
 		})
 	})
 
-	Context("diverged, no content conflict (rebase+push)", func() {
+	Context("diverged, no content conflict (merge+push)", func() {
 		BeforeEach(func() {
 			externalPush("remote.txt", "from remote\n")
 			writeLocalCommit(workDir, "local.txt", "local only\n")
 		})
 
-		It("rebases and pushes, leaving linear history with both commits", func() {
+		It("AC1: merges and pushes, producing a merge commit with both files", func() {
 			Expect(pg.Pull(ctx)).To(BeNil())
 			log := gitOutputStr(workDir, "log", "--oneline")
-			Expect(log).To(ContainSubstring("remote.txt"))
-			Expect(log).To(ContainSubstring("local.txt"))
-			Expect(log).NotTo(ContainSubstring("Merge branch"))
+			Expect(log).To(ContainSubstring("remote.txt"), "remote commit must be in log")
+			Expect(log).To(ContainSubstring("local.txt"), "local commit must be in log")
+			Expect(log).To(ContainSubstring("Merge"), "merge commit must be present")
 		})
 
-		It("leaves nothing unpushed after rebase", func() {
+		It("AC1: increments merge outcome clean counter exactly once", func() {
+			Expect(pg.Pull(ctx)).To(BeNil())
+			Expect(fakeMetrics.IncMergeOutcomeCallCount()).To(Equal(1))
+			Expect(fakeMetrics.IncMergeOutcomeArgsForCall(0)).To(Equal("clean"))
+		})
+
+		It("AC1: leaves nothing unpushed after merge", func() {
 			Expect(pg.Pull(ctx)).To(BeNil())
 			unpushed := strings.TrimSpace(gitOutputStr(workDir, "log", "@{u}..HEAD", "--oneline"))
 			Expect(unpushed).To(BeEmpty())
@@ -743,31 +794,91 @@ var _ = Describe("Pull state machine", func() {
 		})
 	})
 
-	Context("diverged, content conflict during rebase", func() {
+	Context("diverged, same-line conflict (merge + MarkerResolver)", func() {
 		BeforeEach(func() {
 			externalPush("conflict.txt", "remote content\n")
 			writeLocalCommit(workDir, "conflict.txt", "local content\n")
 		})
 
-		It("returns a RebaseConflictError with the conflicting path", func() {
-			err := pg.Pull(ctx)
-			Expect(err).To(HaveOccurred())
-			var conflictErr *git.RebaseConflictError
-			Expect(errors.As(err, &conflictErr)).To(BeTrue())
-			Expect(conflictErr.Path).To(Equal("conflict.txt"))
+		It("AC2: Pull returns nil; merge commit message starts with frozen prefix", func() {
+			Expect(pg.Pull(ctx)).To(BeNil())
+			commitMsg := strings.TrimSpace(gitOutputStr(workDir, "log", "-1", "--format=%s"))
+			Expect(commitMsg).To(HavePrefix("git-rest: merge with marker-preserved conflicts in"))
+			Expect(commitMsg).To(ContainSubstring("conflict.txt"))
 		})
 
-		It("does not contain the git config hint substring", func() {
-			err := pg.Pull(ctx)
-			Expect(err).To(HaveOccurred())
-			Expect(
-				err.Error(),
-			).NotTo(ContainSubstring("Need to specify how to reconcile divergent branches"))
+		It("AC2: conflict.txt in merge commit contains both versions under markers", func() {
+			Expect(pg.Pull(ctx)).To(BeNil())
+			// Read file content from the latest merge commit tree (not working tree).
+			content := gitOutputStr(workDir, "show", "HEAD:conflict.txt")
+			Expect(content).To(ContainSubstring("<<<<<<<"), "must contain open marker")
+			Expect(content).To(ContainSubstring("======="), "must contain separator")
+			Expect(content).To(ContainSubstring(">>>>>>>"), "must contain close marker")
+			Expect(content).To(ContainSubstring("remote content"), "remote version must be present")
+			Expect(content).To(ContainSubstring("local content"), "local version must be present")
 		})
 
-		It("increments the rebase conflict metric exactly once", func() {
+		It("AC2: increments merge outcome resolved counter exactly once", func() {
+			Expect(pg.Pull(ctx)).To(BeNil())
+			Expect(fakeMetrics.IncMergeOutcomeCallCount()).To(Equal(1))
+			Expect(fakeMetrics.IncMergeOutcomeArgsForCall(0)).To(Equal("resolved"))
+		})
+
+		It("AC2: increments conflict paths counter by 1 (one conflicted file)", func() {
+			Expect(pg.Pull(ctx)).To(BeNil())
+			Expect(fakeMetrics.IncConflictPathsCallCount()).To(Equal(1))
+			Expect(fakeMetrics.IncConflictPathsArgsForCall(0)).To(Equal(1))
+		})
+
+		It("AC2: nothing unpushed after resolved merge", func() {
+			Expect(pg.Pull(ctx)).To(BeNil())
+			unpushed := strings.TrimSpace(gitOutputStr(workDir, "log", "@{u}..HEAD", "--oneline"))
+			Expect(unpushed).To(BeEmpty())
+		})
+	})
+
+	Context("diverged, same-line conflict, resolver returns error (AC3)", func() {
+		var stubResolver *mocks.FakeConflictResolver
+
+		BeforeEach(func() {
+			externalPush("conflict.txt", "remote content\n")
+			writeLocalCommit(workDir, "conflict.txt", "local content\n")
+
+			// Wire a stub resolver that always errors.
+			stubResolver = &mocks.FakeConflictResolver{}
+			stubResolver.ResolveReturns(errors.New("stub resolver failed"))
+			pg = git.New(workDir, fakeMetrics, libtime.NewCurrentDateTime(), "", stubResolver)
+		})
+
+		It("AC3: Pull returns error matching ErrConflictResolutionFailed via errors.Is", func() {
+			err := pg.Pull(ctx)
+			Expect(err).To(HaveOccurred())
+			Expect(errors.Is(err, git.ErrConflictResolutionFailed)).To(BeTrue(),
+				"expected ErrConflictResolutionFailed, got: %v", err)
+		})
+
+		It("AC3: repo is clean after aborted merge (on branch, no MERGE_HEAD)", func() {
 			_ = pg.Pull(ctx)
-			Expect(fakeMetrics.IncRebaseConflictCallCount()).To(Equal(1))
+			_, statErr := os.Stat(filepath.Join(workDir, ".git", "MERGE_HEAD"))
+			Expect(
+				os.IsNotExist(statErr),
+			).To(BeTrue(), ".git/MERGE_HEAD must not exist after aborted merge")
+			head := strings.TrimSpace(gitOutputStr(workDir, "rev-parse", "--abbrev-ref", "HEAD"))
+			Expect(head).NotTo(Equal("HEAD"), "HEAD must be on a branch")
+		})
+
+		It("AC3: increments merge outcome aborted counter exactly once", func() {
+			_ = pg.Pull(ctx)
+			Expect(fakeMetrics.IncMergeOutcomeCallCount()).To(Equal(1))
+			Expect(fakeMetrics.IncMergeOutcomeArgsForCall(0)).To(Equal("aborted"))
+		})
+
+		It("AC5: seam is genuinely pluggable — stub resolver Resolve was called once", func() {
+			_ = pg.Pull(ctx)
+			Expect(stubResolver.ResolveCallCount()).To(Equal(1),
+				"resolver.Resolve must be called exactly once per conflict merge attempt")
+			_, paths := stubResolver.ResolveArgsForCall(0)
+			Expect(paths).To(ContainElement("conflict.txt"))
 		})
 	})
 })
@@ -819,7 +930,13 @@ var _ = Describe("Entry-state recovery", func() {
 			logs, restore := captureSlogLogs()
 			defer restore()
 
-			pg := git.New(workDir, &noopMetrics{}, libtime.NewCurrentDateTime(), "")
+			pg := git.New(
+				workDir,
+				&noopMetrics{},
+				libtime.NewCurrentDateTime(),
+				"",
+				git.NewMarkerResolver(workDir),
+			)
 			err := pg.Pull(ctx)
 
 			Expect(err).NotTo(HaveOccurred(), "Pull should succeed after aborting abandoned rebase")
@@ -884,7 +1001,13 @@ var _ = Describe("Entry-state recovery", func() {
 			logs, restore := captureSlogLogs()
 			defer restore()
 
-			pg := git.New(workDir, &noopMetrics{}, libtime.NewCurrentDateTime(), "")
+			pg := git.New(
+				workDir,
+				&noopMetrics{},
+				libtime.NewCurrentDateTime(),
+				"",
+				git.NewMarkerResolver(workDir),
+			)
 			pullErr := pg.Pull(ctx)
 
 			Expect(pullErr).NotTo(HaveOccurred())
@@ -918,7 +1041,13 @@ var _ = Describe("Entry-state recovery", func() {
 			delCmd.Dir = workDir
 			_ = delCmd.Run()
 
-			pg := git.New(workDir, &noopMetrics{}, libtime.NewCurrentDateTime(), "")
+			pg := git.New(
+				workDir,
+				&noopMetrics{},
+				libtime.NewCurrentDateTime(),
+				"",
+				git.NewMarkerResolver(workDir),
+			)
 			pullErr := pg.Pull(ctx)
 
 			Expect(pullErr).To(HaveOccurred())
@@ -934,7 +1063,13 @@ var _ = Describe("Entry-state recovery", func() {
 				workDir, _, cleanup := setupPullFixture()
 				defer cleanup()
 
-				pg := git.New(workDir, &noopMetrics{}, libtime.NewCurrentDateTime(), "")
+				pg := git.New(
+					workDir,
+					&noopMetrics{},
+					libtime.NewCurrentDateTime(),
+					"",
+					git.NewMarkerResolver(workDir),
+				)
 				headBefore := strings.TrimSpace(gitOutputStr(workDir, "rev-parse", "HEAD"))
 
 				logs, restore := captureSlogLogs()
@@ -972,7 +1107,13 @@ var _ = Describe("Git ConfigureUser", func() {
 		DeferCleanup(func() { _ = os.RemoveAll(repoDir) })
 
 		runGit(repoDir, "init")
-		g = git.New(repoDir, &noopMetrics{}, libtime.NewCurrentDateTime(), "")
+		g = git.New(
+			repoDir,
+			&noopMetrics{},
+			libtime.NewCurrentDateTime(),
+			"",
+			git.NewMarkerResolver(repoDir),
+		)
 	})
 
 	readConfig := func(key string) string {

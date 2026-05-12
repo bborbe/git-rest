@@ -1,5 +1,5 @@
 ---
-status: verifying
+status: completed
 tags:
     - dark-factory
     - spec
@@ -8,6 +8,7 @@ approved: "2026-05-12T17:50:19Z"
 generating: "2026-05-12T17:52:51Z"
 prompted: "2026-05-12T18:07:44Z"
 verifying: "2026-05-12T18:08:18Z"
+completed: "2026-05-12T21:28:05Z"
 branch: dark-factory/entry-state-recovery
 ---
 
@@ -163,3 +164,17 @@ make precommit
 Plus the runtime replay called out in AC6: deploy the patched binary to a dev git-rest instance, force the abandoned-rebase state by inducing a same-file conflict, and observe automatic recovery without operator action.
 
 Note: line numbers in §Root Cause are pinned to `v0.19.6`. Prompts implementing this spec MUST re-verify line numbers against the current HEAD of `git-rest` before editing; function names (`Pull`, `pullRebaseAndPush`, `runCmdOutput`) are stable and authoritative.
+
+## Verification Result
+
+**Verified:** 2026-05-12T21:27:25Z (binary `v0.19.7-1-g3a90601`, image `git-rest:v0.19.7`)
+**Binary:** installed `dark-factory v0.156.1-1-g04f3863-dirty` (spec lifecycle); deployed `git-rest:v0.19.7` on `vault-obsidian-trading-0` (runtime replay)
+**Scenario:** induced abandoned rebase on dev pod via `git rebase --exec /bin/false HEAD~1 HEAD` at 21:21:18 UTC; observed automatic recovery across two puller ticks (no operator action)
+**Evidence:**
+- Code: `pkg/git/git.go:43` (`ErrRepoUnrecoverable` sentinel), `pkg/git/git.go:530` (`recoverRepoState`), called from `Pull` at `git.go:653` before `@{u}` resolution
+- Tests: `pkg/git/git_test.go` adds Context blocks for AC1 (abandoned rebase, line 858), AC2 (detached HEAD, line 908), AC3+AC4d (`errors.Is(ErrRepoUnrecoverable)`, line 975), AC4a (idempotency, line 1007); `captureSlogLogs` helper at line 842 asserts exactly one log line per recovery path
+- Runtime log (vault-obsidian-trading-0): `I0512 21:21:20.528828 git.go:468] INFO git-rest: recovered from abandoned rebase branch=HEAD`
+- Runtime log (vault-obsidian-trading-0): `I0512 21:21:50.534106 git.go:526] INFO git-rest: recovered from detached HEAD branch=master`
+- Pod state post-recovery: `Ready=true Restarts=0` (kubectlquant -n dev get pod), full recovery in 32s (< 3× PullInterval = 90s)
+- `make precommit` gated release of v0.19.7 (dark-factory precommit-required tag policy)
+**Verdict:** PASS

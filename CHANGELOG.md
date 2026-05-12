@@ -2,6 +2,10 @@
 
 All notable changes to this project will be documented in this file.
 
+## v0.20.1
+
+- fix: Replace `git rebase` with `git merge` in the puller's diverged-history path. Non-overlapping concurrent writes now auto-merge into a single commit (no operator action). Same-line conflicts are delegated to a pluggable `ConflictResolver`; the default `MarkerResolver` commits the merge with `<<<<<<<` / `=======` / `>>>>>>>` markers intact so both versions survive. Resolver failure aborts the merge and returns `ErrConflictResolutionFailed`. Two new counters (`git_rest_merge_outcome_total`, `git_rest_conflict_paths_total`) track merge outcomes and conflict frequency. Entry-state recovery extended to abort leftover `.git/MERGE_HEAD` from interrupted merges. Fixes vault-obsidian-openclaw-0 52h desync incident (2026-05-12): the dropped `tasks/analyse-trades-2026-05-11.md` commit would have been preserved under conflict markers instead of silently discarded.
+
 ## v0.20.0
 
 - feat: Add `ConflictResolver` interface and `MarkerResolver` implementation for pluggable merge conflict resolution; `ErrConflictResolutionFailed` sentinel for `errors.Is` detection

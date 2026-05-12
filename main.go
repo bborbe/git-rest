@@ -309,6 +309,7 @@ func (a *application) initIfNeeded(ctx context.Context) error {
 		metrics.NewMetrics(),
 		libtime.NewCurrentDateTime(),
 		a.GitSSHKey,
+		git.NewMarkerResolver(a.Repo),
 	)
 	if err := tmpGit.Init(ctx); err != nil {
 		return errors.Wrapf(ctx, err, "git init %s", a.Repo)
@@ -332,6 +333,7 @@ func (a *application) cloneIfNeeded(ctx context.Context) error {
 		metrics.NewMetrics(),
 		libtime.NewCurrentDateTime(),
 		a.GitSSHKey,
+		git.NewMarkerResolver(a.Repo),
 	)
 	if err := tmpGit.Clone(ctx, a.GitRemoteURL); err != nil {
 		return errors.Wrapf(ctx, err, "clone %s", a.GitRemoteURL)
@@ -352,6 +354,7 @@ func (a *application) configureUserIfSet(ctx context.Context) error {
 		metrics.NewMetrics(),
 		libtime.NewCurrentDateTime(),
 		a.GitSSHKey,
+		git.NewMarkerResolver(a.Repo),
 	)
 	if err := gitClient.ConfigureUser(ctx, a.GitUserName, a.GitUserEmail); err != nil {
 		return errors.Wrap(ctx, err, "configure git user")
@@ -375,6 +378,7 @@ func (a *application) createGitClient(ctx context.Context) (git.Git, error) {
 		metrics.NewMetrics(),
 		libtime.NewCurrentDateTime(),
 		a.GitSSHKey,
+		git.NewMarkerResolver(a.Repo),
 	), nil
 }
 

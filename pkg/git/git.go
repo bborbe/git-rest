@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -60,6 +61,8 @@ func (e *RebaseConflictError) Error() string {
 // parseRebaseConflictPath extracts the first conflicting file path from git rebase output.
 // git rebase emits "CONFLICT (content): Merge conflict in <path>" on content conflicts.
 // Returns empty string if no conflict line is found (non-conflict failure).
+//
+//nolint:unused // preserved per spec constraint; called by pullRebaseAndPush
 func parseRebaseConflictPath(output string) string {
 	const prefix = "Merge conflict in "
 	for _, line := range strings.Split(output, "\n") {
@@ -68,6 +71,25 @@ func parseRebaseConflictPath(output string) string {
 		}
 	}
 	return ""
+}
+
+// parseMergeConflictPaths extracts all conflicting file paths from git merge output.
+// git merge emits "CONFLICT (content): Merge conflict in <path>" for each content conflict.
+// Returns an empty slice if no conflict lines are found (non-conflict merge failure).
+func parseMergeConflictPaths(output string) []string {
+	const prefix = "Merge conflict in "
+	var paths []string
+	seen := make(map[string]bool)
+	for _, line := range strings.Split(output, "\n") {
+		if idx := strings.Index(line, prefix); idx >= 0 {
+			path := strings.TrimSpace(line[idx+len(prefix):])
+			if path != "" && !seen[path] {
+				paths = append(paths, path)
+				seen[path] = true
+			}
+		}
+	}
+	return paths
 }
 
 // Status represents the current state of the git working tree.
@@ -99,12 +121,14 @@ func New(
 	m metrics.Metrics,
 	currentDateTimeGetter libtime.CurrentDateTimeGetter,
 	sshKeyPath SSHKeyPath,
+	resolver ConflictResolver,
 ) Git {
 	return &git{
 		repoPath:              repoPath,
 		metrics:               m,
 		currentDateTimeGetter: currentDateTimeGetter,
 		sshKeyPath:            sshKeyPath,
+		resolver:              resolver,
 	}
 }
 
@@ -114,6 +138,7 @@ type git struct {
 	metrics               metrics.Metrics
 	currentDateTimeGetter libtime.CurrentDateTimeGetter
 	sshKeyPath            SSHKeyPath
+	resolver              ConflictResolver
 }
 
 // validatePath rejects empty, absolute, path-traversal, and .git paths.
@@ -430,6 +455,8 @@ func (g *git) pullFetchSHAs(
 
 // pullRebaseAndPush rebases the current branch onto upstream, then pushes.
 // Returns *RebaseConflictError on content conflicts (repo left in conflicted state).
+//
+//nolint:unused // preserved per spec constraint; not called from Pull but must remain for external callers
 func (g *git) pullRebaseAndPush(ctx context.Context, upstream string) error {
 	out, rebaseErr := g.runCmdRaw(ctx, g.repoPath, "rebase", upstream)
 	if rebaseErr != nil {
@@ -447,11 +474,101 @@ func (g *git) pullRebaseAndPush(ctx context.Context, upstream string) error {
 	return nil
 }
 
+// pullMergeAndPush merges upstream into the current branch and pushes.
+// Non-overlapping changes are auto-merged by git's three-way merge (result="clean").
+// Content conflicts are delegated to g.resolver (result="resolved" on success, "aborted" on failure).
+// On resolver failure the merge is aborted so the repo is left in a clean state.
+func (g *git) pullMergeAndPush(ctx context.Context, upstream string) error {
+	out, mergeErr := g.runCmdRaw(ctx, g.repoPath, "merge", "--no-edit", upstream)
+	if mergeErr == nil {
+		// Clean merge: git auto-produced a merge commit.
+		g.metrics.IncMergeOutcome("clean")
+		slog.InfoContext(ctx, "git-rest: merged diverged history", "upstream", upstream)
+		if pushErr := g.runCmd(ctx, g.repoPath, "push"); pushErr != nil {
+			g.metrics.IncGitOperationError("push")
+			return errors.Wrap(ctx, pushErr, "push after clean merge failed")
+		}
+		return nil
+	}
+	return g.resolveConflictMerge(ctx, upstream, out, mergeErr)
+}
+
+// resolveConflictMerge handles the conflict path of pullMergeAndPush: delegates to g.resolver,
+// commits the resolved merge, then pushes.
+func (g *git) resolveConflictMerge(
+	ctx context.Context,
+	upstream string,
+	mergeOut []byte,
+	mergeErr error,
+) error {
+	conflictPaths := parseMergeConflictPaths(string(mergeOut))
+	if len(conflictPaths) == 0 {
+		g.metrics.IncGitOperationError("merge")
+		return errors.Wrapf(
+			ctx,
+			mergeErr,
+			"merge %s: %s",
+			upstream,
+			strings.TrimSpace(string(mergeOut)),
+		)
+	}
+	if resolveErr := g.resolver.Resolve(ctx, conflictPaths); resolveErr != nil {
+		_, _ = g.runCmdRaw(ctx, g.repoPath, "merge", "--abort")
+		g.metrics.IncMergeOutcome("aborted")
+		return errors.Wrap(ctx, ErrConflictResolutionFailed, "conflict resolver failed")
+	}
+	sort.Strings(conflictPaths)
+	commitMsg := "git-rest: merge with marker-preserved conflicts in " + strings.Join(
+		conflictPaths,
+		", ",
+	)
+	if commitErr := g.runCmd(ctx, g.repoPath, "commit", "-m", commitMsg); commitErr != nil {
+		_, _ = g.runCmdRaw(ctx, g.repoPath, "merge", "--abort")
+		g.metrics.IncGitOperationError("merge")
+		return errors.Wrap(ctx, commitErr, "commit resolved merge")
+	}
+	g.metrics.IncMergeOutcome("resolved")
+	g.metrics.IncConflictPaths(len(conflictPaths))
+	slog.InfoContext(ctx, "git-rest: merge committed with conflict markers", "paths", conflictPaths)
+	if pushErr := g.runCmd(ctx, g.repoPath, "push"); pushErr != nil {
+		g.metrics.IncGitOperationError("push")
+		return errors.Wrap(ctx, pushErr, "push after resolved merge failed")
+	}
+	return nil
+}
+
+// recoverAbandonedMerge aborts an interrupted merge (.git/MERGE_HEAD present).
+// Returns (true, nil) when a merge was aborted, (false, nil) when none was present,
+// and (true, ErrRepoUnrecoverable) when abort failed.
+func (g *git) recoverAbandonedMerge(ctx context.Context) (bool, error) {
+	mergeHeadFile := filepath.Join(g.repoPath, ".git", "MERGE_HEAD")
+	if _, err := os.Stat(mergeHeadFile); err != nil {
+		return false, nil
+	}
+	out, abortErr := g.runCmdRaw(ctx, g.repoPath, "merge", "--abort")
+	if abortErr != nil {
+		return true, errors.Wrapf(
+			ctx,
+			ErrRepoUnrecoverable,
+			"git merge --abort failed: %s",
+			strings.TrimSpace(string(out)),
+		)
+	}
+	slog.InfoContext(ctx, "git-rest: recovered from abandoned merge")
+	return true, nil
+}
+
 // recoverRepoState checks whether the repository is in an abandoned-rebase or
 // bare-detached-HEAD state and heals it before the normal pull flow runs.
 // Returns nil for a healthy repo (no-op, emits no log lines).
 // Returns errors.Wrap(ErrRepoUnrecoverable, ...) for states that cannot be healed.
 func (g *git) recoverRepoState(ctx context.Context) error {
+	// Abandoned merge: .git/MERGE_HEAD present means a previous merge was interrupted
+	// (e.g. process killed mid-merge or resolver panicked). Abort it so Pull can run cleanly.
+	if recovered, err := g.recoverAbandonedMerge(ctx); recovered || err != nil {
+		return err
+	}
+
 	rebaseMergeDir := filepath.Join(g.repoPath, ".git", "rebase-merge")
 	rebaseApplyDir := filepath.Join(g.repoPath, ".git", "rebase-apply")
 
@@ -592,7 +709,7 @@ func (g *git) Pull(ctx context.Context) error {
 		}
 		return nil
 	default:
-		return g.pullRebaseAndPush(ctx, upstream)
+		return g.pullMergeAndPush(ctx, upstream)
 	}
 }
 

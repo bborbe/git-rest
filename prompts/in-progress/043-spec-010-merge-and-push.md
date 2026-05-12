@@ -1,8 +1,12 @@
 ---
-status: approved
+status: committing
 spec: [010-merge-with-conflict-resolver]
+summary: Replaced pullRebaseAndPush with pullMergeAndPush in Pull's default case, added parseMergeConflictPaths and resolveConflictMerge helpers, extended recoverRepoState with MERGE_HEAD detection via recoverAbandonedMerge, wired ConflictResolver through New()/factory/main.go, updated all git.New call sites in tests, and added AC1/AC2/AC3/AC5 integration tests.
+container: git-rest-043-spec-010-merge-and-push
+dark-factory-version: v0.156.1-1-g04f3863-dirty
 created: "2026-05-12T21:00:00Z"
 queued: "2026-05-12T21:14:19Z"
+started: "2026-05-12T21:20:35Z"
 branch: dark-factory/merge-with-conflict-resolver
 ---
 
