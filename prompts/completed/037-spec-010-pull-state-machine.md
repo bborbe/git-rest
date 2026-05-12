@@ -1,6 +1,6 @@
 ---
 status: completed
-spec: [006-bug-pull-cannot-recover-from-divergence]
+spec: [010-entry-state-recovery]
 summary: Replaced git pull with a deterministic 4-state sync machine (no-op/fast-forward/push/rebase+push), added RebaseConflictError, IncRebaseConflict metric, conflict label on GitOperationErrors counter, and integration tests for all 6 Pull states using local bare-repo fixtures.
 container: git-rest-037-spec-006-pull-state-machine
 dark-factory-version: v0.147.2-1-g30ba42f
