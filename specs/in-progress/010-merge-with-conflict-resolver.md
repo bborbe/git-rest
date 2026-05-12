@@ -1,11 +1,13 @@
 ---
-status: generating
+status: verifying
 tags:
     - dark-factory
     - spec
     - bug
 approved: "2026-05-12T20:51:43Z"
 generating: "2026-05-12T20:51:44Z"
+prompted: "2026-05-12T21:02:51Z"
+verifying: "2026-05-12T21:03:18Z"
 branch: dark-factory/merge-with-conflict-resolver
 ---
 
