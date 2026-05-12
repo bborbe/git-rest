@@ -1,5 +1,5 @@
 ---
-status: committing
+status: completed
 spec: [009-entry-state-recovery]
 summary: Added ErrRepoUnrecoverable sentinel and recoverRepoState method to Pull() in pkg/git/git.go with four new Entry-state recovery Ginkgo tests covering abandoned-rebase, detached-HEAD, missing-origin/HEAD, and healthy-repo paths.
 container: git-rest-041-spec-009-entry-state-recovery
@@ -7,6 +7,7 @@ dark-factory-version: v0.156.1-1-g04f3863-dirty
 created: "2026-05-12T18:00:00Z"
 queued: "2026-05-12T18:58:50Z"
 started: "2026-05-12T18:58:52Z"
+completed: "2026-05-12T19:04:37Z"
 ---
 
 <summary>
