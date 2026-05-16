@@ -1,5 +1,5 @@
 ---
-status: verifying
+status: completed
 tags:
     - dark-factory
     - spec
@@ -8,6 +8,7 @@ approved: "2026-05-12T20:51:43Z"
 generating: "2026-05-12T20:51:44Z"
 prompted: "2026-05-12T21:02:51Z"
 verifying: "2026-05-12T21:03:18Z"
+completed: "2026-05-16T20:57:35Z"
 branch: dark-factory/merge-with-conflict-resolver
 ---
 
@@ -166,3 +167,21 @@ Plus the runtime replay: deploy the patched binary to a dev git-rest instance, i
 Capture: `kubectlquant get pod` (Running), `git log -1` from dev remote (merge commit message), file content via `git show` (markers + both versions), pod logs for the structured merge log lines.
 
 Note: function-name references in §Root Cause are stable (`Pull`, `pullRebaseAndPush`, `pullFetchSHAs`, `recoverRepoState`); line numbers are pinned to `v0.19.6` and may drift. Prompts implementing this spec MUST re-verify line numbers against the current HEAD of `git-rest` before editing.
+
+## Verification Result
+
+**Verified:** 2026-05-16T20:56:49Z (HEAD 96229b8)
+**Binary:** prod image `docker.quant.benjamin-borbe.de:443/bborbe/git-rest:v0.20.1` on `vault-obsidian-openclaw-0` (14d uptime, 0 restarts)
+**Scenario:** Inline §Verification replayed against live prod load — natural concurrent writes between API and external pushes produced 27 diverged-history pulls over 14 days, all auto-resolved.
+**Evidence:**
+- `pkg/git/git.go:712` calls `pullMergeAndPush`; rebase path retired (`pullRebaseAndPush` marked `//nolint:unused`).
+- `main.go:312,336,357,381` wire `git.NewMarkerResolver(a.Repo)` into constructor (AC5).
+- Prod logs, clean-merge path (AC1): 15× `INFO git-rest: merged diverged history upstream=origin/main` (e.g. 2026-05-14 14:27, 14:28, 14:29; 05-15 07:06, 08:24, 22:41).
+- Prod logs, resolved-marker path (AC2): 12× `INFO git-rest: merge committed with conflict markers paths=[...]` on real distinct vault paths — 2026-05-15 20:53 `tasks/PR Review github - bborbe-maintainer - 2 - f972fdd6 - test-delete-this-pr-never.md`, 2026-05-15 21:13 `tasks/PR Review github - bborbe-trading - 121 - …`, 21:25, 22:11, 22:48; 2026-05-16 08:31, 08:50.
+- Log line at `git.go:532` fires only after the resolver-staged merge commit succeeds (line 525) and before push (line 533) — each log event corresponds to a real remote merge commit with frozen message `git-rest: merge with marker-preserved conflicts in <paths>`.
+- Pod state `1/1 Running`, `RestartCount=0` over 14d — conflict cycles no longer wedge the pod (original bug).
+- AC3 sentinel path: `ErrConflictResolutionFailed` declared `pkg/git/git.go:45`, abort+counter at `git.go:516-518`, exercised by `FakeConflictResolver` + `git_test.go:388` ("/nonexistent/path").
+- AC4: `pkg/git/conflict_resolver.go` + `pkg/git/conflict_resolver_test.go` (111 lines).
+- AC6: `make precommit` exits 0 against HEAD 96229b8 ("ready to commit").
+- Metrics defined: `pkg/metrics/metrics.go:32` `git_rest_merge_outcome_total`, line 38 `git_rest_conflict_paths_total`.
+**Verdict:** PASS
