@@ -17,3 +17,15 @@ reason = "go.etcd.io/bbolt v1.4.3 dep, no fix available"
 [[IgnoredVulns]]
 id = "GHSA-xmrv-pmrh-hhx2"
 reason = "aws-sdk-go-v2 s3/eventstream, upgrade pending"
+
+[[IgnoredVulns]]
+id = "GHSA-rg2x-37c3-w2rh"
+reason = "github.com/docker/docker indirect dep, no fix available upstream"
+
+[[IgnoredVulns]]
+id = "GHSA-vp62-88p7-qqf5"
+reason = "github.com/docker/docker indirect dep, no fix available upstream"
+
+[[IgnoredVulns]]
+id = "GHSA-x86f-5xw2-fm2r"
+reason = "github.com/docker/docker indirect dep, no fix available upstream"
