@@ -8,6 +8,11 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 * MINOR version when you add functionality in a backwards-compatible manner, and
 * PATCH version when you make backwards-compatible bug fixes.
 
+## Unreleased
+
+- feat: Add `git_rest_quarantined_files_total` unlabeled Prometheus counter for per-file quarantine events. The counter is registered at process start and pre-initialised to zero, so the time series is visible on `/metrics` before any quarantine event has occurred. Operators can `rate(git_rest_quarantined_files_total[5m])` to spot a sudden uptick of corrupt files in a served repo.
+- feat: Add `git_mv_failed` label value to the existing `git_rest_resolver_failures_total{category}` counter (alongside the pre-existing `unsafe_path`). `git_mv_failed` is distinct from `git_add_failed` because quarantine uses `git mv` (a different subcommand) and the failure modes diverge on the same boundary.
+
 ## v0.21.0
 
 - feat: Add `YAMLMergeResolver` for conflict resolution on markdown files with YAML frontmatter. Deep-merges frontmatter keys (theirs wins on overlap), concatenates bodies, and stages the result. On YAML parse failure, missing frontmatter delimiter, file-write error, or `git add` failure, returns the existing `ErrConflictResolutionFailed` sentinel so the puller aborts the merge (no invalid file is ever committed).

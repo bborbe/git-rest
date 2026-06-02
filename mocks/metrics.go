@@ -30,6 +30,10 @@ type FakeMetrics struct {
 	incMergeOutcomeArgsForCall []struct {
 		arg1 string
 	}
+	IncQuarantinedFilesStub        func()
+	incQuarantinedFilesMutex       sync.RWMutex
+	incQuarantinedFilesArgsForCall []struct {
+	}
 	IncRebaseConflictStub        func()
 	incRebaseConflictMutex       sync.RWMutex
 	incRebaseConflictArgsForCall []struct {
@@ -177,6 +181,30 @@ func (fake *FakeMetrics) IncMergeOutcomeArgsForCall(i int) string {
 	defer fake.incMergeOutcomeMutex.RUnlock()
 	argsForCall := fake.incMergeOutcomeArgsForCall[i]
 	return argsForCall.arg1
+}
+
+func (fake *FakeMetrics) IncQuarantinedFiles() {
+	fake.incQuarantinedFilesMutex.Lock()
+	fake.incQuarantinedFilesArgsForCall = append(fake.incQuarantinedFilesArgsForCall, struct {
+	}{})
+	stub := fake.IncQuarantinedFilesStub
+	fake.recordInvocation("IncQuarantinedFiles", []interface{}{})
+	fake.incQuarantinedFilesMutex.Unlock()
+	if stub != nil {
+		fake.IncQuarantinedFilesStub()
+	}
+}
+
+func (fake *FakeMetrics) IncQuarantinedFilesCallCount() int {
+	fake.incQuarantinedFilesMutex.RLock()
+	defer fake.incQuarantinedFilesMutex.RUnlock()
+	return len(fake.incQuarantinedFilesArgsForCall)
+}
+
+func (fake *FakeMetrics) IncQuarantinedFilesCalls(stub func()) {
+	fake.incQuarantinedFilesMutex.Lock()
+	defer fake.incQuarantinedFilesMutex.Unlock()
+	fake.IncQuarantinedFilesStub = stub
 }
 
 func (fake *FakeMetrics) IncRebaseConflict() {
