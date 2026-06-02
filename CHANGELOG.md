@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## Unreleased
+## v0.21.0
 
 - feat: Add `YAMLMergeResolver` for conflict resolution on markdown files with YAML frontmatter. Deep-merges frontmatter keys (theirs wins on overlap), concatenates bodies, and stages the result. On YAML parse failure, missing frontmatter delimiter, file-write error, or `git add` failure, returns the existing `ErrConflictResolutionFailed` sentinel so the puller aborts the merge (no invalid file is ever committed).
 - feat: Add `--vault-write` flag / `VAULT_WRITE_MODE` env (default `false`). When `true`, the pod uses `YAMLMergeResolver`; when `false`, behavior is unchanged (`MarkerResolver`). Selection is per-process; non-vault pods are unaffected.
