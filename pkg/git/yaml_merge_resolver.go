@@ -22,10 +22,11 @@ import (
 
 // Failure category labels emitted on git_rest_resolver_failures_total{category=...}.
 const (
-	resolverFailureYAMLParse = "yaml_parse_failed"
-	resolverFailureNoFront   = "no_frontmatter"
-	resolverFailureWrite     = "write_failed"
-	resolverFailureGitAdd    = "git_add_failed"
+	resolverFailureYAMLParse  = "yaml_parse_failed"
+	resolverFailureNoFront    = "no_frontmatter"
+	resolverFailureWrite      = "write_failed"
+	resolverFailureGitAdd     = "git_add_failed"
+	resolverFailureUnsafePath = "unsafe_path"
 )
 
 // NewYAMLMergeResolver returns a ConflictResolver that deep-merges YAML frontmatter
@@ -67,7 +68,7 @@ func (r *yamlMergeResolver) Resolve(ctx context.Context, conflictedPaths []strin
 func (r *yamlMergeResolver) resolveOne(ctx context.Context, path string) error {
 	abs, err := r.safePath(path)
 	if err != nil {
-		r.metrics.IncResolverFailure(resolverFailureWrite)
+		r.metrics.IncResolverFailure(resolverFailureUnsafePath)
 		glog.Warningf("yaml-merge-resolver: unsafe path %q: %v", path, err)
 		return errors.Wrap(ctx, ErrConflictResolutionFailed, "unsafe conflict path")
 	}
@@ -191,6 +192,17 @@ func (r *yamlMergeResolver) safePath(rel string) (string, error) {
 // splitConflictSides extracts the ours and theirs versions of the first conflict
 // region from a file containing standard git three-way conflict markers. It returns
 // ok=false if either marker is missing.
+//
+// Assumption: the conflict region is a self-contained frontmatter block — either it
+// already starts with "---" (the opening delimiter was inside the conflict), or the
+// base frontmatter's opening "---" was outside (above) the conflict markers and we
+// reattach it via the conditional prepend below. Keys that live in the frontmatter
+// but OUTSIDE the conflict region are NOT merged; the resolver only reconciles what
+// the three-way merge actually disagreed on. This matches the spec's "agent vault
+// write" scope (157-increment prod evidence: conflicts are frontmatter-shape
+// disagreements where both sides ARE the whole block). For non-frontmatter-shape
+// inputs, splitFrontmatter rejects the result and the resolver falls through to the
+// no_frontmatter category — no silent content loss.
 func splitConflictSides(content string) (oursStr string, theirsStr string, ok bool) {
 	const (
 		openMarker  = "<<<<<<<"

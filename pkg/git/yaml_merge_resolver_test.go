@@ -282,7 +282,7 @@ var _ = Describe("YAMLMergeResolver", func() {
 		)
 
 		It(
-			"AC-git-add-failed: path does not exist on disk → write_failed (read fails first)",
+			"AC-read-failed: path does not exist on disk → write_failed (read fails first)",
 			func() {
 				workDir, _, cleanup := setupYAMLConflictRepo(
 					"a: 1\n", "X",
@@ -293,6 +293,26 @@ var _ = Describe("YAMLMergeResolver", func() {
 				err := r.Resolve(ctx, []string{"does-not-exist.md"})
 				Expect(stderrors.Is(err, git.ErrConflictResolutionFailed)).To(BeTrue())
 				Expect(fakeMetrics.IncResolverFailureArgsForCall(0)).To(Equal("write_failed"))
+			},
+		)
+
+		It(
+			"AC-git-add-failed: merged file written successfully, but `git add` fails (no .git/) → git_add_failed",
+			func() {
+				workDir, rel, cleanup := setupYAMLConflictRepo(
+					"a: 1\n", "X",
+					"b: 2\n", "Y",
+				)
+				defer cleanup()
+				// Break the git repo AFTER the conflict was produced: remove .git/
+				// entirely. The resolver's read+parse+merge+write all succeed (the
+				// conflicted file is still on disk), but `git add` fails because the
+				// working directory is no longer a git repository.
+				Expect(os.RemoveAll(filepath.Join(workDir, ".git"))).To(Succeed())
+				r := git.NewYAMLMergeResolver(workDir, fakeMetrics)
+				err := r.Resolve(ctx, []string{rel})
+				Expect(stderrors.Is(err, git.ErrConflictResolutionFailed)).To(BeTrue())
+				Expect(fakeMetrics.IncResolverFailureArgsForCall(0)).To(Equal("git_add_failed"))
 			},
 		)
 
@@ -315,17 +335,75 @@ var _ = Describe("YAMLMergeResolver", func() {
 			},
 		)
 
-		It("AC-security-escape: path containing `..` is rejected without I/O", func() {
+		It(
+			"AC-security-escape: path containing `..` is rejected without I/O → unsafe_path",
+			func() {
+				workDir, _, cleanup := setupYAMLConflictRepo(
+					"a: 1\n", "X",
+					"b: 2\n", "Y",
+				)
+				defer cleanup()
+				r := git.NewYAMLMergeResolver(workDir, fakeMetrics)
+				err := r.Resolve(ctx, []string{"../escape.md"})
+				Expect(stderrors.Is(err, git.ErrConflictResolutionFailed)).To(BeTrue())
+				Expect(fakeMetrics.IncResolverFailureArgsForCall(0)).To(Equal("unsafe_path"))
+			},
+		)
+
+		It("AC-security-absolute: absolute path is rejected → unsafe_path", func() {
 			workDir, _, cleanup := setupYAMLConflictRepo(
 				"a: 1\n", "X",
 				"b: 2\n", "Y",
 			)
 			defer cleanup()
 			r := git.NewYAMLMergeResolver(workDir, fakeMetrics)
-			err := r.Resolve(ctx, []string{"../escape.md"})
+			err := r.Resolve(ctx, []string{"/etc/passwd"})
 			Expect(stderrors.Is(err, git.ErrConflictResolutionFailed)).To(BeTrue())
-			Expect(fakeMetrics.IncResolverFailureArgsForCall(0)).To(Equal("write_failed"))
+			Expect(fakeMetrics.IncResolverFailureArgsForCall(0)).To(Equal("unsafe_path"))
 		})
+
+		It(
+			"AC-conflict-region-starts-with-delim: ours/theirs each contain a self-contained "+
+				"`---`-bracketed frontmatter block → merges cleanly without double-`---` prepend",
+			func() {
+				workDir, rel, cleanup := setupYAMLConflictRepo(
+					"a: 1\n", "X",
+					"b: 2\n", "Y",
+				)
+				defer cleanup()
+				abs := filepath.Join(workDir, rel)
+				// Synthetic conflict where the opening `---` is INSIDE the conflict
+				// markers on each side. This exercises the conditional-prepend branch
+				// where the prepend MUST NOT fire (otherwise we'd produce "---\n---\n"
+				// and corrupt the merged YAML).
+				Expect(os.WriteFile(abs, []byte(
+					"<<<<<<< HEAD\n"+
+						"---\n"+
+						"a: 1\n"+
+						"---\n"+
+						"X\n"+
+						"=======\n"+
+						"---\n"+
+						"b: 2\n"+
+						"---\n"+
+						"Y\n"+
+						">>>>>>> branch\n",
+				), 0o600)).To(Succeed())
+				r := git.NewYAMLMergeResolver(workDir, fakeMetrics)
+				err := r.Resolve(ctx, []string{rel})
+				Expect(err).NotTo(HaveOccurred())
+				// Merged frontmatter must parse to {a: 1, b: 2} (theirs wins on overlap;
+				// here keys are disjoint so the result is the union).
+				fm := parseFrontmatterOf(abs)
+				Expect(fm).To(HaveKeyWithValue("a", 1))
+				Expect(fm).To(HaveKeyWithValue("b", 2))
+				// And the file must not contain a double `---` artifact.
+				raw, readErr := os.ReadFile(abs)
+				Expect(readErr).NotTo(HaveOccurred())
+				Expect(strings.Contains(string(raw), "---\n---\n")).To(BeFalse(),
+					"merged file must not contain double `---` opener")
+			},
+		)
 	})
 
 	Describe("Metric pre-initialisation (spec AC: zero-init labels)", func() {
@@ -337,6 +415,7 @@ var _ = Describe("YAMLMergeResolver", func() {
 			Expect(gatherer).To(ContainElement("no_frontmatter"))
 			Expect(gatherer).To(ContainElement("write_failed"))
 			Expect(gatherer).To(ContainElement("git_add_failed"))
+			Expect(gatherer).To(ContainElement("unsafe_path"))
 		})
 	})
 })

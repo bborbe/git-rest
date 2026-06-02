@@ -74,7 +74,7 @@ func init() {
 	for _, result := range []string{"clean", "resolved", "aborted"} {
 		MergeOutcomeTotal.WithLabelValues(result).Add(0)
 	}
-	for _, category := range []string{"yaml_parse_failed", "no_frontmatter", "write_failed", "git_add_failed"} {
+	for _, category := range []string{"yaml_parse_failed", "no_frontmatter", "write_failed", "git_add_failed", "unsafe_path"} {
 		ResolverFailuresTotal.WithLabelValues(category).Add(0)
 	}
 }
