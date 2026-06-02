@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+Please choose versions by [Semantic Versioning](http://semver.org/).
+
+* MAJOR version when you make incompatible API changes,
+* MINOR version when you add functionality in a backwards-compatible manner, and
+* PATCH version when you make backwards-compatible bug fixes.
+
 ## v0.21.0
 
 - feat: Add `YAMLMergeResolver` for conflict resolution on markdown files with YAML frontmatter. Deep-merges frontmatter keys (theirs wins on overlap), concatenates bodies, and stages the result. On YAML parse failure, missing frontmatter delimiter, file-write error, or `git add` failure, returns the existing `ErrConflictResolutionFailed` sentinel so the puller aborts the merge (no invalid file is ever committed).
@@ -53,12 +59,6 @@ All notable changes to this project will be documented in this file.
 ## v0.19.0
 
 - feat: Introduce `PullStateCache` in `pkg/puller/pull_state.go` recording every pull outcome (success timestamp + last error) with a configurable freshness threshold; add `--pull-timeout` / `PULL_TIMEOUT` flag (default 60s) bounding each per-pull subprocess so a stalled SSH connection cannot hold the git mutex indefinitely
-
-Please choose versions by [Semantic Versioning](http://semver.org/).
-
-* MAJOR version when you make incompatible API changes,
-* MINOR version when you add functionality in a backwards-compatible manner, and
-* PATCH version when you make backwards-compatible bug fixes.
 
 ## v0.18.0
 
