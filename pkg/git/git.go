@@ -585,6 +585,10 @@ func (g *git) resolveConflictMerge(
 // exercised directly from internal tests (package git) without fabricating a real git merge
 // output. Returns nil on successful commit+push; returns wrapped ErrConflictResolutionFailed
 // on any abort path.
+//
+// Ordering invariant (do not reorder): validateConflictPathsSafe MUST run BEFORE
+// ensureConflictsDir so an unsafe-path abort never creates _conflicts/ as a side-effect.
+// Reordering breaks the path-traversal test's negative-evidence check.
 func (g *git) resolveConflictPaths(
 	ctx context.Context,
 	conflictPaths []string,
@@ -651,7 +655,8 @@ func (g *git) validateConflictPathsSafe(
 
 // resolveEachPath runs the per-file resolver-or-quarantine loop. All paths in
 // conflictPaths MUST already be safe (call validateConflictPathsSafe first).
-// Returns (resolved, quarantined).
+// Returns (resolved, quarantined). Honors ctx cancellation between iterations
+// so a cancelled context interrupts remaining path processing.
 func (g *git) resolveEachPath(
 	ctx context.Context,
 	conflictPaths []string,
@@ -660,6 +665,11 @@ func (g *git) resolveEachPath(
 	resolved := make([]string, 0, len(conflictPaths))
 	quarantined := make([]string, 0, len(conflictPaths))
 	for _, path := range conflictPaths {
+		select {
+		case <-ctx.Done():
+			return resolved, quarantined
+		default:
+		}
 		resolveErr := g.resolver.Resolve(ctx, []string{path})
 		if resolveErr == nil {
 			resolved = append(resolved, path)
@@ -754,7 +764,7 @@ func (g *git) ensureConflictsDir(ctx context.Context) error {
 		)
 		_, _ = g.runCmdRaw(ctx, g.repoPath, "merge", "--abort")
 		g.metrics.IncMergeOutcome("aborted")
-		return errors.Wrap(ctx, ErrConflictResolutionFailed, "stat _conflicts")
+		return errors.Wrapf(ctx, ErrConflictResolutionFailed, "stat _conflicts: %v", statErr)
 	}
 	if mkErr := os.MkdirAll(conflictsDirAbs, 0o750); mkErr != nil {
 		slog.ErrorContext(
@@ -767,7 +777,7 @@ func (g *git) ensureConflictsDir(ctx context.Context) error {
 		)
 		_, _ = g.runCmdRaw(ctx, g.repoPath, "merge", "--abort")
 		g.metrics.IncMergeOutcome("aborted")
-		return errors.Wrap(ctx, ErrConflictResolutionFailed, "mkdir _conflicts")
+		return errors.Wrapf(ctx, ErrConflictResolutionFailed, "mkdir _conflicts: %v", mkErr)
 	}
 	return nil
 }
@@ -779,7 +789,17 @@ func (g *git) ensureConflictsDir(ctx context.Context) error {
 // path). `git mv` is not used because git refuses to move conflicted files;
 // instead we read the source, git rm the source to clear the conflict, then
 // write the destination and git add it.
+// nolint:funlen // 5 sequential IO steps (read → rm → mkdir → write → add),
+// each with its own metric + slog + early return. Linear flow is clearer than
+// extracting per-step helpers that would all share the same signature.
 func (g *git) quarantineOne(ctx context.Context, path string, unixSeconds int64) bool {
+	// Guard the blocking os.* syscalls (ReadFile, MkdirAll, WriteFile) — these
+	// cannot be interrupted by exec.CommandContext, so we check ctx upfront.
+	select {
+	case <-ctx.Done():
+		return false
+	default:
+	}
 	destRel := quarantineDestPath(path, unixSeconds)
 	raw, readErr := os.ReadFile(
 		filepath.Join(g.repoPath, path),

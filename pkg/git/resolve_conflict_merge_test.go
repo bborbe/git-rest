@@ -17,10 +17,18 @@ import (
 )
 
 // unsafeTestMetrics is a minimal metrics.Metrics implementation used by the
-// internal unsafe-path test. It records per-method call counts and arguments
-// so the test can assert on the unsafe_path counter and aborted merge outcome
-// without importing the top-level mocks package (which would create an import
-// cycle: pkg/git_test -> mocks -> pkg/git).
+// internal tests in this file. It records per-method call counts and
+// arguments so the tests can assert on counters and merge outcomes WITHOUT
+// importing mocks.FakeMetrics.
+//
+// Why not Counterfeiter mocks: the tests in this file live in `package git`
+// (internal) because they call unexported symbols (resolveConflictPaths,
+// quarantineOne, quarantineDestPath, unsafeConflictPath). The generated mock
+// at `mocks/metrics.go` already imports `pkg/git` (counterfeiter directive
+// lives there), so importing `mocks` from inside `package git` would create
+// a cycle (pkg/git -> mocks -> pkg/git). External-test-package tests in
+// `git_test.go` correctly use mocks.FakeMetrics; these internal tests have
+// to roll their own.
 type unsafeTestMetrics struct {
 	mu                      sync.Mutex
 	incResolverFailureCalls []string
