@@ -1,5 +1,5 @@
 ---
-status: verifying
+status: completed
 tags:
     - dark-factory
     - spec
@@ -7,6 +7,7 @@ approved: "2026-06-02T09:23:36Z"
 generating: "2026-06-02T09:31:55Z"
 prompted: "2026-06-02T09:31:55Z"
 verifying: "2026-06-02T10:40:11Z"
+completed: "2026-06-02T11:30:30Z"
 branch: dark-factory/yaml-merge-resolver
 ---
 
