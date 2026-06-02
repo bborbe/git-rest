@@ -2,6 +2,23 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+// This file holds INTERNAL tests for unexported quarantine helpers
+// (resolveConflictPaths, quarantineOne, unsafeConflictPath,
+// quarantineDestPath) and pathological branches that cannot be reached
+// via the external Pull API (e.g. crafted unsafe paths a real git merge
+// cannot produce, all-fail-abort fixtures).
+//
+// END-TO-END integration tests for the successful quarantine path
+// (resolver fails -> quarantine succeeds -> merge commits with
+// `quarantined=[...]`, IncQuarantinedFiles fires, working tree clean)
+// live in pkg/git/git_test.go:
+//   - AC3 (single conflict, file quarantined) -> line 977
+//   - AC1-AC6 + AC12 (1-of-11 happy path)    -> line 1067
+//   - AC2 (resolver succeeds, no quarantine)  -> line 919
+// Those tests use the external test package (package git_test) +
+// mocks.FakeMetrics. The split is intentional and called out in
+// unsafeTestMetrics's doc comment below.
+
 package git
 
 import (
@@ -307,6 +324,69 @@ func TestResolveConflictPathsAllFailAbort(t *testing.T) {
 			"quarantine_io_failed must increment once per failed path (got %d, want 2)",
 			got,
 		)
+	}
+
+	// Defense-in-depth: _conflicts/ was created by ensureConflictsDir (the
+	// paths passed pre-flight) but no quarantine succeeded, so the directory
+	// must be empty after the abort.
+	conflictsEntries, _ := os.ReadDir(filepath.Join(workDir, "_conflicts"))
+	if len(conflictsEntries) != 0 {
+		names := make([]string, 0, len(conflictsEntries))
+		for _, e := range conflictsEntries {
+			names = append(names, e.Name())
+		}
+		t.Fatalf(
+			"_conflicts/ must be empty after all-fail abort; got: %v",
+			names,
+		)
+	}
+}
+
+// TestQuarantineOneGitRmFails verifies the git-rm-failure branch of
+// quarantineOne increments the quarantine_io_failed counter and returns
+// false. Fixture: file exists on disk (so os.ReadFile succeeds) but is NOT
+// tracked by git (so `git rm` fails with "pathspec did not match").
+func TestQuarantineOneGitRmFails(t *testing.T) {
+	ctx := context.Background()
+	workDir, err := os.MkdirTemp("", "git-quarantineone-rmfail-*")
+	if err != nil {
+		t.Fatalf("mkdir workdir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(workDir) })
+
+	run := func(args ...string) {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = workDir
+		out, e := cmd.CombinedOutput()
+		if e != nil {
+			t.Fatalf("%s %v: %s", "git", args, string(out))
+		}
+	}
+	run("init", "-q", "-b", "main")
+	run("config", "user.email", "test@example.com")
+	run("config", "user.name", "Test")
+	run("commit", "--allow-empty", "-q", "-m", "init")
+
+	// File on disk but unstaged -> ReadFile OK, `git rm` fails.
+	untracked := filepath.Join(workDir, "untracked.md")
+	if writeErr := os.WriteFile(untracked, []byte("---\nbody\n---\n"), 0o600); writeErr != nil {
+		t.Fatalf("write untracked: %v", writeErr)
+	}
+
+	metrics := &unsafeTestMetrics{}
+	repo, ok := New(
+		workDir, metrics, libtime.NewCurrentDateTime(), "", fakeResolver{},
+	).(*git)
+	if !ok {
+		t.Fatal("New did not return *git")
+	}
+
+	got := repo.quarantineOne(ctx, "untracked.md", 1700000000)
+	if got {
+		t.Fatal("quarantineOne must return false when git rm fails")
+	}
+	if c := metrics.quarantineIOCount(); c != 1 {
+		t.Fatalf("quarantine_io_failed must increment exactly once, got %d", c)
 	}
 }
 
