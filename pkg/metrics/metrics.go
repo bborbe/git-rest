@@ -46,11 +46,16 @@ var QuarantinedFilesTotal = prometheus.NewCounter(prometheus.CounterOpts{
 })
 
 // ResolverFailuresTotal counts conflict-resolver failures by category.
-// Categories: yaml_parse_failed, no_frontmatter, write_failed, git_add_failed, git_mv_failed.
-// unsafe_path counts path-traversal rejections; git_mv_failed counts quarantine `git mv` failures.
+// Categories: yaml_parse_failed, no_frontmatter, write_failed, git_add_failed,
+// quarantine_io_failed, unsafe_path. The quarantine_io_failed bucket covers
+// any I/O failure in the quarantine flow (read source, git rm source, mkdir
+// destination, write destination, git add destination) — the implementation
+// does not use git mv (git refuses to move conflicted files), so the
+// historical "git_mv_failed" label is renamed to reflect what it actually
+// counts.
 var ResolverFailuresTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
 	Name: "git_rest_resolver_failures_total",
-	Help: "Total conflict-resolver failures by category. Resolver failures: yaml_parse_failed, no_frontmatter, write_failed, git_add_failed. Quarantine failures: git_mv_failed (git mv during quarantine), unsafe_path (path-traversal rejection).",
+	Help: "Total conflict-resolver failures by category. Resolver failures: yaml_parse_failed, no_frontmatter, write_failed, git_add_failed. Quarantine failures: quarantine_io_failed (any I/O step of the quarantine flow), unsafe_path (path-traversal rejection).",
 }, []string{"category"})
 
 func init() {
@@ -88,7 +93,7 @@ func init() {
 		"write_failed",
 		"git_add_failed",
 		"unsafe_path",
-		"git_mv_failed",
+		"quarantine_io_failed",
 	} {
 		ResolverFailuresTotal.WithLabelValues(category).Add(0)
 	}
@@ -107,7 +112,8 @@ type Metrics interface {
 	// IncConflictPaths records n conflicted paths passed to the resolver in one merge cycle.
 	IncConflictPaths(n int)
 	// IncResolverFailure records a conflict-resolver failure by category.
-	// category must be one of: yaml_parse_failed, no_frontmatter, write_failed, git_add_failed, git_mv_failed.
+	// category must be one of: yaml_parse_failed, no_frontmatter, write_failed,
+	// git_add_failed, unsafe_path, quarantine_io_failed.
 	IncResolverFailure(category string)
 	// IncQuarantinedFiles records a single file moved into _conflicts/ during pull.
 	IncQuarantinedFiles()

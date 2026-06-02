@@ -67,10 +67,10 @@ var _ = Describe("QuarantinedFilesTotal", func() {
 	})
 })
 
-var _ = Describe("ResolverFailuresTotal git_mv_failed label", func() {
+var _ = Describe("ResolverFailuresTotal quarantine_io_failed label", func() {
 	It("is pre-initialised to 0 alongside the existing five label values", func() {
 		Expect(gatherCounterVecLabelValue(
-			"git_rest_resolver_failures_total", "category", "git_mv_failed",
+			"git_rest_resolver_failures_total", "category", "quarantine_io_failed",
 		)).To(Equal(0.0))
 	})
 })

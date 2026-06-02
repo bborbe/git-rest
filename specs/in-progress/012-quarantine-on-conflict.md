@@ -1,11 +1,12 @@
 ---
-status: prompted
+status: verifying
 tags:
     - dark-factory
     - spec
 approved: "2026-06-02T19:40:49Z"
 generating: "2026-06-02T19:53:08Z"
 prompted: "2026-06-02T20:27:38Z"
+verifying: "2026-06-02T21:08:04Z"
 branch: dark-factory/quarantine-on-conflict
 ---
 

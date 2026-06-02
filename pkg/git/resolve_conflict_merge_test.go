@@ -63,6 +63,18 @@ func (u *unsafeTestMetrics) unsafePathCount() int {
 	return n
 }
 
+func (u *unsafeTestMetrics) quarantineIOCount() int {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	n := 0
+	for _, c := range u.incResolverFailureCalls {
+		if c == "quarantine_io_failed" {
+			n++
+		}
+	}
+	return n
+}
+
 func (u *unsafeTestMetrics) abortedCount() int {
 	u.mu.Lock()
 	defer u.mu.Unlock()
@@ -143,11 +155,179 @@ func TestResolveConflictPathsUnsafePath(t *testing.T) {
 			statErr,
 		)
 	}
-	matches, _ := filepath.Glob(filepath.Join(workDir, "_conflicts", "**", "*escape*"))
-	if len(matches) != 0 {
+	// Negative-evidence check: _conflicts/ MUST NOT exist after an unsafe-path
+	// abort. The validateConflictPathsSafe pre-flight runs BEFORE
+	// ensureConflictsDir, so the directory is never created on this path.
+	// (Earlier impl used `filepath.Glob("_conflicts/**")` which is silently
+	// broken in Go — `**` is not a recursive wildcard there — giving false
+	// safety assurance. Stat is the precise check.)
+	if _, statErr := os.Stat(filepath.Join(workDir, "_conflicts")); !os.IsNotExist(statErr) {
 		t.Fatalf(
-			"no _conflicts/** entry may mention the escape attempt; got: %v",
-			matches,
+			"_conflicts/ must not exist after unsafe-path abort (stat err: %v)",
+			statErr,
 		)
+	}
+}
+
+// TestUnsafeConflictPathEdges covers the empty-path and absolute-path
+// short-circuit branches of unsafeConflictPath that the integration test
+// (which only exercises "../escape.md") does not reach.
+func TestUnsafeConflictPathEdges(t *testing.T) {
+	repoRoot := "/tmp/some-repo"
+	cases := []struct {
+		name       string
+		path       string
+		wantUnsafe bool
+		wantReason string
+	}{
+		{"empty path", "", true, "empty path"},
+		{"absolute path", "/etc/passwd", true, "absolute path"},
+		{"clean relative path stays safe", "tasks/foo.md", false, ""},
+		{"nested clean path stays safe", "a/b/c.md", false, ""},
+	}
+	for _, tc := range cases {
+		gotUnsafe, gotReason := unsafeConflictPath(repoRoot, tc.path)
+		if gotUnsafe != tc.wantUnsafe {
+			t.Errorf("%s: unsafe = %v, want %v", tc.name, gotUnsafe, tc.wantUnsafe)
+		}
+		if gotReason != tc.wantReason {
+			t.Errorf("%s: reason = %q, want %q", tc.name, gotReason, tc.wantReason)
+		}
+	}
+}
+
+// TestQuarantineDestPath covers the .md vs non-.md split, the root-dir vs
+// nested-dir paths, and the timestamp-insertion position. Pure function; no
+// fixture needed.
+func TestQuarantineDestPath(t *testing.T) {
+	const ts int64 = 1700000000
+	cases := []struct {
+		name string
+		path string
+		want string
+	}{
+		{
+			"md at repo root",
+			"note.md",
+			filepath.Join("_conflicts", "note.1700000000.md"),
+		},
+		{
+			"md in nested dir",
+			"tasks/build/note.md",
+			filepath.Join("_conflicts", "tasks/build", "note.1700000000.md"),
+		},
+		{
+			"non-md at repo root",
+			"foo.bin",
+			filepath.Join("_conflicts", "foo.bin.1700000000.quarantined"),
+		},
+		{
+			"non-md in nested dir",
+			"a/b/foo.bin",
+			filepath.Join("_conflicts", "a/b", "foo.bin.1700000000.quarantined"),
+		},
+		{
+			"extensionless at repo root",
+			"README",
+			filepath.Join("_conflicts", "README.1700000000.quarantined"),
+		},
+	}
+	for _, tc := range cases {
+		got := quarantineDestPath(tc.path, ts)
+		if got != tc.want {
+			t.Errorf("%s: quarantineDestPath(%q) = %q, want %q", tc.name, tc.path, got, tc.want)
+		}
+	}
+}
+
+// failingResolver always returns an error, driving the per-file loop into the
+// quarantine branch (which then also fails because the path does not exist on
+// disk). Used by TestResolveConflictPathsAllFailAbort.
+type failingResolver struct{}
+
+func (failingResolver) Resolve(_ context.Context, _ []string) error {
+	return stderrors.New("resolver intentionally fails")
+}
+
+// TestResolveConflictPathsAllFailAbort verifies the pathological "every path
+// fails BOTH resolve and quarantine" branch — the function aborts the merge
+// and returns wrapped ErrConflictResolutionFailed.
+//
+// All paths are safe (no unsafe-path) AND non-existent on disk (so
+// quarantineOne's os.ReadFile fails for each), giving the all-fail abort.
+func TestResolveConflictPathsAllFailAbort(t *testing.T) {
+	ctx := context.Background()
+	workDir, err := os.MkdirTemp("", "git-allfail-abort-*")
+	if err != nil {
+		t.Fatalf("mkdir workdir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(workDir) })
+
+	run := func(args ...string) {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = workDir
+		out, e := cmd.CombinedOutput()
+		if e != nil {
+			t.Fatalf("%s %v: %s", "git", args, string(out))
+		}
+	}
+	run("init", "-q", "-b", "main")
+	run("config", "user.email", "test@example.com")
+	run("config", "user.name", "Test")
+	run("commit", "--allow-empty", "-q", "-m", "init")
+
+	metrics := &unsafeTestMetrics{}
+	repo, ok := New(
+		workDir, metrics, libtime.NewCurrentDateTime(), "", failingResolver{},
+	).(*git)
+	if !ok {
+		t.Fatal("New did not return *git")
+	}
+
+	err = repo.resolveConflictPaths(ctx, []string{"missing-a.md", "missing-b.md"})
+	if err == nil {
+		t.Fatal("expected an error, got nil")
+	}
+	if !stderrors.Is(err, ErrConflictResolutionFailed) {
+		t.Fatalf("expected wrapped ErrConflictResolutionFailed, got: %v", err)
+	}
+	if got := metrics.abortedCount(); got != 1 {
+		t.Fatalf("aborted outcome must be recorded exactly once, got %d", got)
+	}
+	if got := metrics.quarantineIOCount(); got != 2 {
+		t.Fatalf(
+			"quarantine_io_failed must increment once per failed path (got %d, want 2)",
+			got,
+		)
+	}
+}
+
+// TestQuarantineOneSourceMissing verifies the quarantine_io_failed counter
+// fires when os.ReadFile cannot read the source file (e.g. source already
+// removed mid-merge). The per-file loop continues; this test calls
+// quarantineOne directly to isolate the failure branch.
+func TestQuarantineOneSourceMissing(t *testing.T) {
+	ctx := context.Background()
+	workDir, err := os.MkdirTemp("", "git-quarantineone-missing-*")
+	if err != nil {
+		t.Fatalf("mkdir workdir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(workDir) })
+
+	metrics := &unsafeTestMetrics{}
+	repo, ok := New(
+		workDir, metrics, libtime.NewCurrentDateTime(), "", fakeResolver{},
+	).(*git)
+	if !ok {
+		t.Fatal("New did not return *git")
+	}
+
+	// Source file deliberately absent — os.ReadFile inside quarantineOne fails.
+	got := repo.quarantineOne(ctx, "missing.md", 1700000000)
+	if got {
+		t.Fatal("quarantineOne must return false when source file is missing")
+	}
+	if c := metrics.quarantineIOCount(); c != 1 {
+		t.Fatalf("quarantine_io_failed must increment exactly once, got %d", c)
 	}
 }
