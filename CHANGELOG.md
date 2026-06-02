@@ -4,7 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
-- feat: Add `YAMLMergeResolver` that deep-merges YAML frontmatter in conflicted markdown files (remote/theirs wins on overlap), stages result via `git add`, and increments failure-category counters (`yaml_parse_failed`, `no_frontmatter`, `write_failed`, `git_add_failed`)
+- feat: Add `YAMLMergeResolver` for conflict resolution on markdown files with YAML frontmatter. Deep-merges frontmatter keys (theirs wins on overlap), concatenates bodies, and stages the result. On YAML parse failure, missing frontmatter delimiter, file-write error, or `git add` failure, returns the existing `ErrConflictResolutionFailed` sentinel so the puller aborts the merge (no invalid file is ever committed).
+- feat: Add `--vault-write` flag / `VAULT_WRITE_MODE` env (default `false`). When `true`, the pod uses `YAMLMergeResolver`; when `false`, behavior is unchanged (`MarkerResolver`). Selection is per-process; non-vault pods are unaffected.
+- feat: Add `git_rest_resolver_failures_total{category}` Prometheus counter with the four labels `yaml_parse_failed`, `no_frontmatter`, `write_failed`, `git_add_failed` pre-initialised to zero. Operators can distinguish resolver failure modes without log scraping.
+- Fixes agent vault scanner skipping markdown files whose frontmatter was clobbered by `<<<<<<<` markers (157 skips observed in prod the first minutes after `agent_controller_vault_scanner_skipped_files_total{reason="duplicate_frontmatter_invalid"}` went live).
 
 ## v0.20.1
 

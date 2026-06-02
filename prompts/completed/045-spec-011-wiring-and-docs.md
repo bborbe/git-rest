@@ -1,8 +1,13 @@
 ---
-status: approved
+status: completed
 spec: [011-yaml-merge-resolver]
+summary: Wire VaultWrite flag to select YAMLMergeResolver vs MarkerResolver across all four factory.CreateGitClient call sites
+container: git-rest-yaml-merge-resolver-exec-045-spec-011-wiring-and-docs
+dark-factory-version: v0.173.0
 created: "2026-06-02T10:00:00Z"
 queued: "2026-06-02T09:40:06Z"
+started: "2026-06-02T10:36:11Z"
+completed: "2026-06-02T10:40:11Z"
 ---
 
 <summary>

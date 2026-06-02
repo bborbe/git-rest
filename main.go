@@ -36,21 +36,22 @@ func main() {
 }
 
 type application struct {
-	SentryDSN       string            `required:"false" arg:"sentry-dsn"        env:"SENTRY_DSN"        usage:"Sentry DSN"                                                                                                              display:"length"`
+	SentryDSN       string            `required:"false" arg:"sentry-dsn"        env:"SENTRY_DSN"        usage:"Sentry DSN"                                                                                                                                          display:"length"`
 	SentryProxy     string            `required:"false" arg:"sentry-proxy"      env:"SENTRY_PROXY"      usage:"Sentry Proxy"`
-	Listen          string            `required:"true"  arg:"listen"            env:"LISTEN"            usage:"HTTP listen address"                                                                                                                      default:":8080"`
+	Listen          string            `required:"true"  arg:"listen"            env:"LISTEN"            usage:"HTTP listen address"                                                                                                                                                  default:":8080"`
 	Repo            string            `required:"true"  arg:"repo"              env:"REPO"              usage:"path to git repository on disk"`
-	PullInterval    libtime.Duration  `required:"false" arg:"pull-interval"     env:"PULL_INTERVAL"     usage:"git pull interval"                                                                                                                        default:"30s"`
-	PullTimeout     libtime.Duration  `required:"false" arg:"pull-timeout"      env:"PULL_TIMEOUT"      usage:"per-pull timeout; subprocess is aborted if it exceeds this duration (0 = no timeout)"                                                     default:"60s"`
-	BuildGitVersion string            `required:"false" arg:"build-git-version" env:"BUILD_GIT_VERSION" usage:"Build Git version"                                                                                                                        default:"dev"`
-	BuildGitCommit  string            `required:"false" arg:"build-git-commit"  env:"BUILD_GIT_COMMIT"  usage:"Build Git commit hash"                                                                                                                    default:"none"`
+	PullInterval    libtime.Duration  `required:"false" arg:"pull-interval"     env:"PULL_INTERVAL"     usage:"git pull interval"                                                                                                                                                    default:"30s"`
+	PullTimeout     libtime.Duration  `required:"false" arg:"pull-timeout"      env:"PULL_TIMEOUT"      usage:"per-pull timeout; subprocess is aborted if it exceeds this duration (0 = no timeout)"                                                                                 default:"60s"`
+	BuildGitVersion string            `required:"false" arg:"build-git-version" env:"BUILD_GIT_VERSION" usage:"Build Git version"                                                                                                                                                    default:"dev"`
+	BuildGitCommit  string            `required:"false" arg:"build-git-commit"  env:"BUILD_GIT_COMMIT"  usage:"Build Git commit hash"                                                                                                                                                default:"none"`
 	BuildDate       *libtime.DateTime `required:"false" arg:"build-date"        env:"BUILD_DATE"        usage:"Build timestamp (RFC3339)"`
 	GitSSHKey       git.SSHKeyPath    `required:"false" arg:"git-ssh-key"       env:"GIT_SSH_KEY"       usage:"Path to SSH private key for git operations"`
 	GitSSHCommand   string            `required:"false" arg:"git-ssh-command"   env:"GIT_SSH_COMMAND"   usage:"Full SSH command for git network ops (overrides default derived from --git-ssh-key). Empty = derive from --git-ssh-key."`
 	GitRemoteURL    git.RemoteURL     `required:"false" arg:"git-remote-url"    env:"GIT_REMOTE_URL"    usage:"Git remote URL to clone from on startup"`
 	GitUserName     string            `required:"false" arg:"git-user-name"     env:"GIT_USER_NAME"     usage:"Git author name for commits"`
 	GitUserEmail    string            `required:"false" arg:"git-user-email"    env:"GIT_USER_EMAIL"    usage:"Git author email for commits"`
-	GatewaySecret   string            `required:"false" arg:"gateway-secret"    env:"GATEWAY_SECRET"    usage:"Shared secret required in X-Gateway-Secret header for /api/v1/* requests. Empty = no auth (backward compatible)."        display:"length"`
+	GatewaySecret   string            `required:"false" arg:"gateway-secret"    env:"GATEWAY_SECRET"    usage:"Shared secret required in X-Gateway-Secret header for /api/v1/* requests. Empty = no auth (backward compatible)."                                    display:"length"`
+	VaultWrite      bool              `required:"false" arg:"vault-write"       env:"VAULT_WRITE_MODE"  usage:"When true, use YAMLMergeResolver for merge conflicts (deep-merges YAML frontmatter). Default false uses MarkerResolver (preserves <<<<<<< markers)."                  default:"false"`
 }
 
 func (a *application) Run(ctx context.Context, sentryClient libsentry.Client) error {
@@ -266,6 +267,17 @@ func resolveGitSSHCommand(gitSSHCommand, sshKeyPath string) string {
 	return ""
 }
 
+// selectResolver returns the ConflictResolver this pod should use.
+// Vault-write pods get the YAMLMergeResolver (deep-merges YAML frontmatter on
+// conflict); all other pods keep the MarkerResolver (commits with <<<<<<< /
+// ======= / >>>>>>> markers intact). One resolver per process — never per-request.
+func (a *application) selectResolver(m metrics.Metrics) git.ConflictResolver {
+	if a.VaultWrite {
+		return git.NewYAMLMergeResolver(a.Repo, m)
+	}
+	return git.NewMarkerResolver(a.Repo)
+}
+
 // runGitCmd runs `git -C repoDir <args>` and returns combined output.
 // It exists so recoverUntracked stays self-contained in main.go, matching
 // the no-pkg/git-dependency pattern used by cleanupStaleLocks.
@@ -304,12 +316,13 @@ func (a *application) initIfNeeded(ctx context.Context) error {
 	if err := os.MkdirAll(a.Repo, 0o750); err != nil { //nolint:gosec
 		return errors.Wrapf(ctx, err, "create repo directory %s", a.Repo)
 	}
+	m := metrics.NewMetrics()
 	tmpGit := factory.CreateGitClient(
 		a.Repo,
-		metrics.NewMetrics(),
+		m,
 		libtime.NewCurrentDateTime(),
 		a.GitSSHKey,
-		git.NewMarkerResolver(a.Repo),
+		a.selectResolver(m),
 	)
 	if err := tmpGit.Init(ctx); err != nil {
 		return errors.Wrapf(ctx, err, "git init %s", a.Repo)
@@ -328,12 +341,13 @@ func (a *application) cloneIfNeeded(ctx context.Context) error {
 	if err := os.MkdirAll(a.Repo, 0o750); err != nil { //nolint:gosec
 		return errors.Wrapf(ctx, err, "create repo directory %s", a.Repo)
 	}
+	m := metrics.NewMetrics()
 	tmpGit := factory.CreateGitClient(
 		a.Repo,
-		metrics.NewMetrics(),
+		m,
 		libtime.NewCurrentDateTime(),
 		a.GitSSHKey,
-		git.NewMarkerResolver(a.Repo),
+		a.selectResolver(m),
 	)
 	if err := tmpGit.Clone(ctx, a.GitRemoteURL); err != nil {
 		return errors.Wrapf(ctx, err, "clone %s", a.GitRemoteURL)
@@ -349,12 +363,13 @@ func (a *application) configureUserIfSet(ctx context.Context) error {
 	if _, err := os.Stat(gitDir); err != nil {
 		return errors.Wrapf(ctx, err, "repo %s has no .git directory", a.Repo)
 	}
+	m := metrics.NewMetrics()
 	gitClient := factory.CreateGitClient(
 		a.Repo,
-		metrics.NewMetrics(),
+		m,
 		libtime.NewCurrentDateTime(),
 		a.GitSSHKey,
-		git.NewMarkerResolver(a.Repo),
+		a.selectResolver(m),
 	)
 	if err := gitClient.ConfigureUser(ctx, a.GitUserName, a.GitUserEmail); err != nil {
 		return errors.Wrap(ctx, err, "configure git user")
@@ -373,12 +388,13 @@ func (a *application) createGitClient(ctx context.Context) (git.Git, error) {
 		}
 	}
 
+	m := metrics.NewMetrics()
 	return factory.CreateGitClient(
 		a.Repo,
-		metrics.NewMetrics(),
+		m,
 		libtime.NewCurrentDateTime(),
 		a.GitSSHKey,
-		git.NewMarkerResolver(a.Repo),
+		a.selectResolver(m),
 	), nil
 }
 
