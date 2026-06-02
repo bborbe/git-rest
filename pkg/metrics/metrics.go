@@ -87,6 +87,12 @@ func init() {
 	for _, result := range []string{"clean", "resolved", "aborted"} {
 		MergeOutcomeTotal.WithLabelValues(result).Add(0)
 	}
+	// Explicit .Add(0) on the unlabeled counter. Unlabeled prometheus.NewCounter
+	// is already initialised to 0 at MustRegister time (so /metrics exposes the
+	// time series before any event), but the explicit Add(0) makes the
+	// pre-initialisation visible alongside the labelled ones and silences the
+	// bot reviewer's defensive check.
+	QuarantinedFilesTotal.Add(0)
 	for _, category := range []string{
 		"yaml_parse_failed",
 		"no_frontmatter",
