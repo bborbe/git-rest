@@ -18,6 +18,7 @@ require (
 	github.com/bborbe/service v1.9.11
 	github.com/bborbe/time v1.27.0
 	github.com/felixge/httpsnoop v1.0.4
+	github.com/golang/glog v1.2.5
 	github.com/golangci/golangci-lint/v2 v2.12.2
 	github.com/google/addlicense v1.2.0
 	github.com/google/osv-scanner/v2 v2.3.8
@@ -32,6 +33,7 @@ require (
 	github.com/segmentio/golines v0.13.0
 	github.com/shoenig/go-modtool v0.7.1
 	golang.org/x/vuln v1.3.0
+	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (
@@ -205,7 +207,6 @@ require (
 	github.com/godoc-lint/godoc-lint v0.11.2 // indirect
 	github.com/gofrs/flock v0.13.0 // indirect
 	github.com/gogo/protobuf v1.3.2 // indirect
-	github.com/golang/glog v1.2.5 // indirect
 	github.com/golang/groupcache v0.0.0-20241129210726-2c02b8208cf8 // indirect
 	github.com/golangci/asciicheck v0.5.0 // indirect
 	github.com/golangci/dupl v0.0.0-20260401084720-c99c5cf5c202 // indirect
@@ -446,7 +447,6 @@ require (
 	google.golang.org/protobuf v1.36.11 // indirect
 	gopkg.in/ini.v1 v1.67.1 // indirect
 	gopkg.in/warnings.v0 v0.1.2 // indirect
-	gopkg.in/yaml.v3 v3.0.1 // indirect
 	honnef.co/go/tools v0.7.0 // indirect
 	modernc.org/libc v1.72.0 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
