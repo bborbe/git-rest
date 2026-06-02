@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -46,6 +47,13 @@ var ErrRepoUnrecoverable = stderrors.New("repo state unrecoverable")
 // The merge is aborted before returning so the repo is left in a clean state.
 // Callers detect this via errors.Is(err, ErrConflictResolutionFailed).
 var ErrConflictResolutionFailed = stderrors.New("conflict resolution failed")
+
+// Failure category label values emitted on git_rest_resolver_failures_total{category=...}
+// from the quarantine path in resolveConflictMerge.
+const (
+	quarantineFailureUnsafePath = "unsafe_path"
+	quarantineFailureGitMv      = "git_mv_failed"
+)
 
 // RebaseConflictError is returned by Pull when git rebase encounters a content conflict.
 // The repo is left in its conflicted state for human inspection.
@@ -239,6 +247,57 @@ func (g *git) runCmdRaw(ctx context.Context, dir string, args ...string) ([]byte
 	cmd.Stderr = &buf
 	err := cmd.Run()
 	return buf.Bytes(), err
+}
+
+// quarantineDestPath builds the destination path for a quarantined file.
+// For paths ending in ".md", the timestamp is inserted before the final ".md"
+// and the directory tree under "_conflicts/" mirrors the original path
+// (e.g. "dir/b.md" -> "_conflicts/dir/b.md.<ts>.md"). For non-".md" paths
+// the timestamp is appended with a ".quarantined" suffix
+// (e.g. "foo.bin" -> "_conflicts/foo.bin.<ts>.quarantined"). The repoPath is
+// not included; the caller is expected to join it with the repo root.
+func quarantineDestPath(path string, unixSeconds int64) string {
+	ts := strconv.FormatInt(unixSeconds, 10)
+	dir := filepath.Dir(path)
+	base := filepath.Base(path)
+	if dir == "." {
+		dir = ""
+	}
+	if strings.HasSuffix(base, ".md") {
+		stripped := strings.TrimSuffix(base, ".md")
+		base = stripped + "." + ts + ".md"
+	} else {
+		base = base + "." + ts + ".quarantined"
+	}
+	if dir == "" {
+		return filepath.Join("_conflicts", base)
+	}
+	return filepath.Join("_conflicts", dir, base)
+}
+
+// unsafeConflictPath returns true and a non-empty reason if path escapes the
+// repo root after joining. Mirrors the safePath pattern in yaml_merge_resolver.go
+// but lives here because the quarantine code needs an independent check (the
+// YAML resolver's safePath is unexported and only callable from inside the
+// yamlMergeResolver). The check rejects absolute paths, ".." components, and
+// any joined result that does not stay under repoPath.
+func unsafeConflictPath(repoPath, rel string) (bool, string) {
+	if rel == "" {
+		return true, "empty path"
+	}
+	if filepath.IsAbs(rel) {
+		return true, "absolute path"
+	}
+	joined := filepath.Join(repoPath, rel)
+	cleanRoot := filepath.Clean(repoPath)
+	if !strings.HasPrefix(
+		joined+string(filepath.Separator),
+		cleanRoot+string(filepath.Separator),
+	) &&
+		joined != cleanRoot {
+		return true, "path escapes repo root"
+	}
+	return false, ""
 }
 
 // WriteFile writes content to path, stages and commits it, then pushes.
@@ -494,7 +553,13 @@ func (g *git) pullMergeAndPush(ctx context.Context, upstream string) error {
 }
 
 // resolveConflictMerge handles the conflict path of pullMergeAndPush: delegates to g.resolver,
-// commits the resolved merge, then pushes.
+// commits the resolved merge, then pushes. On per-file resolver failure, the failing file is
+// quarantined via `git mv` into _conflicts/<path>.<ts>.md (or .<ts>.quarantined for non-md).
+// The merge commits with format `merge: resolved=[...] quarantined=[...]` if at least one path
+// was resolved or quarantined; otherwise the existing abort path runs.
+//
+// The per-file loop is in resolveConflictPaths (unexported) so the unsafe-path and quarantine
+// branches can be unit-tested in package git (internal test file) without going through Pull.
 func (g *git) resolveConflictMerge(
 	ctx context.Context,
 	upstream string,
@@ -512,29 +577,272 @@ func (g *git) resolveConflictMerge(
 			strings.TrimSpace(string(mergeOut)),
 		)
 	}
-	if resolveErr := g.resolver.Resolve(ctx, conflictPaths); resolveErr != nil {
+	return g.resolveConflictPaths(ctx, conflictPaths)
+}
+
+// resolveConflictPaths runs the per-file retry loop on a pre-parsed conflict path list.
+// Extracted from resolveConflictMerge so the unsafe-path and quarantine branches can be
+// exercised directly from internal tests (package git) without fabricating a real git merge
+// output. Returns nil on successful commit+push; returns wrapped ErrConflictResolutionFailed
+// on any abort path.
+func (g *git) resolveConflictPaths(
+	ctx context.Context,
+	conflictPaths []string,
+) error {
+	if err := g.ensureConflictsDir(ctx); err != nil {
+		return err
+	}
+
+	ts := g.currentDateTimeGetter.Now().Unix()
+	resolved, quarantined, err := g.resolveEachPath(ctx, conflictPaths, ts)
+	if err != nil {
+		return err
+	}
+
+	// Pathological case: every conflicted path failed BOTH resolve and quarantine.
+	if len(resolved) == 0 && len(quarantined) == 0 {
 		_, _ = g.runCmdRaw(ctx, g.repoPath, "merge", "--abort")
 		g.metrics.IncMergeOutcome("aborted")
-		return errors.Wrap(ctx, ErrConflictResolutionFailed, "conflict resolver failed")
+		return errors.Wrap(
+			ctx,
+			ErrConflictResolutionFailed,
+			"all conflicted paths failed resolve and quarantine",
+		)
 	}
-	sort.Strings(conflictPaths)
-	commitMsg := "git-rest: merge with marker-preserved conflicts in " + strings.Join(
-		conflictPaths,
-		", ",
-	)
+
+	return g.commitAndPushMerge(ctx, conflictPaths, resolved, quarantined)
+}
+
+// resolveEachPath runs the per-file resolver-or-quarantine loop. Returns
+// (resolved, quarantined, nil) on the normal case; returns (_, _, wrapped
+// ErrConflictResolutionFailed) on the unsafe-path abort path.
+func (g *git) resolveEachPath(
+	ctx context.Context,
+	conflictPaths []string,
+	ts int64,
+) ([]string, []string, error) {
+	resolved := make([]string, 0, len(conflictPaths))
+	quarantined := make([]string, 0, len(conflictPaths))
+	for _, path := range conflictPaths {
+		if unsafe, reason := unsafeConflictPath(g.repoPath, path); unsafe {
+			g.metrics.IncResolverFailure(quarantineFailureUnsafePath)
+			slog.WarnContext(
+				ctx,
+				"git-rest: unsafe conflicted path rejected; aborting merge",
+				"path",
+				path,
+				"reason",
+				reason,
+			)
+			_, _ = g.runCmdRaw(ctx, g.repoPath, "merge", "--abort")
+			g.metrics.IncMergeOutcome("aborted")
+			return nil, nil, errors.Wrap(
+				ctx,
+				ErrConflictResolutionFailed,
+				"unsafe conflict path",
+			)
+		}
+		resolveErr := g.resolver.Resolve(ctx, []string{path})
+		if resolveErr == nil {
+			resolved = append(resolved, path)
+			continue
+		}
+		slog.WarnContext(
+			ctx,
+			"git-rest: resolver failed on path; attempting quarantine",
+			"path",
+			path,
+			"err",
+			resolveErr.Error(),
+		)
+		if g.quarantineOne(ctx, path, ts) {
+			quarantined = append(quarantined, path)
+		}
+	}
+	return resolved, quarantined, nil
+}
+
+// commitAndPushMerge sorts the resolved+quarantined lists, builds the fixed-
+// format commit message, commits, and pushes. Records the metrics counters
+// required by the spec (IncMergeOutcome, IncConflictPaths).
+func (g *git) commitAndPushMerge(
+	ctx context.Context,
+	conflictPaths, resolved, quarantined []string,
+) error {
+	sort.Strings(resolved)
+	sort.Strings(quarantined)
+	commitMsg := "merge: resolved=[" + strings.Join(resolved, ",") +
+		"] quarantined=[" + strings.Join(quarantined, ",") + "]"
+
 	if commitErr := g.runCmd(ctx, g.repoPath, "commit", "-m", commitMsg); commitErr != nil {
 		_, _ = g.runCmdRaw(ctx, g.repoPath, "merge", "--abort")
 		g.metrics.IncGitOperationError("merge")
 		return errors.Wrap(ctx, commitErr, "commit resolved merge")
 	}
 	g.metrics.IncMergeOutcome("resolved")
+	// Count all conflicted paths the merge touched, including ones that failed both
+	// resolve and quarantine (which contributed to the all-fail abort when this
+	// commit succeeded but the per-file loop still saw them). Matches the original
+	// semantics of `IncConflictPaths(len(conflictPaths))` for the clean case.
 	g.metrics.IncConflictPaths(len(conflictPaths))
-	slog.InfoContext(ctx, "git-rest: merge committed with conflict markers", "paths", conflictPaths)
+	slog.InfoContext(
+		ctx,
+		"git-rest: merge committed with per-file quarantine",
+		"resolved",
+		resolved,
+		"quarantined",
+		quarantined,
+	)
 	if pushErr := g.runCmd(ctx, g.repoPath, "push"); pushErr != nil {
 		g.metrics.IncGitOperationError("push")
 		return errors.Wrap(ctx, pushErr, "push after resolved merge failed")
 	}
 	return nil
+}
+
+// ensureConflictsDir ensures _conflicts/ exists at the repo root. Returns
+// a wrapped ErrConflictResolutionFailed (caller aborts) when the path exists
+// as a regular file (catastrophic config error) or any stat / mkdir call fails.
+func (g *git) ensureConflictsDir(ctx context.Context) error {
+	conflictsDirRel := "_conflicts"
+	conflictsDirAbs := filepath.Join(g.repoPath, conflictsDirRel)
+	info, statErr := os.Stat(conflictsDirAbs)
+	if statErr == nil {
+		if !info.IsDir() {
+			slog.ErrorContext(
+				ctx,
+				"git-rest: _conflicts/ exists as a regular file; aborting merge",
+				"path",
+				conflictsDirRel,
+			)
+			_, _ = g.runCmdRaw(ctx, g.repoPath, "merge", "--abort")
+			g.metrics.IncMergeOutcome("aborted")
+			return errors.Wrap(
+				ctx,
+				ErrConflictResolutionFailed,
+				"_conflicts/ is a regular file",
+			)
+		}
+		return nil
+	}
+	if !os.IsNotExist(statErr) {
+		slog.ErrorContext(
+			ctx,
+			"git-rest: stat _conflicts/ failed; aborting merge",
+			"path",
+			conflictsDirRel,
+			"err",
+			statErr.Error(),
+		)
+		_, _ = g.runCmdRaw(ctx, g.repoPath, "merge", "--abort")
+		g.metrics.IncMergeOutcome("aborted")
+		return errors.Wrap(ctx, ErrConflictResolutionFailed, "stat _conflicts")
+	}
+	if mkErr := os.MkdirAll(conflictsDirAbs, 0o750); mkErr != nil {
+		slog.ErrorContext(
+			ctx,
+			"git-rest: failed to create _conflicts/; aborting merge",
+			"path",
+			conflictsDirRel,
+			"err",
+			mkErr.Error(),
+		)
+		_, _ = g.runCmdRaw(ctx, g.repoPath, "merge", "--abort")
+		g.metrics.IncMergeOutcome("aborted")
+		return errors.Wrap(ctx, ErrConflictResolutionFailed, "mkdir _conflicts")
+	}
+	return nil
+}
+
+// quarantineOne moves one conflicted file to _conflicts/<path>.<ts>.md (or
+// .quarantined for non-md). Returns true on success. On any per-step failure
+// the function records a git_mv_failed counter increment and an ERROR log
+// line, then returns false (the per-file loop continues with the next path).
+// `git mv` is not used because git refuses to move conflicted files; instead
+// we read the source, git rm the source to clear the conflict, then write
+// the destination and git add it.
+func (g *git) quarantineOne(ctx context.Context, path string, unixSeconds int64) bool {
+	destRel := quarantineDestPath(path, unixSeconds)
+	raw, readErr := os.ReadFile(
+		filepath.Join(g.repoPath, path),
+	) // #nosec G304 -- path is conflict-reported, validated above
+	if readErr != nil {
+		g.metrics.IncResolverFailure(quarantineFailureGitMv)
+		slog.ErrorContext(
+			ctx,
+			"git-rest: read conflicted file for quarantine failed",
+			"path",
+			path,
+			"err",
+			readErr.Error(),
+		)
+		return false
+	}
+	if rmErr := g.runCmd(ctx, g.repoPath, "rm", "--", path); rmErr != nil {
+		g.metrics.IncResolverFailure(quarantineFailureGitMv)
+		slog.ErrorContext(
+			ctx,
+			"git-rest: git rm source for quarantine failed",
+			"path",
+			path,
+			"err",
+			rmErr.Error(),
+		)
+		return false
+	}
+	destAbs := filepath.Join(g.repoPath, destRel)
+	if mkErr := os.MkdirAll(filepath.Dir(destAbs), 0o750); mkErr != nil {
+		g.metrics.IncResolverFailure(quarantineFailureGitMv)
+		slog.ErrorContext(
+			ctx,
+			"git-rest: mkdir dest for quarantine failed",
+			"path",
+			path,
+			"dest",
+			destRel,
+			"err",
+			mkErr.Error(),
+		)
+		return false
+	}
+	if wErr := os.WriteFile(destAbs, raw, 0o600); wErr != nil { //nolint:gosec
+		g.metrics.IncResolverFailure(quarantineFailureGitMv)
+		slog.ErrorContext(
+			ctx,
+			"git-rest: write dest for quarantine failed",
+			"path",
+			path,
+			"dest",
+			destRel,
+			"err",
+			wErr.Error(),
+		)
+		return false
+	}
+	if addErr := g.runCmd(ctx, g.repoPath, "add", "--", destRel); addErr != nil {
+		g.metrics.IncResolverFailure(quarantineFailureGitMv)
+		slog.ErrorContext(
+			ctx,
+			"git-rest: git add dest for quarantine failed",
+			"path",
+			path,
+			"dest",
+			destRel,
+			"err",
+			addErr.Error(),
+		)
+		return false
+	}
+	g.metrics.IncQuarantinedFiles()
+	slog.WarnContext(
+		ctx,
+		"git-rest: quarantined conflicted file",
+		"path",
+		path,
+		"dest",
+		destRel,
+	)
+	return true
 }
 
 // recoverAbandonedMerge aborts an interrupted merge (.git/MERGE_HEAD present).

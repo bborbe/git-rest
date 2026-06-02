@@ -12,6 +12,7 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 
 - feat: Add `git_rest_quarantined_files_total` unlabeled Prometheus counter for per-file quarantine events. The counter is registered at process start and pre-initialised to zero, so the time series is visible on `/metrics` before any quarantine event has occurred. Operators can `rate(git_rest_quarantined_files_total[5m])` to spot a sudden uptick of corrupt files in a served repo.
 - feat: Add `git_mv_failed` label value to the existing `git_rest_resolver_failures_total{category}` counter (alongside the pre-existing `unsafe_path`). `git_mv_failed` is distinct from `git_add_failed` because quarantine uses `git mv` (a different subcommand) and the failure modes diverge on the same boundary.
+- feat: Per-file quarantine in `resolveConflictMerge` — when the conflict resolver fails on a single file, the puller moves the file to `_conflicts/<path>.<unix-ts>.md` (or `.<ts>.quarantined` for non-`.md` files) via `git mv` and continues the merge, instead of aborting and wedging the pod. The merge commit message uses the fixed format `merge: resolved=[<sorted-paths>] quarantined=[<sorted-paths>]`. The pod only wedges if every conflicted path fails BOTH resolve and quarantine, or if `_conflicts/` already exists as a regular file in the repo. WARN log line names each quarantined path with the resolver error and the destination. Fixes the 2026-06-02 vault-obsidian-openclaw-0 incident (3.5h pod-wedge from a single corrupt-frontmatter file).
 
 ## v0.21.0
 

@@ -1,8 +1,13 @@
 ---
-status: approved
+status: completed
 spec: [012-quarantine-on-conflict]
+summary: Replaced single-shot resolver-failure abort in resolveConflictMerge with per-file retry loop that quarantines failing files to _conflicts/<path>.<ts>.md (or .quarantined for non-md) using a read+rm+write+add sequence (git mv refused on conflicted files). Added 1-of-11 happy-path test, _conflicts/ is a regular file pathological test, and unsafe-path internal test. CHANGELOG entry added. make precommit passes.
+container: git-rest-quarantine-exec-047-spec-012-quarantine-logic
+dark-factory-version: v0.174.1-dirty
 created: "2026-06-02T20:00:00Z"
 queued: "2026-06-02T20:36:39Z"
+started: "2026-06-02T20:40:25Z"
+completed: "2026-06-02T21:08:04Z"
 branch: dark-factory/quarantine-on-conflict
 ---
 

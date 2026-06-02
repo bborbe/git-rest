@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -17,9 +18,11 @@ import (
 	libtime "github.com/bborbe/time"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/bborbe/git-rest/mocks"
 	"github.com/bborbe/git-rest/pkg/git"
+	"github.com/bborbe/git-rest/pkg/metrics"
 )
 
 // runGit executes a git command in the given directory. Panics on error.
@@ -685,6 +688,114 @@ func gitOutputStr(dir string, args ...string) string {
 	return string(out)
 }
 
+// setupQuarantineFixture creates a working repo backed by a local bare remote
+// pre-seeded with fileCount markdown files. Returns workDir, two closures
+// (localEdit commits a divergent version of one file locally; externalPush
+// pushes a divergent version of one file from a temp clone), the seed file
+// list, and a cleanup func.
+//
+// Use pattern in tests:
+//
+//	workDir, localEdit, externalPush, seedFiles, cleanup := setupQuarantineFixture(11)
+//	defer cleanup()
+//	for i, f := range seedFiles {
+//	    externalPush(f, fmt.Sprintf("---\nshared: remote-%d\n---\nremote body %d\n", i, i)) // diverge remote
+//	}
+//	for i, f := range seedFiles {
+//	    localEdit(f, fmt.Sprintf("---\nshared: local-%d\n---\nlocal body %d\n", i, i))       // diverge local differently
+//	}
+//	// Now g.Pull(ctx) produces fileCount conflicts.
+func setupQuarantineFixture(fileCount int) (
+	workDir string,
+	localEdit func(file, content string),
+	externalPush func(file, content string),
+	seedFiles []string,
+	cleanup func(),
+) {
+	remoteDir, err := os.MkdirTemp("", "git-remote-quarantine-*")
+	Expect(err).NotTo(HaveOccurred())
+	workDir, err = os.MkdirTemp("", "git-work-quarantine-*")
+	Expect(err).NotTo(HaveOccurred())
+
+	rg := func(dir string, args ...string) {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		out, e := cmd.CombinedOutput()
+		Expect(e).NotTo(HaveOccurred(), "%s %v: %s", "git", args, string(out))
+	}
+
+	rg(remoteDir, "init", "--bare", "-b", "main")
+	rg(workDir, "init", "-b", "main")
+	rg(workDir, "config", "user.email", "test@example.com")
+	rg(workDir, "config", "user.name", "Test")
+	rg(workDir, "remote", "add", "origin", remoteDir)
+
+	// Seed fileCount markdown files on main and push to origin.
+	seedFiles = make([]string, 0, fileCount)
+	for i := 0; i < fileCount; i++ {
+		name := fmt.Sprintf("note-%02d.md", i)
+		seedFiles = append(seedFiles, name)
+		abs := filepath.Join(workDir, name)
+		fm := fmt.Sprintf("key%d: 1\nshared: base\n", i)
+		body := fmt.Sprintf("body %d base\n", i)
+		content := "---\n" + fm + "---\n" + body
+		Expect(os.WriteFile(abs, []byte(content), 0o600)).To(Succeed())
+		rg(workDir, "add", "--", name)
+	}
+	rg(workDir, "commit", "-q", "-m", "seed")
+	rg(workDir, "push", "-u", "origin", "main")
+
+	// localEdit: write a divergent version of one file locally and commit
+	// (does not push). Pair with externalPush for the same file to create
+	// a real merge conflict.
+	localEdit = func(file, content string) {
+		abs := filepath.Join(workDir, file)
+		Expect(os.WriteFile(abs, []byte(content), 0o600)).To(Succeed())
+		rg(workDir, "add", "--", file)
+		rg(workDir, "commit", "-q", "-m", "local: "+file)
+	}
+
+	// externalPush: clone the bare remote, change one file, commit, push.
+	externalPush = func(file, content string) {
+		extDir, err := os.MkdirTemp("", "git-ext-quarantine-*")
+		Expect(err).NotTo(HaveOccurred())
+		defer func() { _ = os.RemoveAll(extDir) }()
+		rg(extDir, "clone", remoteDir, ".")
+		rg(extDir, "config", "user.email", "ext@example.com")
+		rg(extDir, "config", "user.name", "External")
+		abs := filepath.Join(extDir, file)
+		Expect(os.WriteFile(abs, []byte(content), 0o600)).To(Succeed())
+		rg(extDir, "add", "--", file)
+		rg(extDir, "commit", "-q", "-m", "external: "+file)
+		rg(extDir, "push", "origin", "main")
+	}
+
+	cleanup = func() {
+		_ = os.RemoveAll(workDir)
+		_ = os.RemoveAll(remoteDir)
+	}
+	return workDir, localEdit, externalPush, seedFiles, cleanup
+}
+
+// gatherQuarantinedFiles returns the current value of the process-global
+// git_rest_quarantined_files_total counter. Returns 0 if the counter is not yet
+// registered. Used by the per-file quarantine tests to capture a baseline before
+// Pull and assert on the delta afterwards (so the test is order-independent with
+// other tests in the suite that may also touch the counter).
+func gatherQuarantinedFiles() float64 {
+	mfs, err := prometheus.DefaultGatherer.Gather()
+	Expect(err).NotTo(HaveOccurred())
+	for _, mf := range mfs {
+		if mf.GetName() != "git_rest_quarantined_files_total" {
+			continue
+		}
+		for _, m := range mf.GetMetric() {
+			return m.GetCounter().GetValue()
+		}
+	}
+	return 0
+}
+
 var _ = Describe("Pull state machine", func() {
 	var (
 		workDir      string
@@ -804,12 +915,18 @@ var _ = Describe("Pull state machine", func() {
 			writeLocalCommit(workDir, "conflict.txt", "local content\n")
 		})
 
-		It("AC2: Pull returns nil; merge commit message starts with frozen prefix", func() {
-			Expect(pg.Pull(ctx)).To(BeNil())
-			commitMsg := strings.TrimSpace(gitOutputStr(workDir, "log", "-1", "--format=%s"))
-			Expect(commitMsg).To(HavePrefix("git-rest: merge with marker-preserved conflicts in"))
-			Expect(commitMsg).To(ContainSubstring("conflict.txt"))
-		})
+		It(
+			"AC2: Pull returns nil; merge commit message uses the per-file quarantine format",
+			func() {
+				Expect(pg.Pull(ctx)).To(BeNil())
+				commitMsg := strings.TrimSpace(gitOutputStr(workDir, "log", "-1", "--format=%s"))
+				Expect(commitMsg).To(HavePrefix("merge: resolved=["))
+				Expect(commitMsg).To(ContainSubstring("conflict.txt"))
+				Expect(commitMsg).To(MatchRegexp(
+					`^merge: resolved=\[[^\]]*\] quarantined=\[\]$`,
+				))
+			},
+		)
 
 		It("AC2: conflict.txt in merge commit contains both versions under markers", func() {
 			Expect(pg.Pull(ctx)).To(BeNil())
@@ -841,50 +958,252 @@ var _ = Describe("Pull state machine", func() {
 		})
 	})
 
-	Context("diverged, same-line conflict, resolver returns error (AC3)", func() {
+	Context("diverged, same-line conflict, resolver returns error (AC3 — quarantine path)", func() {
 		var stubResolver *mocks.FakeConflictResolver
 
 		BeforeEach(func() {
 			externalPush("conflict.txt", "remote content\n")
 			writeLocalCommit(workDir, "conflict.txt", "local content\n")
 
-			// Wire a stub resolver that always errors.
+			// Wire a stub resolver that always errors. Per spec, the puller
+			// no longer aborts on the first resolver failure — it quarantines
+			// the file via git mv (or the read+rm+write+add fallback for
+			// conflicted files) and continues the merge.
 			stubResolver = &mocks.FakeConflictResolver{}
 			stubResolver.ResolveReturns(errors.New("stub resolver failed"))
 			pg = git.New(workDir, fakeMetrics, libtime.NewCurrentDateTime(), "", stubResolver)
 		})
 
-		It("AC3: Pull returns error matching ErrConflictResolutionFailed via errors.Is", func() {
-			err := pg.Pull(ctx)
-			Expect(err).To(HaveOccurred())
-			Expect(errors.Is(err, git.ErrConflictResolutionFailed)).To(BeTrue(),
-				"expected ErrConflictResolutionFailed, got: %v", err)
+		It("AC3: Pull returns nil; merge commits with file in quarantined[]", func() {
+			Expect(pg.Pull(ctx)).To(BeNil())
+			commitMsg := strings.TrimSpace(gitOutputStr(workDir, "log", "-1", "--format=%s"))
+			Expect(commitMsg).To(MatchRegexp(
+				`^merge: resolved=\[\] quarantined=\[[^\]]*conflict\.txt\]$`,
+			))
 		})
 
-		It("AC3: repo is clean after aborted merge (on branch, no MERGE_HEAD)", func() {
-			_ = pg.Pull(ctx)
+		It("AC3: resolver-failed file is moved to _conflicts/", func() {
+			Expect(pg.Pull(ctx)).To(BeNil())
+			qGlob, _ := filepath.Glob(
+				filepath.Join(workDir, "_conflicts", "conflict.txt.*.quarantined"),
+			)
+			Expect(
+				qGlob,
+			).To(HaveLen(1), "exactly one _conflicts/conflict.txt.<ts>.quarantined must exist; got: %v", qGlob)
+			_, statErr := os.Stat(filepath.Join(workDir, "conflict.txt"))
+			Expect(os.IsNotExist(statErr)).To(BeTrue(),
+				"original conflict.txt must not exist after quarantine")
+		})
+
+		It("AC3: repo is clean after committed merge (on branch, no MERGE_HEAD)", func() {
+			Expect(pg.Pull(ctx)).To(BeNil())
 			_, statErr := os.Stat(filepath.Join(workDir, ".git", "MERGE_HEAD"))
 			Expect(
 				os.IsNotExist(statErr),
-			).To(BeTrue(), ".git/MERGE_HEAD must not exist after aborted merge")
+			).To(BeTrue(), ".git/MERGE_HEAD must not exist after committed merge")
 			head := strings.TrimSpace(gitOutputStr(workDir, "rev-parse", "--abbrev-ref", "HEAD"))
 			Expect(head).NotTo(Equal("HEAD"), "HEAD must be on a branch")
 		})
 
-		It("AC3: increments merge outcome aborted counter exactly once", func() {
-			_ = pg.Pull(ctx)
+		It("AC3: increments merge outcome resolved counter exactly once", func() {
+			Expect(pg.Pull(ctx)).To(BeNil())
 			Expect(fakeMetrics.IncMergeOutcomeCallCount()).To(Equal(1))
-			Expect(fakeMetrics.IncMergeOutcomeArgsForCall(0)).To(Equal("aborted"))
+			Expect(fakeMetrics.IncMergeOutcomeArgsForCall(0)).To(Equal("resolved"))
 		})
 
 		It("AC5: seam is genuinely pluggable — stub resolver Resolve was called once", func() {
-			_ = pg.Pull(ctx)
+			Expect(pg.Pull(ctx)).To(BeNil())
 			Expect(stubResolver.ResolveCallCount()).To(Equal(1),
 				"resolver.Resolve must be called exactly once per conflict merge attempt")
 			_, paths := stubResolver.ResolveArgsForCall(0)
 			Expect(paths).To(ContainElement("conflict.txt"))
 		})
 	})
+
+	Context(
+		"diverged, 1 of 11 conflicted files has invalid frontmatter (per-file quarantine)",
+		func() {
+			var (
+				corruptPath = "note-00.md"
+				workDir     string
+				seedFiles   []string
+				pgLocal     git.Git
+			)
+			BeforeEach(func() {
+				var localEdit, externalPush func(file, content string)
+				var qCleanup func()
+				workDir, localEdit, externalPush, seedFiles, qCleanup = setupQuarantineFixture(11)
+				DeferCleanup(qCleanup)
+
+				// Push a divergent valid version of every file to the remote.
+				for i, f := range seedFiles {
+					externalPush(
+						f,
+						fmt.Sprintf("---\nshared: remote-%d\n---\nremote body %d\n", i, i),
+					)
+				}
+				// Local divergence: invalid YAML on the corrupt file, valid divergence on the 10 clean ones.
+				for i, f := range seedFiles {
+					if f == corruptPath {
+						localEdit(f, "---\nbad: : : colon: storm\n---\nlocal corrupt body\n")
+					} else {
+						localEdit(
+							f,
+							fmt.Sprintf("---\nshared: local-%d\n---\nlocal body %d\n", i, i),
+						)
+					}
+				}
+
+				pgLocal = git.New(
+					workDir,
+					metrics.NewMetrics(),
+					libtime.NewCurrentDateTime(),
+					"",
+					git.NewYAMLMergeResolver(workDir, metrics.NewMetrics()),
+				)
+			})
+
+			It(
+				"AC1-AC6 + AC12: Pull returns nil; 1 file quarantined; 10 resolved; commit message in fixed format",
+				func() {
+					logs, restore := captureSlogLogs()
+					defer restore()
+
+					// AC4 setup: capture the pre-Pull baseline of the process-global counter
+					// so the post-Pull assertion is a delta, not an absolute value.
+					beforeQuarantined := gatherQuarantinedFiles()
+					Expect(pgLocal.Pull(ctx)).To(BeNil())
+					afterQuarantined := gatherQuarantinedFiles()
+					Expect(afterQuarantined-beforeQuarantined).To(Equal(1.0),
+						"git_rest_quarantined_files_total must increment by exactly 1 in this test")
+
+					// AC2: corrupt file is in _conflicts/ tree; no longer at the original path.
+					// Spec evidence: filepath.Glob finds exactly one matching quarantine file;
+					// os.Stat of the original path returns IsNotExist. The quarantine
+					// destination is "_conflicts/note-00.<ts>.md" (the timestamp is inserted
+					// BEFORE the final ".md" — see quarantineDestPath in pkg/git/git.go).
+					stripped := strings.TrimSuffix(corruptPath, ".md")
+					qGlob, _ := filepath.Glob(
+						filepath.Join(workDir, "_conflicts", stripped+".*.md"),
+					)
+					Expect(
+						qGlob,
+					).To(HaveLen(1), "exactly one _conflicts/<name-without-md>.<ts>.md must exist; got: %v", qGlob)
+					_, statErr := os.Stat(filepath.Join(workDir, corruptPath))
+					Expect(os.IsNotExist(statErr)).To(BeTrue(),
+						"corrupt file must not exist at original path after quarantine")
+
+					// AC3: 10 clean files at original paths with merged content (local body preserved).
+					for i := 1; i < 11; i++ {
+						name := fmt.Sprintf("note-%02d.md", i)
+						abs := filepath.Join(workDir, name)
+						data, readErr := os.ReadFile(abs)
+						Expect(readErr).NotTo(HaveOccurred())
+						Expect(string(data)).To(ContainSubstring(fmt.Sprintf("local body %d", i)))
+					}
+
+					// AC5: exactly one merge commit on top of pre-test HEAD; clean working tree.
+					// The pre-test HEAD is the seed commit (one commit at the start of the test).
+					// After Pull, there should be 1 merge commit plus 10+11 = 21 incoming commits.
+					// Use git log to count merge commits on the local branch since the test started.
+					preTestHead := strings.TrimSpace(gitOutputStr(workDir, "rev-parse", "HEAD@{1}"))
+					mergeCount := strings.TrimSpace(
+						gitOutputStr(
+							workDir,
+							"rev-list",
+							"--count",
+							"--merges",
+							"HEAD",
+							"^"+preTestHead,
+						),
+					)
+					Expect(mergeCount).To(Equal("1"),
+						"expected exactly one merge commit on top of pre-test HEAD, got: %s", mergeCount)
+					Expect(strings.TrimSpace(gitOutputStr(workDir, "status", "--porcelain"))).
+						To(BeEmpty(), "working tree must be clean after commit")
+
+					// AC6: WARN log line naming the corrupt path and the substring "quarantined".
+					logStr := logs.String()
+					Expect(logStr).To(ContainSubstring("quarantined conflicted file"))
+					Expect(logStr).To(ContainSubstring(corruptPath))
+
+					// AC12: commit message matches the fixed format and lists the corrupt path
+					// in quarantined plus all 10 clean paths in resolved (sorted alphabetically).
+					commitMsg := strings.TrimSpace(
+						gitOutputStr(workDir, "log", "-1", "--format=%s"),
+					)
+					Expect(commitMsg).To(MatchRegexp(
+						`^merge: resolved=\[[^\]]*\] quarantined=\[[^\]]*\]$`,
+					))
+					Expect(commitMsg).To(ContainSubstring("quarantined=[" + corruptPath + "]"))
+					for i := 1; i < 11; i++ {
+						name := fmt.Sprintf("note-%02d.md", i)
+						Expect(commitMsg).To(ContainSubstring(name),
+							"clean path %s must be in commit message", name)
+					}
+				},
+			)
+		},
+	)
+
+	Context("diverged, _conflicts/ already exists as a regular file (pathological case)", func() {
+		It(
+			"AC8: Pull returns wrapped ErrConflictResolutionFailed; working tree is clean; ERROR log is emitted",
+			func() {
+				workDir, localEdit, externalPush, seedFiles, qCleanup := setupQuarantineFixture(1)
+				defer qCleanup()
+				pPath := seedFiles[0]
+
+				// Capture slog output to assert the spec's failure-modes detection
+				// requirement: ERROR log line is emitted on the `_conflicts/ is a
+				// regular file` abort path (mirrors the WARN assertion in the
+				// unsafe-path internal test for symmetry).
+				logs, restoreLogs := captureSlogLogs()
+				defer restoreLogs()
+
+				// Force a single-file conflict with invalid frontmatter so the resolver fails.
+				externalPush(pPath, "---\nshared: remote\n---\nremote body\n")
+				localEdit(pPath, "---\nbad: : : colon: storm\n---\nlocal body\n")
+
+				// Pre-create _conflicts/ as a regular file to trip the pre-flight stat check.
+				conflictPath := filepath.Join(workDir, "_conflicts")
+				Expect(os.WriteFile(conflictPath, []byte("not a directory"), 0o600)).To(Succeed())
+
+				pgPath := git.New(
+					workDir,
+					fakeMetrics,
+					libtime.NewCurrentDateTime(),
+					"",
+					git.NewYAMLMergeResolver(workDir, fakeMetrics),
+				)
+
+				err := pgPath.Pull(ctx)
+				Expect(err).To(HaveOccurred())
+				Expect(errors.Is(err, git.ErrConflictResolutionFailed)).To(BeTrue(),
+					"expected wrapped ErrConflictResolutionFailed, got: %v", err)
+
+				// Merge was aborted: no MERGE_HEAD, HEAD is on a branch.
+				_, statErr := os.Stat(filepath.Join(workDir, ".git", "MERGE_HEAD"))
+				Expect(
+					os.IsNotExist(statErr),
+				).To(BeTrue(), ".git/MERGE_HEAD must not exist after aborted merge")
+				head := strings.TrimSpace(
+					gitOutputStr(workDir, "rev-parse", "--abbrev-ref", "HEAD"),
+				)
+				Expect(head).NotTo(Equal("HEAD"), "HEAD must be on a branch after abort")
+
+				// ERROR log line names the catastrophic config error (spec failure-modes row).
+				Expect(logs.String()).To(ContainSubstring("_conflicts/ exists as a regular file"))
+				Expect(logs.String()).To(ContainSubstring("level=ERROR"))
+			},
+		)
+	})
+
+	// AC11 (unsafe path) is tested in pkg/git/resolve_conflict_merge_test.go
+	// (a separate internal test file in `package git`) because it requires injecting a
+	// crafted conflictPaths list (containing "../escape.md") that a real git merge cannot
+	// produce. The internal test file calls the unexported resolveConflictPaths helper
+	// directly. See requirement 4b below for the file contents.
 })
 
 // captureSlogLogs swaps slog.Default() to a buffer-backed text handler for the
