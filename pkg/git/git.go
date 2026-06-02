@@ -774,11 +774,11 @@ func (g *git) ensureConflictsDir(ctx context.Context) error {
 
 // quarantineOne moves one conflicted file to _conflicts/<path>.<ts>.md (or
 // .quarantined for non-md). Returns true on success. On any per-step failure
-// the function records a git_mv_failed counter increment and an ERROR log
-// line, then returns false (the per-file loop continues with the next path).
-// `git mv` is not used because git refuses to move conflicted files; instead
-// we read the source, git rm the source to clear the conflict, then write
-// the destination and git add it.
+// the function records a quarantine_io_failed counter increment and an ERROR
+// log line, then returns false (the per-file loop continues with the next
+// path). `git mv` is not used because git refuses to move conflicted files;
+// instead we read the source, git rm the source to clear the conflict, then
+// write the destination and git add it.
 func (g *git) quarantineOne(ctx context.Context, path string, unixSeconds int64) bool {
 	destRel := quarantineDestPath(path, unixSeconds)
 	raw, readErr := os.ReadFile(
