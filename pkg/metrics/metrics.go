@@ -39,6 +39,13 @@ var ConflictPathsTotal = prometheus.NewCounter(prometheus.CounterOpts{
 	Help: "Total count of conflicted file paths passed to the ConflictResolver across pod lifetime.",
 })
 
+// ResolverFailuresTotal counts conflict-resolver failures by category.
+// Categories: yaml_parse_failed, no_frontmatter, write_failed, git_add_failed.
+var ResolverFailuresTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+	Name: "git_rest_resolver_failures_total",
+	Help: "Total conflict-resolver failures by category (yaml_parse_failed, no_frontmatter, write_failed, git_add_failed).",
+}, []string{"category"})
+
 func init() {
 	prometheus.MustRegister(
 		HTTPRequestsTotal,
@@ -46,6 +53,7 @@ func init() {
 		GitOperationErrors,
 		MergeOutcomeTotal,
 		ConflictPathsTotal,
+		ResolverFailuresTotal,
 	)
 	for _, op := range []string{"write_file", "delete_file", "read_file", "list_files", "pull", "fetch", "push", "rebase"} {
 		GitOperationErrors.WithLabelValues(op, "").Add(0)
@@ -66,6 +74,9 @@ func init() {
 	for _, result := range []string{"clean", "resolved", "aborted"} {
 		MergeOutcomeTotal.WithLabelValues(result).Add(0)
 	}
+	for _, category := range []string{"yaml_parse_failed", "no_frontmatter", "write_failed", "git_add_failed", "unsafe_path"} {
+		ResolverFailuresTotal.WithLabelValues(category).Add(0)
+	}
 }
 
 // Metrics records git operation instrumentation.
@@ -80,6 +91,9 @@ type Metrics interface {
 	IncMergeOutcome(result string)
 	// IncConflictPaths records n conflicted paths passed to the resolver in one merge cycle.
 	IncConflictPaths(n int)
+	// IncResolverFailure records a conflict-resolver failure by category.
+	// category must be one of: yaml_parse_failed, no_frontmatter, write_failed, git_add_failed.
+	IncResolverFailure(category string)
 }
 
 // NewMetrics returns a Prometheus-backed Metrics implementation.
@@ -111,4 +125,8 @@ func (p *prometheusMetrics) IncMergeOutcome(result string) {
 
 func (p *prometheusMetrics) IncConflictPaths(n int) {
 	ConflictPathsTotal.Add(float64(n))
+}
+
+func (p *prometheusMetrics) IncResolverFailure(category string) {
+	ResolverFailuresTotal.WithLabelValues(category).Inc()
 }

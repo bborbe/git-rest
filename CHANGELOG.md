@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## Unreleased
+
+- feat: Add `YAMLMergeResolver` for conflict resolution on markdown files with YAML frontmatter. Deep-merges frontmatter keys (theirs wins on overlap), concatenates bodies, and stages the result. On YAML parse failure, missing frontmatter delimiter, file-write error, or `git add` failure, returns the existing `ErrConflictResolutionFailed` sentinel so the puller aborts the merge (no invalid file is ever committed).
+- feat: Add `--vault-write` flag / `VAULT_WRITE_MODE` env (default `false`). When `true`, the pod uses `YAMLMergeResolver`; when `false`, behavior is unchanged (`MarkerResolver`). Selection is per-process; non-vault pods are unaffected.
+- feat: Add `git_rest_resolver_failures_total{category}` Prometheus counter with the four labels `yaml_parse_failed`, `no_frontmatter`, `write_failed`, `git_add_failed` pre-initialised to zero. Operators can distinguish resolver failure modes without log scraping.
+- Fixes agent vault scanner skipping markdown files whose frontmatter was clobbered by `<<<<<<<` markers (157 skips observed in prod the first minutes after `agent_controller_vault_scanner_skipped_files_total{reason="duplicate_frontmatter_invalid"}` went live).
+
 ## v0.20.1
 
 - fix: Replace `git rebase` with `git merge` in the puller's diverged-history path. Non-overlapping concurrent writes now auto-merge into a single commit (no operator action). Same-line conflicts are delegated to a pluggable `ConflictResolver`; the default `MarkerResolver` commits the merge with `<<<<<<<` / `=======` / `>>>>>>>` markers intact so both versions survive. Resolver failure aborts the merge and returns `ErrConflictResolutionFailed`. Two new counters (`git_rest_merge_outcome_total`, `git_rest_conflict_paths_total`) track merge outcomes and conflict frequency. Entry-state recovery extended to abort leftover `.git/MERGE_HEAD` from interrupted merges. Fixes vault-obsidian-openclaw-0 52h desync incident (2026-05-12): the dropped `tasks/analyse-trades-2026-05-11.md` commit would have been preserved under conflict markers instead of silently discarded.

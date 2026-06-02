@@ -83,6 +83,8 @@ spec:
               value: 'vault-<repo>@example.com'
             - name: PULL_INTERVAL
               value: '30s'
+            - name: VAULT_WRITE_MODE
+              value: 'true'  # set on vault-write pods; omit (or 'false') for human-touched repo pods
           ports:
             - containerPort: 9090
               name: http
@@ -167,4 +169,5 @@ Key metrics: request count + latency histogram, git operation durations, build i
 
 - **Auto-commit noise**: every write produces a commit. For high-write workloads, upstream consumers should accept this or batch through a higher-level API.
 - **Conflict handling**: git-rest auto-recovers from divergence (local ahead AND remote ahead, no content conflict) by rebase + push within one PullInterval. Real content conflicts during rebase leave the repo in conflicted state, readiness reports 503 with the conflict path (`last pull failed: rebase conflict at <path>`), and require human inspection (`kubectl exec` + manual resolve, or PVC reset for recoverable churn).
+- **Vault-write mode**: set `VAULT_WRITE_MODE=true` (or `--vault-write`) on pods that serve agent vault writes. The pod then uses `YAMLMergeResolver`: on a merge conflict in a markdown file with YAML frontmatter, the resolver deep-merges frontmatter keys (theirs wins on overlap) and combines bodies, producing a syntactically valid file. On YAML parse failure or missing frontmatter delimiters, the resolver returns `ErrConflictResolutionFailed` and the puller aborts the merge (same blast radius as today's `MarkerResolver` failure). Leave `VAULT_WRITE_MODE` unset (or `false`) on pods serving human-touched repos — they continue using `MarkerResolver`. Watch `git_rest_resolver_failures_total{category}` on `/metrics` to distinguish failure modes (`yaml_parse_failed`, `no_frontmatter`, `write_failed`, `git_add_failed`).
 - **Backups**: since data lives in the remote, the PVC is effectively a cache. Losing it triggers a re-clone on next bootstrap.

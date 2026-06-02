@@ -34,6 +34,11 @@ type FakeMetrics struct {
 	incRebaseConflictMutex       sync.RWMutex
 	incRebaseConflictArgsForCall []struct {
 	}
+	IncResolverFailureStub        func(string)
+	incResolverFailureMutex       sync.RWMutex
+	incResolverFailureArgsForCall []struct {
+		arg1 string
+	}
 	ObserveGitOperationStub        func(string, float64)
 	observeGitOperationMutex       sync.RWMutex
 	observeGitOperationArgsForCall []struct {
@@ -196,6 +201,38 @@ func (fake *FakeMetrics) IncRebaseConflictCalls(stub func()) {
 	fake.incRebaseConflictMutex.Lock()
 	defer fake.incRebaseConflictMutex.Unlock()
 	fake.IncRebaseConflictStub = stub
+}
+
+func (fake *FakeMetrics) IncResolverFailure(arg1 string) {
+	fake.incResolverFailureMutex.Lock()
+	fake.incResolverFailureArgsForCall = append(fake.incResolverFailureArgsForCall, struct {
+		arg1 string
+	}{arg1})
+	stub := fake.IncResolverFailureStub
+	fake.recordInvocation("IncResolverFailure", []interface{}{arg1})
+	fake.incResolverFailureMutex.Unlock()
+	if stub != nil {
+		fake.IncResolverFailureStub(arg1)
+	}
+}
+
+func (fake *FakeMetrics) IncResolverFailureCallCount() int {
+	fake.incResolverFailureMutex.RLock()
+	defer fake.incResolverFailureMutex.RUnlock()
+	return len(fake.incResolverFailureArgsForCall)
+}
+
+func (fake *FakeMetrics) IncResolverFailureCalls(stub func(string)) {
+	fake.incResolverFailureMutex.Lock()
+	defer fake.incResolverFailureMutex.Unlock()
+	fake.IncResolverFailureStub = stub
+}
+
+func (fake *FakeMetrics) IncResolverFailureArgsForCall(i int) string {
+	fake.incResolverFailureMutex.RLock()
+	defer fake.incResolverFailureMutex.RUnlock()
+	argsForCall := fake.incResolverFailureArgsForCall[i]
+	return argsForCall.arg1
 }
 
 func (fake *FakeMetrics) ObserveGitOperation(arg1 string, arg2 float64) {
