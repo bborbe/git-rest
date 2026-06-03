@@ -554,7 +554,8 @@ func (g *git) pullMergeAndPush(ctx context.Context, upstream string) error {
 
 // resolveConflictMerge handles the conflict path of pullMergeAndPush: delegates to g.resolver,
 // commits the resolved merge, then pushes. On per-file resolver failure, the failing file is
-// quarantined via `git mv` into _conflicts/<path>.<ts>.md (or .<ts>.quarantined for non-md).
+// quarantined (via read + git rm + write + git add — git refuses to git mv conflicted files)
+// into _conflicts/<path>.<ts>.md (or .<ts>.quarantined for non-md).
 // The merge commits with format `merge: resolved=[...] quarantined=[...]` if at least one path
 // was resolved or quarantined; otherwise the existing abort path runs.
 //
