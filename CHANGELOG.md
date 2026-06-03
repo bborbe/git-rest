@@ -8,7 +8,7 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 * MINOR version when you add functionality in a backwards-compatible manner, and
 * PATCH version when you make backwards-compatible bug fixes.
 
-## Unreleased
+## v0.22.0
 
 - feat: Add `git_rest_quarantined_files_total` unlabeled Prometheus counter for per-file quarantine events. The counter is registered at process start and pre-initialised to zero, so the time series is visible on `/metrics` before any quarantine event has occurred. Operators can `rate(git_rest_quarantined_files_total[5m])` to spot a sudden uptick of corrupt files in a served repo.
 - feat: Add `quarantine_io_failed` label value to the existing `git_rest_resolver_failures_total{category}` counter (alongside the pre-existing `unsafe_path`). The bucket covers any I/O failure in the quarantine flow (read source, git rm source, mkdir destination, write destination, git add destination) — quarantine does not use `git mv` (git refuses to move conflicted files), so the label reflects what it actually counts.
