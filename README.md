@@ -1,5 +1,10 @@
 # git-rest
 
+[![Go Reference](https://pkg.go.dev/badge/github.com/bborbe/git-rest.svg)](https://pkg.go.dev/github.com/bborbe/git-rest)
+[![CI](https://github.com/bborbe/git-rest/actions/workflows/ci.yml/badge.svg)](https://github.com/bborbe/git-rest/actions/workflows/ci.yml)
+[![Go Report Card](https://goreportcard.com/badge/github.com/bborbe/git-rest)](https://goreportcard.com/report/github.com/bborbe/git-rest)
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/bborbe/git-rest)
+
 Lightweight REST API server for reading and writing files in a git repository. Auto-commits and pushes on writes, periodic pull keeps the local clone in sync.
 
 ## Where this fits in the bigger picture
