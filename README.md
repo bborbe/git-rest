@@ -2,6 +2,14 @@
 
 Lightweight REST API server for reading and writing files in a git repository. Auto-commits and pushes on writes, periodic pull keeps the local clone in sync.
 
+## Where this fits in the bigger picture
+
+This service is the **vault writer** in the bborbe task / agent pipeline. [agent](https://github.com/bborbe/agent)'s `task/controller` calls git-rest over HTTP to create / update / delete the markdown task files that materialize Kafka `task.CreateCommand` events into an Obsidian vault git remote.
+
+git-rest itself knows nothing about tasks, vaults, or Kafka — it's a generic HTTP-over-git CRUD service. Any consumer wanting an HTTP write-path into a git repo can use it.
+
+Full system map: [recurring-task-creator/docs/system-map.md](https://github.com/bborbe/recurring-task-creator/blob/master/docs/system-map.md).
+
 ## Use Cases
 
 - Expose a git repo to non-git clients (HTTP-only consumers, agents, K8s pods)
