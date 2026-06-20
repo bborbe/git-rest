@@ -39,10 +39,17 @@ generate:
 	echo "package mocks" > mocks/mocks.go
 	go generate -mod=mod ./...
 
+# -race=true catches data races but flakes on some CI runners (rare SIGSEGV
+# during gexec.Build in cmd/*-style binary smoke tests). Default off; opt in
+# via ENABLE_RACE=true for nightly/manual hardening runs.
+TESTFLAGS_RACE = -race=false
+ifdef ENABLE_RACE
+	TESTFLAGS_RACE = -race=true
+endif
+
 .PHONY: test
 test:
-	# -race
-	go test -mod=mod -p=$${GO_TEST_PARALLEL:-1} -cover $(shell go list -mod=mod ./... | grep -v /vendor/)
+	go test -mod=mod -p=$${GO_TEST_PARALLEL:-1} -cover $(TESTFLAGS_RACE) $(shell go list -mod=mod ./... | grep -v /vendor/)
 
 .PHONY: check
 check: lint vet vulncheck osv-scanner trivy
@@ -150,12 +157,9 @@ apply:
 		cd ..; \
 	done
 
-.PHONY: buca
-buca: build upload clean apply
-
 .PHONY: fix
 fix:
-	@for dir in $$(find `pwd` -type d -name vendor -prune -o -name go.mod -exec dirname "{}" \; | grep -v '^$$'); do \
+	@for dir in $$(find $(CURDIR) -type d -name vendor -prune -o -name go.mod -exec dirname "{}" \; | grep -v '^$$'); do \
 		cd $${dir}; \
 		echo "fix $${dir}"; \
 		go get github.com/go-git/go-git/v5@latest; \
