@@ -1,0 +1,145 @@
+{{- range $vault := .Values.vaults }}
+{{- $name := include "git-rest.vaultName" (dict "name" $vault.name) }}
+{{- $secretName := include "git-rest.vaultSecretName" (dict "vault" $vault) }}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $name }}
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    app: {{ $name }}
+    {{- include "git-rest.labels" $ | nindent 4 }}
+  annotations:
+    {{- if $.Values.keel.enabled }}
+    keel.sh/policy: force
+    keel.sh/trigger: poll
+    keel.sh/match-tag: "true"
+    keel.sh/pollSchedule: {{ $.Values.keel.pollSchedule | quote }}
+    {{- end }}
+    {{- with $.Values.rolloutNonce }}
+    random: {{ . | quote }}
+    {{- end }}
+spec:
+  replicas: 1
+  serviceName: {{ $name }}
+  updateStrategy:
+    type: RollingUpdate
+  selector:
+    matchLabels:
+      app: {{ $name }}
+  template:
+    metadata:
+      annotations:
+        prometheus.io/path: /metrics
+        prometheus.io/port: "9090"
+        prometheus.io/scheme: http
+        prometheus.io/scrape: "true"
+        {{- with $.Values.rolloutNonce }}
+        random: {{ . | quote }}
+        {{- end }}
+      labels:
+        app: {{ $name }}
+    spec:
+      {{- with $.Values.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $.Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: service
+          image: {{ include "git-rest.image" $ | quote }}
+          imagePullPolicy: {{ $.Values.image.pullPolicy }}
+          {{- with $.Values.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          args:
+            - -v={{ $.Values.logLevel }}
+          env:
+            - name: LISTEN
+              value: ':9090'
+            - name: REPO
+              value: '/data'
+            - name: PULL_INTERVAL
+              value: {{ $.Values.pullInterval | quote }}
+            - name: GIT_REMOTE_URL
+              value: {{ required (printf "vaults[%s].repoUrl is required" $vault.name) $vault.repoUrl | quote }}
+            - name: GIT_SSH_KEY
+              value: '/ssh/id_ed25519'
+            - name: GIT_USER_NAME
+              value: {{ $name | quote }}
+            - name: GIT_USER_EMAIL
+              value: {{ printf "%s@quant.benjamin-borbe.de" $name | quote }}
+            - name: SENTRY_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secretName }}
+                  key: sentry-dsn
+                  optional: true
+            {{- with $.Values.sentry.proxy }}
+            - name: SENTRY_PROXY
+              value: {{ . | quote }}
+            {{- end }}
+            - name: GATEWAY_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secretName }}
+                  key: gateway-secret
+            {{- if $vault.writeMode }}
+            - name: VAULT_WRITE_MODE
+              value: 'true'
+            {{- end }}
+          ports:
+            - containerPort: 9090
+              name: http
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 9090
+              scheme: HTTP
+            initialDelaySeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 5
+            successThreshold: 1
+          readinessProbe:
+            httpGet:
+              path: /readiness
+              port: 9090
+              scheme: HTTP
+            initialDelaySeconds: 15
+            timeoutSeconds: 5
+          resources:
+            {{- toYaml $.Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: datadir
+              mountPath: /data
+            - name: ssh-key
+              mountPath: /ssh
+              readOnly: true
+      volumes:
+        - name: ssh-key
+          secret:
+            secretName: {{ $secretName }}
+            items:
+              - key: ssh-key
+                path: id_ed25519
+                mode: 0600
+      {{- with $.Values.image.pullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+  volumeClaimTemplates:
+    - metadata:
+        name: datadir
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        storageClassName: {{ (default dict $vault.storage).storageClassName | default "local-path" }}
+        resources:
+          requests:
+            storage: {{ (default dict $vault.storage).size | default "1Gi" }}
+{{- end }}

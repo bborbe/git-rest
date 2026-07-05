@@ -8,6 +8,19 @@ endif
 
 include tools.env
 
+# Package + publish the Helm chart in helm/ to OCI. Chart version comes from
+# helm/Chart.yaml (independent of the binary VERSION). Requires a prior
+# `helm registry login registry-1.docker.io`. Native Helm 3.8+ OCI push (NOT the
+# chartmuseum cm-push plugin) — same as the sibling bborbe/agent and
+# bborbe/recurring-task-creator charts.
+CHART_OCI ?= oci://registry-1.docker.io/bborbe
+.PHONY: helm-publish
+helm-publish:
+	@helm lint helm/
+	@helm template smoke helm/ --set vaults[0].name=smoke --set vaults[0].repoUrl=git@example.com:smoke.git --set vaults[0].existingSecret=smoke >/dev/null || exit 1
+	@helm package helm/ -d /tmp
+	@helm push /tmp/git-rest-$$(awk '/^version:/{print $$2; exit}' helm/Chart.yaml).tgz $(CHART_OCI)
+
 .PHONY: default
 default: precommit
 
