@@ -1,0 +1,21 @@
+{{- range $vault := .Values.vaults }}
+{{- $name := include "git-rest.vaultName" (dict "name" $vault.name) }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    app: {{ $name }}
+    {{- include "git-rest.labels" $ | nindent 4 }}
+  annotations:
+    admin/port: '9090'
+    admin/path: ''
+spec:
+  ports:
+    - name: http
+      port: 9090
+  selector:
+    app: {{ $name }}
+{{- end }}

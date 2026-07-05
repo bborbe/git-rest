@@ -1,0 +1,84 @@
+# git-rest — one instance per vault, each syncing a git repo into the cluster.
+#
+# The chart renders, PER entry in `vaults`: a StatefulSet (git checkout on a PVC)
+# + a Service, optionally a Secret (when the vault provides inline secret values
+# instead of an existingSecret) and quant-style monitoring Alert CRs.
+
+image:
+  registry: docker.io
+  repository: bborbe/git-rest
+  # Empty defaults to Chart.appVersion.
+  tag: ""
+  # git-rest pulls on a schedule; Always keeps mutable-tag deploys fresh. Override
+  # to IfNotPresent for immutable versioned pins.
+  pullPolicy: Always
+  # Private-registry pull secret(s), e.g. [{name: docker}]. Empty for public docker.io.
+  pullSecrets: []
+
+logLevel: "2"
+
+# Background puller fetch+rebase interval.
+pullInterval: "30s"
+
+sentry:
+  # Sentry proxy cluster URL (SENTRY_PROXY env). Optional.
+  proxy: ""
+
+# Node affinity applied to every vault StatefulSet. Empty = none (generic clusters).
+# quant pins to the per-namespace node pool (node_type in [<namespace>]).
+affinity: {}
+
+# Pod- and container-level securityContext. Empty by default — git-rest writes to
+# the /data checkout and reads /ssh, and historically ran without a hardened
+# context; override per cluster if desired.
+podSecurityContext: {}
+securityContext: {}
+
+resources:
+  requests:
+    cpu: 20m
+    memory: 50Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
+
+# keel auto-redeploy annotations (registry polling). Off by default — versioned
+# deploys bump image.tag + re-apply instead.
+keel:
+  enabled: false
+  pollSchedule: "@every 1m"
+
+# Extra pod annotation to force a rollout. Empty = omit.
+rolloutNonce: ""
+
+# Quant-specific monitoring.benjamin-borbe.de/v1 Alert CRs (pull-failing,
+# rebase-conflict, puller-silent) per vault. Off by default — generic clusters
+# lack that CRD. quant sets true.
+alerts:
+  enabled: false
+
+# Vaults to serve. Each entry renders vault-obsidian-<name> (StatefulSet + Service
+# [+ Secret + Alerts]). Minimal example:
+#
+#   vaults:
+#     - name: openclaw
+#       repoUrl: git@github.com:bborbe/obsidian-openclaw.git
+#       writeMode: true                      # false/omitted = read-only (puller only)
+#       existingSecret: vault-obsidian-openclaw   # keys: ssh-key, gateway-secret, sentry-dsn
+#       storage:
+#         size: 1Gi
+#         storageClassName: local-path
+#     - name: trading
+#       repoUrl: git@github.com:bborbe/obsidian-trading.git
+#       # read-only (no writeMode)
+#       existingSecret: vault-obsidian-trading
+#
+# Instead of existingSecret, a vault may inline `secret:` to have the chart create
+# the Secret (generic clusters without teamvault):
+#   secret:
+#     sshKey: |-
+#       -----BEGIN OPENSSH PRIVATE KEY-----
+#       ...
+#     gatewaySecret: "..."
+#     sentryDsn: "https://...@sentry/..."   # optional
+vaults: []

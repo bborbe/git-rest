@@ -1,0 +1,57 @@
+{{- if .Values.alerts.enabled }}
+{{- range $vault := .Values.vaults }}
+{{- $name := include "git-rest.vaultName" (dict "name" $vault.name) }}
+{{- $camel := $vault.name | title }}
+---
+apiVersion: monitoring.benjamin-borbe.de/v1
+kind: Alert
+metadata:
+  name: '{{ $name }}-pull-failing-warning'
+  namespace: {{ $.Release.Namespace }}
+spec:
+  annotations:
+    summary: {{ $name }} git pull failing
+    description: 'git-rest in {{ $name }} has failing pulls for >5min — check logs for fetch/auth/network errors or divergence'
+  expression: |-
+    rate(git_rest_git_operation_errors_total{app="{{ $name }}",operation=~"pull|fetch|push|rebase"}[5m]) > 0
+  for: 5m
+  labels:
+    severity: warning
+    namespace: {{ $.Release.Namespace }}
+  name: VaultObsidian{{ $camel }}PullFailing
+---
+apiVersion: monitoring.benjamin-borbe.de/v1
+kind: Alert
+metadata:
+  name: '{{ $name }}-rebase-conflict-critical'
+  namespace: {{ $.Release.Namespace }}
+spec:
+  annotations:
+    summary: {{ $name }} rebase content conflict
+    description: 'git-rest in {{ $name }} hit a rebase content conflict — readiness 503, requires human resolution. Exec into pod, check /readiness for conflict path, resolve manually or reset PVC.'
+  expression: |-
+    increase(git_rest_git_operation_errors_total{app="{{ $name }}",operation="rebase",conflict="true"}[10m]) > 0
+  for: 1m
+  labels:
+    severity: critical
+    namespace: {{ $.Release.Namespace }}
+  name: VaultObsidian{{ $camel }}RebaseConflict
+---
+apiVersion: monitoring.benjamin-borbe.de/v1
+kind: Alert
+metadata:
+  name: '{{ $name }}-puller-silent-critical'
+  namespace: {{ $.Release.Namespace }}
+spec:
+  annotations:
+    summary: {{ $name }} puller stopped
+    description: 'git-rest puller in {{ $name }} has not recorded a pull operation in >2min (PullInterval=30s, expected ≥4 ticks). Possible deadlock, panic, or scheduling issue.'
+  expression: |-
+    rate(git_rest_git_operation_duration_seconds_count{app="{{ $name }}",operation="pull"}[5m]) == 0
+  for: 2m
+  labels:
+    severity: critical
+    namespace: {{ $.Release.Namespace }}
+  name: VaultObsidian{{ $camel }}PullerSilent
+{{- end }}
+{{- end }}

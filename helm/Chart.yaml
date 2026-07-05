@@ -1,0 +1,19 @@
+apiVersion: v2
+name: git-rest
+description: >-
+  git-rest serves a git repository over a REST/HTTP API with a background puller
+  (fetch + rebase) and optional write mode. This chart deploys one git-rest
+  instance per entry in `vaults` — each a StatefulSet (git checkout on a PVC) +
+  Service, optionally a Secret (ssh key + gateway secret + sentry DSN) and
+  monitoring Alert CRs. Used to sync Obsidian vaults into the cluster
+  (`vault-obsidian-<name>`), consumed by the agent-task-controller and others.
+type: application
+version: 0.1.0
+appVersion: "v0.22.0"
+home: https://github.com/bborbe/git-rest
+sources:
+  - https://github.com/bborbe/git-rest
+maintainers:
+  - name: Benjamin Borbe
+annotations:
+  artifacthub.io/prerelease: "false"

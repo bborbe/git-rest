@@ -8,6 +8,11 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 * MINOR version when you add functionality in a backwards-compatible manner, and
 * PATCH version when you make backwards-compatible bug fixes.
 
+## Unreleased
+
+- chore: ignore 3 unfixable containerd indirect-dep CVEs (GO-2026-5064/5338/5622) in .osv-scanner.toml — no upstream fix, govulncheck-clean (unreachable); unblocks CI (master was red on the newly-published advisories)
+- feat: add standalone Helm chart in helm/ — one git-rest instance per `vaults` entry (StatefulSet + Service, optional Secret + monitoring Alert CRs); `existingSecret` or inline secret; `make helm-publish` pushes it to OCI. Lets quant (and third parties) deploy `vault-obsidian-<name>` instances via Helm instead of raw manifests.
+
 ## v0.22.0
 
 - feat: Add `git_rest_quarantined_files_total` unlabeled Prometheus counter for per-file quarantine events. The counter is registered at process start and pre-initialised to zero, so the time series is visible on `/metrics` before any quarantine event has occurred. Operators can `rate(git_rest_quarantined_files_total[5m])` to spot a sudden uptick of corrupt files in a served repo.
