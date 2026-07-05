@@ -17,3 +17,15 @@ reason = "github.com/docker/docker indirect dep, no fix available upstream"
 [[IgnoredVulns]]
 id = "GHSA-x86f-5xw2-fm2r"
 reason = "github.com/docker/docker indirect dep, no fix available upstream"
+
+[[IgnoredVulns]]
+id = "GO-2026-5064"
+reason = "github.com/containerd/containerd indirect dep, no fix available; govulncheck clean (unreachable)"
+
+[[IgnoredVulns]]
+id = "GO-2026-5338"
+reason = "github.com/containerd/containerd indirect dep, no fix available; govulncheck clean (unreachable)"
+
+[[IgnoredVulns]]
+id = "GO-2026-5622"
+reason = "github.com/containerd/containerd indirect dep, no fix available; govulncheck clean (unreachable)"
