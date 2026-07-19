@@ -15,3 +15,5 @@ CVE-2024-27758
 CVE-2026-41568
 CVE-2026-41567
 CVE-2026-42306
+# x/crypto/openpgp unmaintained (no fix); transitive, not imported
+GO-2026-5932
