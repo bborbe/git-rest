@@ -8,6 +8,10 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 * MINOR version when you add functionality in a backwards-compatible manner, and
 * PATCH version when you make backwards-compatible bug fixes.
 
+## Unreleased
+
+- fix(deps): bump x/text v0.39.0 (CVE-2026-56852) + Go 1.26.5 (GO-2026-5856); suppress unreachable/unfixable transitive CVEs (containerd, x/crypto/openpgp)
+
 ## v0.23.0
 
 - chore: ignore 3 unfixable containerd indirect-dep CVEs (GO-2026-5064/5338/5622) in .osv-scanner.toml — no upstream fix, govulncheck-clean (unreachable); unblocks CI (master was red on the newly-published advisories)
