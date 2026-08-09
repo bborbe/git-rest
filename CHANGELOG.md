@@ -8,7 +8,7 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 * MINOR version when you add functionality in a backwards-compatible manner, and
 * PATCH version when you make backwards-compatible bug fixes.
 
-## Unreleased
+## v0.24.0
 
 - feat: Add `/gc` (garbage collector) and `/setloglevel/{level}` admin endpoints to the probe route block, replacing the previous ad-hoc `curl` invocations for log level changes and manual GC triggering
 - fix: Add `ctx.Done()` cancellation guard to `yamlMergeResolver.Resolve` and `markerResolver.Resolve` loops so both abort promptly when the caller cancels; the YAML resolver now also wraps failures with the failing path name
