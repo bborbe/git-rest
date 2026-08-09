@@ -5,6 +5,7 @@ go 1.26.5
 require (
 	github.com/bborbe/errors v1.5.17
 	github.com/bborbe/http v1.26.18
+	github.com/bborbe/log v1.6.17
 	github.com/bborbe/run v1.9.32
 	github.com/bborbe/sentry v1.9.24
 	github.com/bborbe/service v1.10.6
@@ -23,7 +24,6 @@ require (
 	github.com/bborbe/argument/v2 v2.12.32 // indirect
 	github.com/bborbe/collection v1.20.17 // indirect
 	github.com/bborbe/kv v1.21.5 // indirect
-	github.com/bborbe/log v1.6.17 // indirect
 	github.com/bborbe/math v1.3.15 // indirect
 	github.com/bborbe/parse v1.10.17 // indirect
 	github.com/bborbe/validation v1.4.16 // indirect

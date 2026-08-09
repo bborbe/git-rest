@@ -17,6 +17,7 @@ import (
 
 	"github.com/bborbe/errors"
 	libhttp "github.com/bborbe/http"
+	liblog "github.com/bborbe/log"
 	"github.com/bborbe/run"
 	libsentry "github.com/bborbe/sentry"
 	"github.com/bborbe/service"
@@ -434,6 +435,11 @@ func (a *application) createHTTPServer(
 		router.Handle("/healthz", healthzH)
 		router.Handle("/readiness", readinessH)
 		router.Handle("/metrics", promhttp.Handler())
+		router.Handle("/gc", libhttp.NewGarbageCollectorHandler())
+		router.Handle(
+			"/setloglevel/{level}",
+			liblog.NewSetLoglevelHandler(ctx, liblog.NewLogLevelSetter(2, 5*time.Minute)),
+		)
 
 		return libhttp.NewServer(
 			a.Listen,

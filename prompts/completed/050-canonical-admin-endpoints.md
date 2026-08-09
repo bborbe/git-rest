@@ -1,7 +1,12 @@
 ---
-status: approved
+status: completed
+summary: Added /gc and /setloglevel/{level} admin endpoints to the probe route block, exported CreateServerHandler for integration testing, and added Ginkgo tests exercising both routes through the real server router
+execution_id: repo-exec-050-canonical-admin-endpoints
+dark-factory-version: v0.193.0
 created: "2026-08-09T19:45:00Z"
 queued: "2026-08-09T19:58:57Z"
+started: "2026-08-09T20:01:20Z"
+completed: "2026-08-09T20:09:14Z"
 ---
 
 <summary>
