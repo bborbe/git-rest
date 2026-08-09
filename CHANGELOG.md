@@ -8,7 +8,7 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 * MINOR version when you add functionality in a backwards-compatible manner, and
 * PATCH version when you make backwards-compatible bug fixes.
 
-## Unreleased
+## v0.23.2
 
 - fix(deps): bump go-git v5.19.1 → v5.19.2 (GHSA-hc8v-wwc9-vgxm CVSS 7.1, GHSA-qgq7-7hm3-q39j CVSS 6.3) and grpc v1.80.0 → v1.83.0 (GHSA-hrxh-6v49-42gf), plus the recurring bborbe/x/containerd/otel set — master precommit was red on osv-scanner and trivy
 
