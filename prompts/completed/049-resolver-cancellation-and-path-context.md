@@ -1,6 +1,12 @@
 ---
-status: draft
+status: completed
+summary: Add ctx.Done() cancellation guard to yamlMergeResolver.Resolve and markerResolver.Resolve loops, and include failing path name in YAML resolver error
+execution_id: repo-exec-049-resolver-cancellation-and-path-context
+dark-factory-version: v0.193.0
 created: "2026-08-09T19:45:00Z"
+queued: "2026-08-09T19:58:57Z"
+started: "2026-08-09T19:59:52Z"
+completed: "2026-08-09T20:01:19Z"
 ---
 
 <summary>

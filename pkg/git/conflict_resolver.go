@@ -39,6 +39,11 @@ type markerResolver struct {
 // because git's three-way merge already wrote the marker-annotated content to disk.
 func (r *markerResolver) Resolve(ctx context.Context, conflictedPaths []string) error {
 	for _, path := range conflictedPaths {
+		select {
+		case <-ctx.Done():
+			return errors.Wrap(ctx, ctx.Err(), "context cancelled")
+		default:
+		}
 		// #nosec G204 -- git binary is hardcoded; paths come from git merge output, not user input
 		cmd := exec.CommandContext(ctx, "git", "add", "--", path)
 		cmd.Dir = r.repoPath
