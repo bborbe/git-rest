@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	libtime "github.com/bborbe/time"
 	gorillamux "github.com/gorilla/mux"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -24,6 +25,8 @@ import (
 	main "github.com/bborbe/git-rest"
 	"github.com/bborbe/git-rest/mocks"
 	"github.com/bborbe/git-rest/pkg/factory"
+	"github.com/bborbe/git-rest/pkg/git"
+	"github.com/bborbe/git-rest/pkg/puller"
 )
 
 //go:generate go run github.com/maxbrunsfeld/counterfeiter/v6@v6.12.2 -generate
@@ -572,6 +575,61 @@ var _ = Describe("GatewaySecretRouting", func() {
 		It("/readiness returns 200 with no headers", func() {
 			req := httptest.NewRequest(http.MethodGet, "/readiness", nil)
 			wrapped.ServeHTTP(rec, req)
+			Expect(rec.Code).To(Equal(http.StatusOK))
+		})
+	})
+})
+
+var _ = Describe("AdminRoutes", func() {
+	var (
+		handler http.Handler
+		rec     *httptest.ResponseRecorder
+		repoDir string
+	)
+
+	BeforeEach(func() {
+		rec = httptest.NewRecorder()
+		repoDir = GinkgoT().TempDir()
+
+		// Initialize a git repo so the app bootstrap passes
+		run := func(args ...string) {
+			full := append([]string{"-C", repoDir}, args...)
+			cmd := exec.Command("git", full...)
+			out, err := cmd.CombinedOutput()
+			Expect(err).NotTo(HaveOccurred(), string(out))
+		}
+		run("init")
+		run("config", "user.email", "test@example.com")
+		run("config", "user.name", "Test")
+
+		gitClient := factory.CreateGitClient(
+			repoDir,
+			&mocks.FakeMetrics{},
+			libtime.NewCurrentDateTime(),
+			"",
+			git.NewMarkerResolver(repoDir),
+		)
+		pullState := puller.NewPullStateCache(
+			libtime.NewCurrentDateTime(),
+			3*30*time.Second,
+		)
+
+		// CreateServerHandler returns the http.Handler for the probe routes
+		handler = main.CreateServerHandler(gitClient, &mocks.FakeMetrics{}, pullState)
+	})
+
+	Context("GET /gc", func() {
+		It("returns 200", func() {
+			req := httptest.NewRequest(http.MethodGet, "/gc", nil)
+			handler.ServeHTTP(rec, req)
+			Expect(rec.Code).To(Equal(http.StatusOK))
+		})
+	})
+
+	Context("GET /setloglevel/2", func() {
+		It("returns 200", func() {
+			req := httptest.NewRequest(http.MethodGet, "/setloglevel/2", nil)
+			handler.ServeHTTP(rec, req)
 			Expect(rec.Code).To(Equal(http.StatusOK))
 		})
 	})

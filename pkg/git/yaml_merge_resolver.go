@@ -58,8 +58,13 @@ type yamlMergeResolver struct {
 // clean state).
 func (r *yamlMergeResolver) Resolve(ctx context.Context, conflictedPaths []string) error {
 	for _, path := range conflictedPaths {
+		select {
+		case <-ctx.Done():
+			return errors.Wrap(ctx, ctx.Err(), "context cancelled")
+		default:
+		}
 		if err := r.resolveOne(ctx, path); err != nil {
-			return err
+			return errors.Wrapf(ctx, err, "resolve conflict %q", path)
 		}
 	}
 	return nil

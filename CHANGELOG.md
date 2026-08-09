@@ -8,6 +8,11 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 * MINOR version when you add functionality in a backwards-compatible manner, and
 * PATCH version when you make backwards-compatible bug fixes.
 
+## Unreleased
+
+- feat: Add `/gc` (garbage collector) and `/setloglevel/{level}` admin endpoints to the probe route block, replacing the previous ad-hoc `curl` invocations for log level changes and manual GC triggering
+- fix: Add `ctx.Done()` cancellation guard to `yamlMergeResolver.Resolve` and `markerResolver.Resolve` loops so both abort promptly when the caller cancels; the YAML resolver now also wraps failures with the failing path name
+
 ## v0.23.3
 
 - chore: delete `tools.go` and remove tool-dependency pollution from `go.mod` — tool CLIs (golangci-lint, osv-scanner, counterfeiter, etc.) are no longer declared as module dependencies; versions stay pinned via `tools.env` and `go run pkg@$(VERSION)`; `go.mod` shrunk from 462 to 50 lines; five `replace` workarounds removed; `go-git` removed entirely
