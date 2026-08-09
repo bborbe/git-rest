@@ -8,7 +8,7 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 * MINOR version when you add functionality in a backwards-compatible manner, and
 * PATCH version when you make backwards-compatible bug fixes.
 
-## Unreleased
+## v0.23.3
 
 - chore: delete `tools.go` and remove tool-dependency pollution from `go.mod` — tool CLIs (golangci-lint, osv-scanner, counterfeiter, etc.) are no longer declared as module dependencies; versions stay pinned via `tools.env` and `go run pkg@$(VERSION)`; `go.mod` shrunk from 462 to 50 lines; five `replace` workarounds removed; `go-git` removed entirely
 
