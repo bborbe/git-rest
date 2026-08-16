@@ -8,6 +8,10 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 * MINOR version when you add functionality in a backwards-compatible manner, and
 * PATCH version when you make backwards-compatible bug fixes.
 
+## Unreleased
+
+- update Go to 1.26.6 and update dependencies (GO-2026-6179, GO-2026-6180)
+
 ## v0.24.0
 
 - feat: Add `/gc` (garbage collector) and `/setloglevel/{level}` admin endpoints to the probe route block, replacing the previous ad-hoc `curl` invocations for log level changes and manual GC triggering
