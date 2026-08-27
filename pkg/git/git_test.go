@@ -268,6 +268,73 @@ var _ = Describe("Git", func() {
 		})
 	})
 
+	Context("WriteFileIfAbsent", func() {
+		Context("path validation", func() {
+			It("returns error for empty path", func() {
+				err := g.WriteFileIfAbsent(ctx, "", []byte("content"))
+				Expect(err).To(HaveOccurred())
+				Expect(errors.Is(err, git.ErrInvalidPath)).To(BeTrue())
+			})
+
+			It("returns error for path traversal", func() {
+				err := g.WriteFileIfAbsent(ctx, "../escape.txt", []byte("content"))
+				Expect(err).To(HaveOccurred())
+				Expect(errors.Is(err, git.ErrInvalidPath)).To(BeTrue())
+			})
+		})
+
+		Context("create-only semantics", func() {
+			It("creates a file when the path is free", func() {
+				err := g.WriteFileIfAbsent(ctx, "fresh.txt", []byte("hello"))
+				Expect(err).NotTo(HaveOccurred())
+
+				got, err := g.ReadFile(ctx, "fresh.txt")
+				Expect(err).NotTo(HaveOccurred())
+				Expect(got).To(Equal([]byte("hello")))
+
+				out, err := exec.Command("git", "-C", workDir, "log", "--oneline", "-1").Output()
+				Expect(err).NotTo(HaveOccurred())
+				Expect(string(out)).To(ContainSubstring("git-rest: create fresh.txt"))
+			})
+
+			It("returns ErrFileExists and preserves content when the path is occupied", func() {
+				Expect(g.WriteFile(ctx, "taken.txt", []byte("original"))).To(Succeed())
+
+				err := g.WriteFileIfAbsent(ctx, "taken.txt", []byte("overwrite"))
+				Expect(err).To(HaveOccurred())
+				Expect(errors.Is(err, git.ErrFileExists)).To(BeTrue())
+
+				// Original content intact, no new commit on the path.
+				got, err := g.ReadFile(ctx, "taken.txt")
+				Expect(err).NotTo(HaveOccurred())
+				Expect(got).To(Equal([]byte("original")))
+
+				out, err := exec.Command("git", "-C", workDir, "log", "--oneline", "--", "taken.txt").
+					Output()
+				Expect(err).NotTo(HaveOccurred())
+				lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+				var nonEmpty []string
+				for _, l := range lines {
+					if l != "" {
+						nonEmpty = append(nonEmpty, l)
+					}
+				}
+				Expect(
+					nonEmpty,
+				).To(HaveLen(1), "expected only the create commit, got: %s", string(out))
+			})
+
+			It("creates intermediate directories", func() {
+				err := g.WriteFileIfAbsent(ctx, "x/y/z.txt", []byte("nested"))
+				Expect(err).NotTo(HaveOccurred())
+
+				got, err := g.ReadFile(ctx, "x/y/z.txt")
+				Expect(err).NotTo(HaveOccurred())
+				Expect(got).To(Equal([]byte("nested")))
+			})
+		})
+	})
+
 	Context("DeleteFile", func() {
 		Context("path validation", func() {
 			It("returns error for empty path", func() {
