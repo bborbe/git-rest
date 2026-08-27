@@ -122,6 +122,19 @@ type FakeGit struct {
 	writeFileReturnsOnCall map[int]struct {
 		result1 error
 	}
+	WriteFileIfAbsentStub        func(context.Context, string, []byte) error
+	writeFileIfAbsentMutex       sync.RWMutex
+	writeFileIfAbsentArgsForCall []struct {
+		arg1 context.Context
+		arg2 string
+		arg3 []byte
+	}
+	writeFileIfAbsentReturns struct {
+		result1 error
+	}
+	writeFileIfAbsentReturnsOnCall map[int]struct {
+		result1 error
+	}
 	invocations      map[string][][]interface{}
 	invocationsMutex sync.RWMutex
 }
@@ -693,6 +706,74 @@ func (fake *FakeGit) WriteFileReturnsOnCall(i int, result1 error) {
 		})
 	}
 	fake.writeFileReturnsOnCall[i] = struct {
+		result1 error
+	}{result1}
+}
+
+func (fake *FakeGit) WriteFileIfAbsent(arg1 context.Context, arg2 string, arg3 []byte) error {
+	var arg3Copy []byte
+	if arg3 != nil {
+		arg3Copy = make([]byte, len(arg3))
+		copy(arg3Copy, arg3)
+	}
+	fake.writeFileIfAbsentMutex.Lock()
+	ret, specificReturn := fake.writeFileIfAbsentReturnsOnCall[len(fake.writeFileIfAbsentArgsForCall)]
+	fake.writeFileIfAbsentArgsForCall = append(fake.writeFileIfAbsentArgsForCall, struct {
+		arg1 context.Context
+		arg2 string
+		arg3 []byte
+	}{arg1, arg2, arg3Copy})
+	stub := fake.WriteFileIfAbsentStub
+	fakeReturns := fake.writeFileIfAbsentReturns
+	fake.recordInvocation("WriteFileIfAbsent", []interface{}{arg1, arg2, arg3Copy})
+	fake.writeFileIfAbsentMutex.Unlock()
+	if stub != nil {
+		return stub(arg1, arg2, arg3)
+	}
+	if specificReturn {
+		return ret.result1
+	}
+	return fakeReturns.result1
+}
+
+func (fake *FakeGit) WriteFileIfAbsentCallCount() int {
+	fake.writeFileIfAbsentMutex.RLock()
+	defer fake.writeFileIfAbsentMutex.RUnlock()
+	return len(fake.writeFileIfAbsentArgsForCall)
+}
+
+func (fake *FakeGit) WriteFileIfAbsentCalls(stub func(context.Context, string, []byte) error) {
+	fake.writeFileIfAbsentMutex.Lock()
+	defer fake.writeFileIfAbsentMutex.Unlock()
+	fake.WriteFileIfAbsentStub = stub
+}
+
+func (fake *FakeGit) WriteFileIfAbsentArgsForCall(i int) (context.Context, string, []byte) {
+	fake.writeFileIfAbsentMutex.RLock()
+	defer fake.writeFileIfAbsentMutex.RUnlock()
+	argsForCall := fake.writeFileIfAbsentArgsForCall[i]
+	return argsForCall.arg1, argsForCall.arg2, argsForCall.arg3
+}
+
+func (fake *FakeGit) WriteFileIfAbsentReturns(result1 error) {
+	fake.writeFileIfAbsentMutex.Lock()
+	defer fake.writeFileIfAbsentMutex.Unlock()
+	fake.WriteFileIfAbsentStub = nil
+	fake.writeFileIfAbsentReturns = struct {
+		result1 error
+	}{result1}
+}
+
+func (fake *FakeGit) WriteFileIfAbsentReturnsOnCall(i int, result1 error) {
+	fake.writeFileIfAbsentMutex.Lock()
+	defer fake.writeFileIfAbsentMutex.Unlock()
+	fake.WriteFileIfAbsentStub = nil
+	if fake.writeFileIfAbsentReturnsOnCall == nil {
+		fake.writeFileIfAbsentReturnsOnCall = make(map[int]struct {
+			result1 error
+		})
+	}
+	fake.writeFileIfAbsentReturnsOnCall[i] = struct {
 		result1 error
 	}{result1}
 }

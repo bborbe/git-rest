@@ -37,6 +37,11 @@ var ErrNotFound = stderrors.New("file not found")
 // ErrInvalidPath is returned when the requested path fails validation.
 var ErrInvalidPath = stderrors.New("invalid path")
 
+// ErrFileExists is returned when a create-only write targets a path that is
+// already occupied. Callers distinguish "already there" (a benign no-op for
+// idempotent publishers) from a genuine write failure via errors.Is.
+var ErrFileExists = stderrors.New("file already exists")
+
 // ErrRepoUnrecoverable is returned by Pull when the repository is in a state
 // that cannot be automatically healed (e.g., git rebase --abort fails, or
 // refs/remotes/origin/HEAD is missing for detached-HEAD recovery).
@@ -113,6 +118,10 @@ type Status struct {
 //counterfeiter:generate -o ../../mocks/git.go --fake-name FakeGit . Git
 type Git interface {
 	WriteFile(ctx context.Context, path string, content []byte) error
+	// WriteFileIfAbsent writes content to path only when no file exists there
+	// yet. It returns ErrFileExists (via errors.Is) when path is occupied, and
+	// performs no repository modification in that case.
+	WriteFileIfAbsent(ctx context.Context, path string, content []byte) error
 	DeleteFile(ctx context.Context, path string) error
 	ReadFile(ctx context.Context, path string) ([]byte, error)
 	ListFiles(ctx context.Context, pattern string) ([]string, error)
@@ -317,7 +326,47 @@ func (g *git) WriteFile(ctx context.Context, path string, content []byte) error 
 
 	fullPath := filepath.Join(g.repoPath, path)
 	_, statErr := os.Stat(fullPath)
-	fileExists := statErr == nil
+	return g.writeFileLocked(ctx, path, content, statErr == nil)
+}
+
+// WriteFileIfAbsent writes content to path only when no file exists there yet,
+// then stages, commits and pushes — the create-only counterpart to WriteFile.
+// When path is already occupied it returns ErrFileExists (via errors.Is) and
+// leaves the repository untouched. The existence check and the write share a
+// single mutex hold, so the check-then-write is atomic: an existing file can
+// never be overwritten, which is the guarantee idempotent publishers rely on
+// instead of a separate pre-write read.
+func (g *git) WriteFileIfAbsent(ctx context.Context, path string, content []byte) error {
+	start := g.currentDateTimeGetter.Now()
+	defer func() {
+		g.metrics.ObserveGitOperation("write_file", time.Since(time.Time(start)).Seconds())
+	}()
+
+	if err := validatePath(ctx, path); err != nil {
+		g.metrics.IncGitOperationError("write_file")
+		return errors.Wrap(ctx, err, "validate path")
+	}
+
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	fullPath := filepath.Join(g.repoPath, path)
+	if _, err := os.Stat(fullPath); err == nil {
+		g.metrics.IncGitOperationError("write_file")
+		return errors.Wrapf(ctx, ErrFileExists, "path %s already exists", path)
+	}
+	return g.writeFileLocked(ctx, path, content, false)
+}
+
+// writeFileLocked performs the write + git add + commit + push while the caller
+// holds g.mu. fileExists only selects the commit message ("create" vs "update").
+func (g *git) writeFileLocked(
+	ctx context.Context,
+	path string,
+	content []byte,
+	fileExists bool,
+) error {
+	fullPath := filepath.Join(g.repoPath, path)
 
 	if err := os.MkdirAll(filepath.Dir(fullPath), 0750); err != nil {
 		g.metrics.IncGitOperationError("write_file")

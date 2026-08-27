@@ -122,4 +122,60 @@ var _ = Describe("FilesPostHandler", func() {
 			Expect(err).NotTo(BeNil())
 		})
 	})
+
+	Context("create_only", func() {
+		It("delegates to WriteFileIfAbsent when create_only=1", func() {
+			req := httptest.NewRequest(
+				http.MethodPost,
+				"/api/v1/files/foo.txt?create_only=1",
+				bytes.NewBufferString("content"),
+			)
+			err := h.ServeHTTP(ctx, rec, req)
+			Expect(err).To(BeNil())
+			Expect(rec.Code).To(Equal(http.StatusOK))
+			Expect(fakeGit.WriteFileIfAbsentCallCount()).To(Equal(1))
+			_, path, content := fakeGit.WriteFileIfAbsentArgsForCall(0)
+			Expect(path).To(Equal("foo.txt"))
+			Expect(content).To(Equal([]byte("content")))
+		})
+
+		It("returns 409 when the path is already occupied", func() {
+			fakeGit.WriteFileIfAbsentReturns(git.ErrFileExists)
+			req := httptest.NewRequest(
+				http.MethodPost,
+				"/api/v1/files/foo.txt?create_only=1",
+				bytes.NewBufferString("content"),
+			)
+			err := h.ServeHTTP(ctx, rec, req)
+			Expect(err).NotTo(BeNil())
+			var errWithStatus libhttp.ErrorWithStatusCode
+			Expect(errors.As(err, &errWithStatus)).To(BeTrue())
+			Expect(errWithStatus.StatusCode()).To(Equal(http.StatusConflict))
+		})
+
+		It("returns 400 for invalid path under create_only", func() {
+			fakeGit.WriteFileIfAbsentReturns(git.ErrInvalidPath)
+			req := httptest.NewRequest(
+				http.MethodPost,
+				"/api/v1/files/../etc/passwd?create_only=1",
+				bytes.NewBufferString("x"),
+			)
+			err := h.ServeHTTP(ctx, rec, req)
+			Expect(err).NotTo(BeNil())
+			var errWithStatus libhttp.ErrorWithStatusCode
+			Expect(errors.As(err, &errWithStatus)).To(BeTrue())
+			Expect(errWithStatus.StatusCode()).To(Equal(http.StatusBadRequest))
+		})
+
+		It("does not call WriteFileIfAbsent without the param", func() {
+			req := httptest.NewRequest(
+				http.MethodPost,
+				"/api/v1/files/foo.txt",
+				bytes.NewBufferString("content"),
+			)
+			err := h.ServeHTTP(ctx, rec, req)
+			Expect(err).To(BeNil())
+			Expect(fakeGit.WriteFileIfAbsentCallCount()).To(Equal(0))
+		})
+	})
 })
