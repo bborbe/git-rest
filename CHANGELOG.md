@@ -8,6 +8,10 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 * MINOR version when you add functionality in a backwards-compatible manner, and
 * PATCH version when you make backwards-compatible bug fixes.
 
+## Unreleased
+
+- chore: update github.com/bborbe/errors to v1.6.0, github.com/bborbe/http to v1.26.25, github.com/bborbe/run to v1.10.2, github.com/bborbe/sentry to v1.10.0, github.com/bborbe/service to v1.10.10, github.com/bborbe/time to v1.27.11, github.com/onsi/gomega to v1.43.0
+
 ## v0.25.0
 
 - feat: add create-only file write — `POST /api/v1/files/{path}?create_only=1` returns 409 Conflict instead of overwriting when the path is already occupied (`WriteFileIfAbsent`, atomic under the repo mutex)
