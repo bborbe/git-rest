@@ -52,7 +52,7 @@ keel:
 rolloutNonce: ""
 
 # Quant-specific monitoring.benjamin-borbe.de/v1 Alert CRs (pull-failing,
-# rebase-conflict, puller-silent) per vault. Off by default — generic clusters
+# rebase-conflict, puller-silent, quarantine-backlog) per vault. Off by default — generic clusters
 # lack that CRD. quant sets true.
 alerts:
   enabled: false

@@ -1,8 +1,13 @@
 ---
-status: approved
+status: completed
 spec: [013-quarantine-nesting-and-drain]
+summary: Added a per-vault VaultObsidian<Realm>QuarantineBacklog Alert (git_rest_quarantined_backlog > 0, for 1h, severity warning) inside the chart's existing vault loop, updated the chart's alert documentation, bumped the chart to 0.1.1, and appended the CHANGELOG bullet.
+execution_id: git-rest-quarantine-drain-exec-052-spec-013-quarantine-backlog-alert
+dark-factory-version: dev
 created: "2026-09-13T21:20:00Z"
 queued: "2026-09-14T06:08:34Z"
+started: "2026-09-14T06:15:03Z"
+completed: "2026-09-14T06:16:56Z"
 branch: dark-factory/quarantine-nesting-and-drain
 ---
 
