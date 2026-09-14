@@ -1,8 +1,9 @@
 ---
-status: prompted
+status: verifying
 approved: "2026-09-13T21:04:51Z"
 generating: "2026-09-13T21:05:10Z"
 prompted: "2026-09-13T21:23:58Z"
+verifying: "2026-09-14T06:19:13Z"
 branch: dark-factory/quarantine-nesting-and-drain
 ---
 
