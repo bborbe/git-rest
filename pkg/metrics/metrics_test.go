@@ -74,3 +74,11 @@ var _ = Describe("ResolverFailuresTotal quarantine_io_failed label", func() {
 		)).To(Equal(0.0))
 	})
 })
+
+var _ = Describe("ResolverFailuresTotal nested_source label", func() {
+	It("is pre-initialised to 0 alongside the existing label values", func() {
+		Expect(gatherCounterVecLabelValue(
+			"git_rest_resolver_failures_total", "category", "nested_source",
+		)).To(Equal(0.0))
+	})
+})

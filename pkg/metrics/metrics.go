@@ -47,7 +47,7 @@ var QuarantinedFilesTotal = prometheus.NewCounter(prometheus.CounterOpts{
 
 // ResolverFailuresTotal counts conflict-resolver failures by category.
 // Categories: yaml_parse_failed, no_frontmatter, write_failed, git_add_failed,
-// quarantine_io_failed, unsafe_path. The quarantine_io_failed bucket covers
+// quarantine_io_failed, unsafe_path, nested_source. The quarantine_io_failed bucket covers
 // any I/O failure in the quarantine flow (read source, git rm source, mkdir
 // destination, write destination, git add destination) — the implementation
 // does not use git mv (git refuses to move conflicted files), so the
@@ -55,7 +55,7 @@ var QuarantinedFilesTotal = prometheus.NewCounter(prometheus.CounterOpts{
 // counts.
 var ResolverFailuresTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
 	Name: "git_rest_resolver_failures_total",
-	Help: "Total conflict-resolver failures by category. Resolver failures: yaml_parse_failed, no_frontmatter, write_failed, git_add_failed. Quarantine failures: quarantine_io_failed (any I/O step of the quarantine flow), unsafe_path (path-traversal rejection).",
+	Help: "Total conflict-resolver failures by category. Resolver failures: yaml_parse_failed, no_frontmatter, write_failed, git_add_failed. Quarantine failures: quarantine_io_failed (any I/O step of the quarantine flow), unsafe_path (path-traversal rejection), nested_source (a conflicted path already under _conflicts/ was rejected by the nesting guard).",
 }, []string{"category"})
 
 func init() {
@@ -100,6 +100,7 @@ func init() {
 		"git_add_failed",
 		"unsafe_path",
 		"quarantine_io_failed",
+		"nested_source",
 	} {
 		ResolverFailuresTotal.WithLabelValues(category).Add(0)
 	}
@@ -119,7 +120,7 @@ type Metrics interface {
 	IncConflictPaths(n int)
 	// IncResolverFailure records a conflict-resolver failure by category.
 	// category must be one of: yaml_parse_failed, no_frontmatter, write_failed,
-	// git_add_failed, unsafe_path, quarantine_io_failed.
+	// git_add_failed, unsafe_path, quarantine_io_failed, nested_source.
 	IncResolverFailure(category string)
 	// IncQuarantinedFiles records a single file moved into _conflicts/ during pull.
 	IncQuarantinedFiles()

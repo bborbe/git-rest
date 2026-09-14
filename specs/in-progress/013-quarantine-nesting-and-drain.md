@@ -1,6 +1,9 @@
 ---
-status: draft
-kind: bug
+status: prompted
+approved: "2026-09-13T21:04:51Z"
+generating: "2026-09-13T21:05:10Z"
+prompted: "2026-09-13T21:23:58Z"
+branch: dark-factory/quarantine-nesting-and-drain
 ---
 
 ## Summary
@@ -156,14 +159,19 @@ make test
 grep -n 'git_rest_quarantined_backlog' pkg/metrics/metrics.go
 grep -n 'nested_source' pkg/metrics/metrics.go
 grep -n 'QuarantineBacklog' helm/templates/alerts.yaml
-helm template helm --set alerts.enabled=true --set 'vaults[0].name=personal' --set 'vaults[0].repoUrl=git@github.com:bborbe/obsidian-personal.git'
-git log --oneline origin/master..HEAD -- pkg/git/conflict_resolver.go mocks/conflict_resolver.go
+grep -n 'version:' helm/Chart.yaml
 ```
 
-All commands exit 0; each `grep` returns ≥1 match; the `helm template` output contains `VaultObsidianPersonalQuarantineBacklog`; the `git log` returns 0 lines (the frozen files are untouched on this branch).
+All commands exit 0; each `grep` returns ≥1 match.
+
+`helm template` is deliberately **not** here: the YOLO container ships no `helm`, so a render invoked in-container either fails or is silently skipped. The render is an operator-ladder check (below). The same applies to any `git` command — the daemon runs with `hideGit=true`, so a `git log` in-container dies with `fatal: not a git repository` and prints 0 lines, which is indistinguishable from the "0 lines" the frozen-file check asserts; that check is operator-only for exactly this reason.
 
 ### Operator-executable (runs on the host, spec verification ladder)
 
+- `helm lint helm/` and `helm template helm --set alerts.enabled=true --set 'vaults[0].name=personal' --set 'vaults[0].repoUrl=git@github.com:bborbe/obsidian-personal.git'` — exactly one rendered document has `spec.name: VaultObsidianPersonalQuarantineBacklog`. The fixture is required: the chart's default `vaults: []` renders nothing, so a bare render would pass vacuously. Neither command runs in the YOLO container (no `helm` in the image).
+- `git log --oneline origin/master..HEAD -- pkg/git/conflict_resolver.go mocks/conflict_resolver.go` — must print 0 lines. Host-only; `.git` is masked in the container, where the same command prints 0 lines for the wrong reason.
+- `git tag` the release, then `make helm-publish` — republishes the chart to `CHART_OCI`. **This step gates every deploy AC**: editing `helm/templates/alerts.yaml` has zero cluster effect until the chart is republished, because the consumer pulls it from OCI by version.
+- Bump `CHART_VERSION` in `~/Documents/workspaces/nuke/git-rest/Makefile` to the new chart version, merged to `nuke` master — without it `BRANCH=dev make apply` re-pulls the old chart and the alert never renders. `helm/Chart.yaml`'s `version` and nuke's `CHART_VERSION` must move together.
 - `go build -o /tmp/git-rest-verify .` — fresh binary from current source, then replay `## Reproduction` locally against the temp fixture; no second `_conflicts/` level may appear
 - `docker run --rm -v /tmp/gr-container:/data <built-image> -repo=/data -pull-interval=3s -vault-write=true` — the released image against a local fixture, which is how the dev replay is exercised *without* wedging the shared dev vault pod
 - `cd ~/Documents/workspaces/nuke && git pull && cd git-rest && BRANCH=dev make apply` — mirror + Helm upgrade to dev
@@ -198,14 +206,16 @@ All commands exit 0; each `grep` returns ≥1 match; the `helm template` output 
 - Build via `make precommit` from the repo root.
 - The alert is one additional document inside the existing `range` loop — no new template file, no change to the `alerts.enabled` gate.
 - `docs/deployment.md` documents the resolver failure categories and currently lists four, with a stale claim that a YAML-parse failure aborts the merge. Update it to the real category set including `nested_source`, and document the backlog gauge and the alert alongside it.
-- `docs/verifying-specs.md` is stale on the same axis the deploy references were: its rung-2/3 sections still target `kubectlquant`, `trading-dev`, `shared/base`, and `vault-obsidian-{openclaw,trading}`. Correct it to the `nuke/git-rest/` deploy source and the `kubectlnuke{dev,prod}` wrappers in the same prompt, so the next spec does not inherit the same drift.
+- `docs/verifying-specs.md` is stale on the same axis the deploy references were: its rung-2/3 sections still target `kubectlquant`, `trading-dev`, `shared/base`, and `trading/vault/`. Correct it to the `nuke/git-rest/` deploy source and the `kubectlnuke{dev,prod}` wrappers in the same prompt, so the next spec does not inherit the same drift. The three vaults themselves (`vault-obsidian-openclaw`, `vault-obsidian-personal`, `vault-obsidian-trading`) are **not** stale — all three are live in `nuke/git-rest/values-{dev,prod}.yaml` and every corrected vault list must name all three.
+- `docs/deployment.md` carries the same retired path outside the two sections above: its `## Kubernetes` "Reference deployment" line names `trading-agent-trade-analysis/vault/obsidian-trading/k8s/`. Correct it in the same prompt, and have the `### Upgrades` section name the `VERSION` pin in `~/Documents/workspaces/nuke/git-rest/Makefile` as the source of the deployed tag.
 
 ## Failure Modes
 
 | Trigger | Expected behavior | Recovery | Detection | Reversibility | Concurrency |
 |---|---|---|---|---|---|
 | Resolver fails on a path already under `_conflicts/` | Pre-flight guard rejects the merge; the file stays one level deep and untouched; WARN names the path | Operator repairs or deliberately discards the file, then the next pull has no nested conflict | `git_rest_resolver_failures_total{category="nested_source"}` increments; WARN log line | Reversible — the file is untouched | Pull loop is single-threaded per pod |
-| `_conflicts/` unreadable or absent at gauge-refresh time | Gauge reports 0; one WARN; the pull is unaffected | Operator runs `ls -la <repo>/_conflicts` in the pod and checks ownership/mode on the PVC | WARN log line; gauge reads 0 while files demonstrably exist | Reversible | Single-threaded refresh after the merge |
+| `_conflicts/` **unreadable** at gauge-refresh time | Gauge reports 0; one WARN; the pull is unaffected | Operator runs `ls -la <repo>/_conflicts` in the pod and checks ownership/mode on the PVC | WARN log line; gauge reads 0 while files demonstrably exist | Reversible | Single-threaded refresh after the merge |
+| `_conflicts/` **absent** at gauge-refresh time | Gauge reports 0; **no** WARN — an absent directory is the healthy state on a vault that has never quarantined, so warning would be pure noise | None needed | Gauge reads 0 and no WARN appears in the same window | Reversible | Single-threaded refresh after the merge |
 | `_conflicts/` holds legacy nested residue | Gauge counts nested files, so they are visible rather than hidden | Operator clears residue in one deliberate commit | Gauge value equals `find _conflicts -type f \| wc -l` | Reversible | N/A |
 | Pod crashes between the merge commit and the gauge refresh | Gauge holds its previous value until the next pull cycle, so it can read stale by at most one interval | None needed — the next pull refreshes; the alert window is 1h, far longer than one interval | Gauge value lags the directory for one interval | Reversible | Next pull is single-threaded |
 | `_conflicts/` grows very large | The walk runs once per pull cycle and is bounded by directory size; cost grows linearly with the backlog the gauge exists to surface | Operator clears the residue the gauge surfaced | Gauge value and pull-cycle duration | Reversible | Single-threaded |

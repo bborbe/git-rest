@@ -8,6 +8,10 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 * MINOR version when you add functionality in a backwards-compatible manner, and
 * PATCH version when you make backwards-compatible bug fixes.
 
+## Unreleased
+
+- fix: Reject a re-quarantine of a conflicted path that already lives under `_conflicts/`. The quarantine destination builder now strips every leading `_conflicts/` segment, so it always produces exactly one `_conflicts/` level, and a new pre-flight guard rejects a merge whose conflict list contains an already-quarantined path — the file is left untouched, the merge aborts with `ErrConflictResolutionFailed`, a WARN names the nested path, and `git_rest_resolver_failures_total{category="nested_source"}` records the rejection. Fixes the 2026-09-13 Personal vault chain where an 11:08 run quarantined a file that had already been quarantined at 11:07, producing `_conflicts/_conflicts/...` with its conflict markers still embedded.
+
 ## v0.25.4
 
 - chore: update Go to 1.27.1 and github.com/bborbe/errors to v1.6.1, github.com/bborbe/http to v1.26.26, github.com/bborbe/service to v1.10.13, github.com/bborbe/time to v1.27.14

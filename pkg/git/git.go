@@ -58,6 +58,7 @@ var ErrConflictResolutionFailed = stderrors.New("conflict resolution failed")
 const (
 	quarantineFailureUnsafePath = "unsafe_path"
 	quarantineFailureIO         = "quarantine_io_failed"
+	quarantineFailureNested     = "nested_source"
 )
 
 // RebaseConflictError is returned by Pull when git rebase encounters a content conflict.
@@ -258,17 +259,30 @@ func (g *git) runCmdRaw(ctx context.Context, dir string, args ...string) ([]byte
 	return buf.Bytes(), err
 }
 
+// conflictsDirName is the repo-root directory quarantined files are moved into.
+// Quarantine mirrors the source path one level under it and never nests deeper.
+const conflictsDirName = "_conflicts"
+
 // quarantineDestPath builds the destination path for a quarantined file.
 // For paths ending in ".md", the timestamp is inserted before the final ".md"
 // and the directory tree under "_conflicts/" mirrors the original path
 // (e.g. "dir/b.md" -> "_conflicts/dir/b.md.<ts>.md"). For non-".md" paths
 // the timestamp is appended with a ".quarantined" suffix
-// (e.g. "foo.bin" -> "_conflicts/foo.bin.<ts>.quarantined"). The repoPath is
-// not included; the caller is expected to join it with the repo root.
+// (e.g. "foo.bin" -> "_conflicts/foo.bin.<ts>.quarantined"). A source that
+// already lives under "_conflicts/" (a re-quarantine, or residue left by an
+// older binary) keeps exactly one "_conflicts/" level: the leading segment is
+// stripped before the destination is built, so the destination is never nested
+// deeper than one level (e.g. "_conflicts/dir/b.md" ->
+// "_conflicts/dir/b.md.<ts>.md"). The repoPath is not included; the caller is
+// expected to join it with the repo root.
 func quarantineDestPath(path string, unixSeconds int64) string {
 	ts := strconv.FormatInt(unixSeconds, 10)
-	dir := filepath.Dir(path)
-	base := filepath.Base(path)
+	rel := path
+	for rel == conflictsDirName || strings.HasPrefix(rel, conflictsDirName+"/") {
+		rel = strings.TrimPrefix(strings.TrimPrefix(rel, conflictsDirName), "/")
+	}
+	dir := filepath.Dir(rel)
+	base := filepath.Base(rel)
 	if dir == "." {
 		dir = ""
 	}
@@ -279,9 +293,9 @@ func quarantineDestPath(path string, unixSeconds int64) string {
 		base = base + "." + ts + ".quarantined"
 	}
 	if dir == "" {
-		return filepath.Join("_conflicts", base)
+		return filepath.Join(conflictsDirName, base)
 	}
-	return filepath.Join("_conflicts", dir, base)
+	return filepath.Join(conflictsDirName, dir, base)
 }
 
 // unsafeConflictPath returns true and a non-empty reason if path escapes the
@@ -307,6 +321,50 @@ func unsafeConflictPath(repoPath, rel string) (bool, string) {
 		return true, "path escapes repo root"
 	}
 	return false, ""
+}
+
+// nestedConflictPath returns the first path in paths that already lives under the
+// _conflicts/ quarantine directory, or "" when no path does. Quarantining such a
+// path again would nest the tree one level deeper on every retry.
+func nestedConflictPath(paths []string) string {
+	prefix := conflictsDirName + "/"
+	for _, path := range paths {
+		if path == conflictsDirName || strings.HasPrefix(path, prefix) {
+			return path
+		}
+	}
+	return ""
+}
+
+// validateConflictPathsNotNested pre-flights the conflict path list before any disk
+// I/O. A conflicted path that already lives under _conflicts/ is rejected: the file
+// stays exactly one level deep, the nested_source counter records the rejection, and
+// the merge is aborted. Returns wrapped ErrConflictResolutionFailed when a nested path
+// is present, nil otherwise. Pure read of the path list; no file writes.
+func (g *git) validateConflictPathsNotNested(
+	ctx context.Context,
+	conflictPaths []string,
+) error {
+	path := nestedConflictPath(conflictPaths)
+	if path == "" {
+		return nil
+	}
+	g.metrics.IncResolverFailure(quarantineFailureNested)
+	slog.WarnContext(
+		ctx,
+		"git-rest: nested conflicted path already under _conflicts/ rejected; aborting merge",
+		"path",
+		path,
+		"reason",
+		"path already under _conflicts/; re-quarantining would nest the tree one level deeper",
+	)
+	_, _ = g.runCmdRaw(ctx, g.repoPath, "merge", "--abort")
+	g.metrics.IncMergeOutcome("aborted")
+	return errors.Wrap(
+		ctx,
+		ErrConflictResolutionFailed,
+		"nested conflict path already quarantined",
+	)
 }
 
 // WriteFile writes content to path, stages and commits it, then pushes.
@@ -636,9 +694,10 @@ func (g *git) resolveConflictMerge(
 // output. Returns nil on successful commit+push; returns wrapped ErrConflictResolutionFailed
 // on any abort path.
 //
-// Ordering invariant (do not reorder): validateConflictPathsSafe MUST run BEFORE
-// ensureConflictsDir so an unsafe-path abort never creates _conflicts/ as a side-effect.
-// Reordering breaks the path-traversal test's negative-evidence check.
+// Ordering invariant (do not reorder): both pre-flights — validateConflictPathsSafe
+// and validateConflictPathsNotNested — MUST run BEFORE ensureConflictsDir so neither
+// abort path creates _conflicts/ as a side-effect. Reordering breaks the
+// path-traversal test's negative-evidence check.
 func (g *git) resolveConflictPaths(
 	ctx context.Context,
 	conflictPaths []string,
@@ -647,6 +706,11 @@ func (g *git) resolveConflictPaths(
 	// An unsafe path aborts immediately; ensureConflictsDir must NOT
 	// create _conflicts/ on the abort path (caught by code review 2026-06-02).
 	if err := g.validateConflictPathsSafe(ctx, conflictPaths); err != nil {
+		return err
+	}
+	// Pre-flight: a conflicted path that already lives under _conflicts/ aborts the
+	// merge before any disk I/O, so a re-quarantine can never deepen the tree.
+	if err := g.validateConflictPathsNotNested(ctx, conflictPaths); err != nil {
 		return err
 	}
 	if err := g.ensureConflictsDir(ctx); err != nil {
@@ -782,8 +846,7 @@ func (g *git) commitAndPushMerge(
 // a wrapped ErrConflictResolutionFailed (caller aborts) when the path exists
 // as a regular file (catastrophic config error) or any stat / mkdir call fails.
 func (g *git) ensureConflictsDir(ctx context.Context) error {
-	conflictsDirRel := "_conflicts"
-	conflictsDirAbs := filepath.Join(g.repoPath, conflictsDirRel)
+	conflictsDirAbs := filepath.Join(g.repoPath, conflictsDirName)
 	info, statErr := os.Stat(conflictsDirAbs)
 	if statErr == nil {
 		if !info.IsDir() {
@@ -791,7 +854,7 @@ func (g *git) ensureConflictsDir(ctx context.Context) error {
 				ctx,
 				"git-rest: _conflicts/ exists as a regular file; aborting merge",
 				"path",
-				conflictsDirRel,
+				conflictsDirName,
 			)
 			_, _ = g.runCmdRaw(ctx, g.repoPath, "merge", "--abort")
 			g.metrics.IncMergeOutcome("aborted")
@@ -808,7 +871,7 @@ func (g *git) ensureConflictsDir(ctx context.Context) error {
 			ctx,
 			"git-rest: stat _conflicts/ failed; aborting merge",
 			"path",
-			conflictsDirRel,
+			conflictsDirName,
 			"err",
 			statErr.Error(),
 		)
@@ -821,7 +884,7 @@ func (g *git) ensureConflictsDir(ctx context.Context) error {
 			ctx,
 			"git-rest: failed to create _conflicts/; aborting merge",
 			"path",
-			conflictsDirRel,
+			conflictsDirName,
 			"err",
 			mkErr.Error(),
 		)
