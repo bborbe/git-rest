@@ -9,6 +9,7 @@ import (
 	"context"
 	stderrors "errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -296,6 +297,53 @@ func quarantineDestPath(path string, unixSeconds int64) string {
 		return filepath.Join(conflictsDirName, base)
 	}
 	return filepath.Join(conflictsDirName, dir, base)
+}
+
+// countQuarantinedFiles counts the regular files under root, recursively. It does
+// not follow symlinks: a symlinked directory is not descended into and a symlink
+// entry is not counted as a regular file, so the walk cannot escape the repo root.
+// Returns the walk error when root is missing (fs.ErrNotExist) or unreadable.
+func countQuarantinedFiles(root string) (int, error) {
+	count := 0
+	if err := filepath.WalkDir(
+		root,
+		func(_ string, entry fs.DirEntry, walkErr error) error {
+			if walkErr != nil {
+				return walkErr
+			}
+			if entry.Type().IsRegular() {
+				count++
+			}
+			return nil
+		},
+	); err != nil {
+		return 0, err
+	}
+	return count, nil
+}
+
+// refreshQuarantinedBacklog sets the git_rest_quarantined_backlog gauge to the
+// number of regular files currently under _conflicts/. A missing directory reports
+// 0 without a log line; an unreadable directory reports 0 and logs one WARN. It
+// never returns an error — a backlog read must not fail a pull.
+func (g *git) refreshQuarantinedBacklog(ctx context.Context) {
+	root := filepath.Join(g.repoPath, conflictsDirName)
+	count, err := countQuarantinedFiles(root)
+	if err != nil {
+		if !stderrors.Is(err, fs.ErrNotExist) {
+			slog.WarnContext(
+				ctx,
+				"git-rest: reading _conflicts/ backlog failed; reporting 0",
+				"path",
+				conflictsDirName,
+				"err",
+				err.Error(),
+			)
+		}
+		g.metrics.SetQuarantinedBacklog(0)
+		return
+	}
+	g.metrics.SetQuarantinedBacklog(count)
 }
 
 // unsafeConflictPath returns true and a non-empty reason if path escapes the
@@ -1125,6 +1173,11 @@ func (g *git) Pull(ctx context.Context) error {
 
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	// Refresh the backlog gauge once per pull cycle, after the merge attempt has
+	// resolved. Registering this defer after the unlock defer keeps the walk under
+	// the mutex and runs it on every exit path, so a no-op pull still counts a
+	// deleted quarantine file down.
+	defer g.refreshQuarantinedBacklog(ctx)
 
 	if !g.hasRemote(ctx) {
 		slog.DebugContext(ctx, "git pull skipped: no remote configured")

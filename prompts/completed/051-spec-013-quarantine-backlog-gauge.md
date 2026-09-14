@@ -1,8 +1,13 @@
 ---
-status: approved
+status: completed
 spec: [013-quarantine-nesting-and-drain]
+summary: Added the git_rest_quarantined_backlog gauge, refreshed once per pull cycle from a recursive _conflicts/ walk in pkg/git, with a setter on the Metrics interface so deletions count the backlog down.
+execution_id: git-rest-quarantine-drain-exec-051-spec-013-quarantine-backlog-gauge
+dark-factory-version: dev
 created: "2026-09-13T21:20:00Z"
 queued: "2026-09-14T06:08:34Z"
+started: "2026-09-14T06:12:43Z"
+completed: "2026-09-14T06:15:01Z"
 branch: dark-factory/quarantine-nesting-and-drain
 ---
 

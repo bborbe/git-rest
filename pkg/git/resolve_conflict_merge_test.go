@@ -77,6 +77,8 @@ func (u *unsafeTestMetrics) IncResolverFailure(category string) {
 
 func (u *unsafeTestMetrics) IncQuarantinedFiles() {}
 
+func (u *unsafeTestMetrics) SetQuarantinedBacklog(_ int) {}
+
 func (u *unsafeTestMetrics) unsafePathCount() int {
 	u.mu.Lock()
 	defer u.mu.Unlock()

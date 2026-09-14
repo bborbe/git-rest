@@ -54,6 +54,8 @@ func (n *noopMetrics) IncResolverFailure(_ string) {}
 
 func (n *noopMetrics) IncQuarantinedFiles() {}
 
+func (n *noopMetrics) SetQuarantinedBacklog(_ int) {}
+
 // initRepo creates a temporary git repo with a local bare remote so that push works.
 func initRepo() (workDir string, cleanup func()) {
 	remoteDir, err := os.MkdirTemp("", "git-remote-*")
@@ -858,6 +860,22 @@ func gatherQuarantinedFiles() float64 {
 		}
 		for _, m := range mf.GetMetric() {
 			return m.GetCounter().GetValue()
+		}
+	}
+	return 0
+}
+
+// gatherQuarantinedBacklog returns the current value of the process-global
+// git_rest_quarantined_backlog gauge. Returns 0 if the gauge is not registered.
+func gatherQuarantinedBacklog() float64 {
+	mfs, err := prometheus.DefaultGatherer.Gather()
+	Expect(err).NotTo(HaveOccurred())
+	for _, mf := range mfs {
+		if mf.GetName() != "git_rest_quarantined_backlog" {
+			continue
+		}
+		for _, m := range mf.GetMetric() {
+			return m.GetGauge().GetValue()
 		}
 	}
 	return 0
@@ -1806,4 +1824,122 @@ var _ = Describe("Pull nested quarantine guard", func() {
 			},
 		)
 	})
+})
+
+var _ = Describe("Quarantine backlog gauge", func() {
+	var ctx context.Context
+
+	BeforeEach(func() {
+		ctx = context.Background()
+	})
+
+	It("AC8: reports the live _conflicts/ file count and counts down after a deletion", func() {
+		workDir, cleanup := initRepo()
+		defer cleanup()
+
+		Expect(os.MkdirAll(filepath.Join(workDir, "_conflicts", "dir"), 0o750)).To(Succeed())
+		for _, rel := range []string{"a.md", "dir/b.md", "dir/c.md"} {
+			Expect(os.WriteFile(filepath.Join(workDir, "_conflicts", rel), []byte("x"), 0o600)).
+				To(Succeed())
+		}
+
+		logs, restore := captureSlogLogs()
+		defer restore()
+
+		pg := git.New(
+			workDir,
+			metrics.NewMetrics(),
+			libtime.NewCurrentDateTime(),
+			"",
+			git.NewMarkerResolver(workDir),
+		)
+
+		Expect(pg.Pull(ctx)).To(Succeed())
+		Expect(
+			gatherQuarantinedBacklog(),
+		).To(Equal(3.0), "three quarantined files must be reported")
+
+		Expect(os.Remove(filepath.Join(workDir, "_conflicts", "dir", "c.md"))).To(Succeed())
+		Expect(pg.Pull(ctx)).To(Succeed())
+		Expect(gatherQuarantinedBacklog()).To(Equal(2.0),
+			"a deleted quarantine file must be counted down — this is the gauge-vs-counter assertion")
+
+		// A removed directory takes the ErrNotExist branch: report 0, and do NOT warn
+		// (the directory is absent on a healthy vault, so warning would be noise).
+		Expect(os.RemoveAll(filepath.Join(workDir, "_conflicts"))).To(Succeed())
+		Expect(pg.Pull(ctx)).To(Succeed())
+		Expect(gatherQuarantinedBacklog()).To(Equal(0.0),
+			"a missing _conflicts/ directory must report 0")
+		Expect(strings.Count(logs.String(), "level=WARN")).To(Equal(0),
+			"an absent _conflicts/ must not emit a WARN — only the unreadable case warns")
+	})
+
+	It("AC9: counts nested files so legacy residue is not invisible", func() {
+		workDir, cleanup := initRepo()
+		defer cleanup()
+
+		Expect(os.MkdirAll(filepath.Join(workDir, "_conflicts", "_conflicts"), 0o750)).To(Succeed())
+		Expect(os.WriteFile(filepath.Join(workDir, "_conflicts", "a.md"), []byte("x"), 0o600)).
+			To(Succeed())
+		Expect(
+			os.WriteFile(
+				filepath.Join(workDir, "_conflicts", "_conflicts", "b.md"),
+				[]byte("x"),
+				0o600,
+			),
+		).
+			To(Succeed())
+
+		pg := git.New(
+			workDir,
+			metrics.NewMetrics(),
+			libtime.NewCurrentDateTime(),
+			"",
+			git.NewMarkerResolver(workDir),
+		)
+
+		Expect(pg.Pull(ctx)).To(Succeed())
+		Expect(gatherQuarantinedBacklog()).To(Equal(2.0),
+			"a nested _conflicts/ level must be counted, not hidden")
+	})
+
+	It(
+		"AC11: an unreadable _conflicts/ degrades to 0 and logs a WARN without failing the pull",
+		func() {
+			if os.Geteuid() == 0 {
+				Skip(
+					"running as root: a 0000 directory stays readable, so the case would pass vacuously",
+				)
+			}
+
+			workDir, cleanup := initRepo()
+			defer cleanup()
+
+			conflictsDir := filepath.Join(workDir, "_conflicts")
+			Expect(os.MkdirAll(conflictsDir, 0o750)).To(Succeed())
+			Expect(
+				os.WriteFile(filepath.Join(conflictsDir, "a.md"), []byte("x"), 0o600),
+			).To(Succeed())
+			Expect(os.Chmod(conflictsDir, 0o000)).To(Succeed())
+			DeferCleanup(func() { _ = os.Chmod(conflictsDir, 0o750) })
+
+			logs, restore := captureSlogLogs()
+			defer restore()
+
+			pg := git.New(
+				workDir,
+				metrics.NewMetrics(),
+				libtime.NewCurrentDateTime(),
+				"",
+				git.NewMarkerResolver(workDir),
+			)
+
+			Expect(pg.Pull(ctx)).To(Succeed(), "an unreadable _conflicts/ must never fail the pull")
+			Expect(gatherQuarantinedBacklog()).To(Equal(0.0))
+
+			logStr := logs.String()
+			Expect(logStr).To(ContainSubstring("level=WARN"))
+			Expect(logStr).To(ContainSubstring("_conflicts"))
+		},
+	)
 })
