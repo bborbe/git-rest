@@ -53,5 +53,22 @@ spec:
     severity: critical
     namespace: {{ $.Release.Namespace }}
   name: VaultObsidian{{ $camel }}PullerSilent
+---
+apiVersion: monitoring.benjamin-borbe.de/v1
+kind: Alert
+metadata:
+  name: '{{ $name }}-quarantine-backlog-warning'
+  namespace: {{ $.Release.Namespace }}
+spec:
+  annotations:
+    summary: {{ $name }} has quarantined files waiting
+    description: 'git-rest in {{ $name }} has files sitting in _conflicts/ for more than 1h — inspect _conflicts/ in the pod, repair or deliberately discard the file, then remove it so the backlog is counted down'
+  expression: |-
+    git_rest_quarantined_backlog{app="{{ $name }}"} > 0
+  for: 1h
+  labels:
+    severity: warning
+    namespace: {{ $.Release.Namespace }}
+  name: VaultObsidian{{ $camel }}QuarantineBacklog
 {{- end }}
 {{- end }}

@@ -67,10 +67,42 @@ var _ = Describe("QuarantinedFilesTotal", func() {
 	})
 })
 
+// gatherGauge returns the value of an unlabeled gauge from the prometheus default
+// registry, and whether the series was present.
+func gatherGauge(name string) (float64, bool) {
+	mfs, err := prometheus.DefaultGatherer.Gather()
+	Expect(err).NotTo(HaveOccurred())
+	for _, mf := range mfs {
+		if mf.GetName() != name {
+			continue
+		}
+		for _, m := range mf.GetMetric() {
+			return m.GetGauge().GetValue(), true
+		}
+	}
+	return 0, false
+}
+
+var _ = Describe("QuarantinedBacklog", func() {
+	It("is pre-initialised to 0 and exposed before any pull refreshes it", func() {
+		value, found := gatherGauge("git_rest_quarantined_backlog")
+		Expect(found).To(BeTrue(), "the gauge series must exist at init() time")
+		Expect(value).To(Equal(0.0))
+	})
+})
+
 var _ = Describe("ResolverFailuresTotal quarantine_io_failed label", func() {
 	It("is pre-initialised to 0 alongside the existing five label values", func() {
 		Expect(gatherCounterVecLabelValue(
 			"git_rest_resolver_failures_total", "category", "quarantine_io_failed",
+		)).To(Equal(0.0))
+	})
+})
+
+var _ = Describe("ResolverFailuresTotal nested_source label", func() {
+	It("is pre-initialised to 0 alongside the existing label values", func() {
+		Expect(gatherCounterVecLabelValue(
+			"git_rest_resolver_failures_total", "category", "nested_source",
 		)).To(Equal(0.0))
 	})
 })

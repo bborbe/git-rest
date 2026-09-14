@@ -8,6 +8,14 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 * MINOR version when you add functionality in a backwards-compatible manner, and
 * PATCH version when you make backwards-compatible bug fixes.
 
+## Unreleased
+
+- fix: Reject a re-quarantine of a conflicted path that already lives under `_conflicts/`. The quarantine destination builder now strips every leading `_conflicts/` segment, so it always produces exactly one `_conflicts/` level, and a new pre-flight guard rejects a merge whose conflict list contains an already-quarantined path — the file is left untouched, the merge aborts with `ErrConflictResolutionFailed`, a WARN names the nested path, and `git_rest_resolver_failures_total{category="nested_source"}` records the rejection. Fixes the 2026-09-13 Personal vault chain where an 11:08 run quarantined a file that had already been quarantined at 11:07, producing `_conflicts/_conflicts/...` with its conflict markers still embedded.
+
+- feat: Add `git_rest_quarantined_backlog` gauge — the number of regular files currently under `_conflicts/`, counted recursively so nested residue left by an older binary is visible. The gauge is refreshed once per pull cycle and is a setter, so removing a quarantined file counts the backlog down instead of only ever up. A missing `_conflicts/` directory reports 0; an unreadable one reports 0 and logs one WARN without failing the pull. The existing `git_rest_quarantined_files_total` counter keeps its lifetime-events meaning and cannot express backlog.
+
+- feat: Add a per-vault `VaultObsidian<Realm>QuarantineBacklog` alert to the Helm chart — `git_rest_quarantined_backlog{app="vault-obsidian-<name>"} > 0` for `1h`, severity `warning`, with a description that names the drain path (inspect `_conflicts/`, repair or deliberately discard, then remove so the backlog is counted down). The window keeps a single transient quarantine event from paging an operator who is already handling it. Renders only when `alerts.enabled` is true, like the three existing vault alerts.
+
 ## v0.25.4
 
 - chore: update Go to 1.27.1 and github.com/bborbe/errors to v1.6.1, github.com/bborbe/http to v1.26.26, github.com/bborbe/service to v1.10.13, github.com/bborbe/time to v1.27.14

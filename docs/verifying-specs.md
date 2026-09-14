@@ -9,10 +9,10 @@ The principle from `~/.claude/plugins/marketplaces/dark-factory/docs/spec-verifi
 | Rung | Where | What it catches | When sufficient |
 |---|---|---|---|
 | 1. Local binary against temp repo | host, fresh `go build`, ephemeral repo + bound port | HTTP semantics, file-on-disk + git-commit side effects, command/arg validation, idempotent retries | Pure-server specs (no k8s manifest change, no operator-visible behavior shift in prod) |
-| 2. Dev cluster e2e | dev k8s, deployed image consumed by `vault-obsidian-{openclaw,trading}` | Real PVC, real SSH key/git remote, agent-task-controller round-trip, cross-pod retry semantics | Anything that depends on the StatefulSet template, cron pull cadence, or in-cluster networking |
+| 2. Dev cluster e2e | dev k8s, deployed image consumed by `vault-obsidian-{openclaw,personal,trading}` | Real PVC, real SSH key/git remote, agent-task-controller round-trip, cross-pod retry semantics | Anything that depends on the StatefulSet template, cron pull cadence, or in-cluster networking |
 | 3. Prod cluster e2e | prod k8s | Real-traffic behavior at production scale (vault commits across workdays) | Specs that change throughput-sensitive paths or operator-visible behavior |
 
-Rule of thumb: **always rung 1**. Rung 2 if anything in the Dockerfile or the StatefulSet env contract changed. Rung 3 promotes immediately after rung 2 passes — no mandatory soak. git-rest is small, the change set per spec is well-bounded, and rollback is fast (revert the two `vault/obsidian-*-sts.yaml` image tags + re-apply). If dev passes, prod follows.
+Rule of thumb: **always rung 1**. Rung 2 if anything in the Dockerfile or the StatefulSet env contract changed. Rung 3 promotes immediately after rung 2 passes — no mandatory soak. git-rest is small, the change set per spec is well-bounded, and rollback is fast (revert the `VERSION` pin in `~/Documents/workspaces/nuke/git-rest/Makefile` + re-apply). If dev passes, prod follows.
 
 ## Rung 1: local binary against a temp repo
 
@@ -58,36 +58,29 @@ For specs whose ACs include a Reproduction section (`kind: bug` specs always do)
 
 ## Rung 2: dev cluster e2e
 
-git-rest runs as `vault-obsidian-openclaw` and `vault-obsidian-trading` in the dev cluster (consumed by the agent-task-controller and the dark-factory pipelines).
+git-rest runs as `vault-obsidian-openclaw`, `vault-obsidian-personal`, and `vault-obsidian-trading` in the dev cluster (consumed by the agent-task-controller and the dark-factory pipelines).
 
 Pre-conditions:
 - Master is at the autoRelease tag for the spec (`git describe --tags --abbrev=0` matches the CHANGELOG entry's version)
 - Image `bborbe/git-rest:vX.Y.Z` is pushed to docker.io (autoRelease only tags + pushes commits; image build is `make buca` from the git-rest repo — same flow as `[[git-rest - Deploy New Version]]` runbook in Personal vault)
-- trading repo's `shared/base/Makefile` `BASE_IMAGES` list and the two `vault/obsidian-*/`*-sts.yaml` references are bumped + merged + pushed
-- `trading-dev` worktree synced; `make build` from `shared/base/` mirrored the new tag to the quant registry
+- The `VERSION` pin in `~/Documents/workspaces/nuke/git-rest/Makefile` is bumped to the released tag and merged
 
 Apply + verify:
 
 ```bash
-cd ~/Documents/workspaces/trading-dev
-git pull && git merge master --no-edit && git push
-
-# Mirror image to quant registry (registry shared across dev/prod, no BRANCH= needed)
-cd shared/base && make build
-
-# Apply manifests
-cd ../../vault/obsidian-openclaw && BRANCH=dev make buca
-cd ../obsidian-trading && BRANCH=dev make buca
+cd ~/Documents/workspaces/nuke && git pull && cd git-rest && BRANCH=dev make apply
 
 # Force-restart pods (the StatefulSet template uses `random:` annotation but a manual restart guarantees fresh pull)
-kubectlquant -n dev rollout restart statefulset/vault-obsidian-openclaw
-kubectlquant -n dev rollout restart statefulset/vault-obsidian-trading
+kubectlnukedev -n dev rollout restart statefulset/vault-obsidian-openclaw
+kubectlnukedev -n dev rollout restart statefulset/vault-obsidian-personal
+kubectlnukedev -n dev rollout restart statefulset/vault-obsidian-trading
 
-kubectlquant -n dev rollout status statefulset/vault-obsidian-openclaw --timeout=120s
-kubectlquant -n dev rollout status statefulset/vault-obsidian-trading --timeout=120s
+kubectlnukedev -n dev rollout status statefulset/vault-obsidian-openclaw --timeout=120s
+kubectlnukedev -n dev rollout status statefulset/vault-obsidian-personal --timeout=120s
+kubectlnukedev -n dev rollout status statefulset/vault-obsidian-trading --timeout=120s
 
 # Verify image + readiness
-kubectlquant -n dev get pod vault-obsidian-{openclaw,trading}-0 \
+kubectlnukedev -n dev get pod vault-obsidian-{openclaw,personal,trading}-0 \
   -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.spec.containers[0].image}{"\t"}{.status.conditions[?(@.type=="Ready")].status}{"\n"}{end}'
 ```
 
@@ -95,29 +88,29 @@ Then drive **real traffic** through the deployed pods. For most git-rest specs, 
 
 ```bash
 # Trigger a build watcher poll → controller publishes → vault-obsidian-openclaw writes
-kubectlquant -n dev exec maintainer-watcher-github-build-0 -- rm -f /data/cursor.json
-kubectlquant -n dev exec maintainer-watcher-github-build-0 -- wget -qO- http://localhost:9090/trigger
+kubectlnukedev -n dev exec maintainer-watcher-github-build-0 -- rm -f /data/cursor.json
+kubectlnukedev -n dev exec maintainer-watcher-github-build-0 -- wget -qO- http://localhost:9090/trigger
 sleep 6
 
 # Verify controller ↔ vault-server interaction (no retry spam, single-line success)
-kubectlquant -n dev logs agent-task-controller-0 --since=30s \
+kubectlnukedev -n dev logs agent-task-controller-0 --since=30s \
   | grep -E "create-task|update|attempt|consume"
 
 # For bug specs, the canonical assertion is "the regression doesn't reproduce":
-kubectlquant -n dev logs agent-task-controller-0 --since=30m \
+kubectlnukedev -n dev logs agent-task-controller-0 --since=30m \
   | grep -c "failed after 5 attempts"   # spec-007: must be 0 in steady state
 ```
 
 The vault server's own logs are useful for white-box verification (see what HTTP status it returned per request):
 
 ```bash
-kubectlquant -n dev logs vault-obsidian-openclaw-0 --since=5m \
+kubectlnukedev -n dev logs vault-obsidian-openclaw-0 --since=5m \
   | grep -E "POST|status="
 ```
 
 ## Rung 3: prod cluster e2e
 
-Promote immediately after rung 2 passes. Same shape as rung 2 but `trading-prod` worktree, `BRANCH=prod`, and `kubectlquant -n prod`. Reference: `[[git-rest - Deploy New Version]]` runbook for the dev→prod promotion pattern (mirror image, apply manifests, watch one full task-controller poll cycle).
+Promote immediately after rung 2 passes. Same shape as rung 2 but the `nuke/git-rest` apply with `BRANCH=master` and `kubectlnukeprod -n prod`: `cd ~/Documents/workspaces/nuke && git pull && cd git-rest && BRANCH=master make apply`. Reference: `[[git-rest - Deploy New Version]]` runbook for the dev→prod promotion pattern (mirror image, apply manifests, watch one full task-controller poll cycle).
 
 Real prod traffic exercises more repos and longer running times than dev's narrow allowlist; transient failures (rate limits, ssh-key permission changes, conflicted merges) only show up here. Rollback is fast (revert the image tag + re-apply) so promote without soak.
 
@@ -145,7 +138,7 @@ If verification fails on any rung, do NOT mark complete. Either:
 | Pull-cadence / readiness probe behavior | yes | yes (real cron) | promote after soak |
 | Pure refactor / doc change | optional | no | no |
 
-If unsure: rung 1 always; rung 2 if any of `k8s/` (does not exist in git-rest itself; its k8s lives in `trading/vault/`), `Dockerfile`, or HTTP contract changed; rung 3 if rung 2 looked clean for ≥24h.
+If unsure: rung 1 always; rung 2 if any of `k8s/` (does not exist in git-rest itself; its k8s lives in `nuke/git-rest/`), `Dockerfile`, or HTTP contract changed; rung 3 if rung 2 looked clean for ≥24h.
 
 ## Anti-patterns
 

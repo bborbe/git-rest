@@ -14,7 +14,7 @@ Per vault the chart renders:
 - **Secret** *(optional)* — only when the vault inlines `secret:` and sets no
   `existingSecret`; keys `ssh-key`, `gateway-secret`, `sentry-dsn`.
 - **Alert CRs** *(optional, `alerts.enabled`)* — quant `monitoring.benjamin-borbe.de/v1`
-  Alerts: pull-failing, rebase-conflict, puller-silent.
+  Alerts: pull-failing, rebase-conflict, puller-silent, quarantine-backlog.
 
 ## Install
 

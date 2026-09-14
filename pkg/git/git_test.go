@@ -54,6 +54,8 @@ func (n *noopMetrics) IncResolverFailure(_ string) {}
 
 func (n *noopMetrics) IncQuarantinedFiles() {}
 
+func (n *noopMetrics) SetQuarantinedBacklog(_ int) {}
+
 // initRepo creates a temporary git repo with a local bare remote so that push works.
 func initRepo() (workDir string, cleanup func()) {
 	remoteDir, err := os.MkdirTemp("", "git-remote-*")
@@ -863,6 +865,144 @@ func gatherQuarantinedFiles() float64 {
 	return 0
 }
 
+// gatherQuarantinedBacklog returns the current value of the process-global
+// git_rest_quarantined_backlog gauge. Returns 0 if the gauge is not registered.
+func gatherQuarantinedBacklog() float64 {
+	mfs, err := prometheus.DefaultGatherer.Gather()
+	Expect(err).NotTo(HaveOccurred())
+	for _, mf := range mfs {
+		if mf.GetName() != "git_rest_quarantined_backlog" {
+			continue
+		}
+		for _, m := range mf.GetMetric() {
+			return m.GetGauge().GetValue()
+		}
+	}
+	return 0
+}
+
+// hasResolverFailureSeries reports whether
+// git_rest_resolver_failures_total{category=<category>} is present in the
+// process-global registry at all. gatherResolverFailure returns 0 both for a
+// series that is absent and for one that is present with value 0, so the
+// pre-initialisation assertion in AC4 needs this separate presence check —
+// without it, an implementation that forgets the init() slice entry passes.
+func hasResolverFailureSeries(category string) bool {
+	mfs, err := prometheus.DefaultGatherer.Gather()
+	Expect(err).NotTo(HaveOccurred())
+	for _, mf := range mfs {
+		if mf.GetName() != "git_rest_resolver_failures_total" {
+			continue
+		}
+		for _, m := range mf.GetMetric() {
+			for _, l := range m.GetLabel() {
+				if l.GetName() == "category" && l.GetValue() == category {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+// gatherResolverFailure returns the current value of
+// git_rest_resolver_failures_total{category=<category>} from the process-global
+// registry. Returns 0 when the series is absent. Used to assert a delta around a
+// single Pull, because sibling specs in the same binary also increment the counter.
+func gatherResolverFailure(category string) float64 {
+	mfs, err := prometheus.DefaultGatherer.Gather()
+	Expect(err).NotTo(HaveOccurred())
+	for _, mf := range mfs {
+		if mf.GetName() != "git_rest_resolver_failures_total" {
+			continue
+		}
+		for _, m := range mf.GetMetric() {
+			for _, l := range m.GetLabel() {
+				if l.GetName() == "category" && l.GetValue() == category {
+					return m.GetCounter().GetValue()
+				}
+			}
+		}
+	}
+	return 0
+}
+
+// setupQuarantineFixturePaths is the explicit-seed sibling of
+// setupQuarantineFixture: it seeds the given repo-relative paths (creating parent
+// directories) on a fresh repo backed by a local bare remote, then returns the same
+// closure pair — localEdit commits a divergent version of one path locally,
+// externalPush pushes a divergent version of one path from a temp clone. Use both
+// closures on the same path to create a real merge conflict.
+func setupQuarantineFixturePaths(seedPaths []string) (
+	workDir string,
+	localEdit func(file, content string),
+	externalPush func(file, content string),
+	cleanup func(),
+) {
+	remoteDir, err := os.MkdirTemp("", "git-remote-nested-*")
+	Expect(err).NotTo(HaveOccurred())
+	workDir, err = os.MkdirTemp("", "git-work-nested-*")
+	Expect(err).NotTo(HaveOccurred())
+
+	rg := func(dir string, args ...string) {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		out, e := cmd.CombinedOutput()
+		Expect(e).NotTo(HaveOccurred(), "%s %v: %s", "git", args, string(out))
+	}
+
+	rg(remoteDir, "init", "--bare", "-b", "main")
+	rg(workDir, "init", "-b", "main")
+	rg(workDir, "config", "user.email", "test@example.com")
+	rg(workDir, "config", "user.name", "Test")
+	rg(workDir, "remote", "add", "origin", remoteDir)
+
+	for _, p := range seedPaths {
+		abs := filepath.Join(workDir, p)
+		Expect(os.MkdirAll(filepath.Dir(abs), 0o750)).To(Succeed())
+		// 0o644, not 0o600: git rewrites a conflicted file with the index mode
+		// (100644) during the merge, and `merge --abort` leaves it there — so a
+		// 0o600 seed makes the post-abort mode assertion in the AC2 spec fail at
+		// the container's umask 022 (it would pass at 077, where both sides land
+		// on 0600, which is exactly why the seed must not depend on the umask).
+		Expect(
+			os.WriteFile(abs, []byte("---\nshared: base\n---\nbase body\n"), 0o644),
+		).To(Succeed())
+		rg(workDir, "add", "--", p)
+	}
+	rg(workDir, "commit", "-q", "-m", "seed")
+	rg(workDir, "push", "-u", "origin", "main")
+
+	localEdit = func(file, content string) {
+		abs := filepath.Join(workDir, file)
+		// Mode is ignored on an existing file; 0o644 keeps the fixture uniform so
+		// no reader mistakes 0o600 for something the mode assertion depends on.
+		Expect(os.WriteFile(abs, []byte(content), 0o644)).To(Succeed())
+		rg(workDir, "add", "--", file)
+		rg(workDir, "commit", "-q", "-m", "local: "+file)
+	}
+
+	externalPush = func(file, content string) {
+		extDir, err := os.MkdirTemp("", "git-ext-nested-*")
+		Expect(err).NotTo(HaveOccurred())
+		defer func() { _ = os.RemoveAll(extDir) }()
+		rg(extDir, "clone", remoteDir, ".")
+		rg(extDir, "config", "user.email", "ext@example.com")
+		rg(extDir, "config", "user.name", "External")
+		abs := filepath.Join(extDir, file)
+		Expect(os.WriteFile(abs, []byte(content), 0o644)).To(Succeed())
+		rg(extDir, "add", "--", file)
+		rg(extDir, "commit", "-q", "-m", "external: "+file)
+		rg(extDir, "push", "origin", "main")
+	}
+
+	cleanup = func() {
+		_ = os.RemoveAll(workDir)
+		_ = os.RemoveAll(remoteDir)
+	}
+	return workDir, localEdit, externalPush, cleanup
+}
+
 var _ = Describe("Pull state machine", func() {
 	var (
 		workDir      string
@@ -1540,4 +1680,266 @@ var _ = Describe("Git ConfigureUser", func() {
 		Expect(readConfig("user.name")).To(BeEmpty())
 		Expect(readConfig("user.email")).To(BeEmpty())
 	})
+})
+
+var _ = Describe("Pull nested quarantine guard", func() {
+	var ctx context.Context
+
+	BeforeEach(func() {
+		ctx = context.Background()
+	})
+
+	Context("a conflicted path already under _conflicts/ is the only conflict", func() {
+		const nestedPath = "_conflicts/25 Tasks/Prev A.md"
+
+		It(
+			"AC2: Pull fails with ErrConflictResolutionFailed and leaves the file one level deep",
+			func() {
+				workDir, localEdit, externalPush, cleanup := setupQuarantineFixturePaths(
+					[]string{nestedPath},
+				)
+				defer cleanup()
+
+				absNested := filepath.Join(workDir, nestedPath)
+
+				// Diverge both sides of the quarantined path: the remote side carries
+				// invalid YAML frontmatter (the trigger the defect was observed with),
+				// the local side a valid change.
+				externalPush(nestedPath, "---\ntitle: [unclosed\n---\nREMOTE CHANGE\n")
+				localEdit(nestedPath, "---\ntitle: a\n---\nLOCAL CHANGE\n")
+
+				// Baseline immediately before the pull: localEdit has already moved the
+				// source off the seed content, and `git merge --abort` restores the tree
+				// to HEAD (the local side). A baseline read any earlier compares against
+				// the seed bytes and fails on a correct implementation.
+				contentBefore, readErr := os.ReadFile(absNested)
+				Expect(readErr).NotTo(HaveOccurred())
+				statBefore, statErr := os.Stat(absNested)
+				Expect(statErr).NotTo(HaveOccurred())
+
+				pg := git.New(
+					workDir,
+					metrics.NewMetrics(),
+					libtime.NewCurrentDateTime(),
+					"",
+					git.NewYAMLMergeResolver(workDir, metrics.NewMetrics()),
+				)
+
+				logs, restore := captureSlogLogs()
+				defer restore()
+
+				// AC4, presence half: the category must be registered at init() with value
+				// 0, not merely have a value of 0. An implementation that adds the const
+				// and the doc text but forgets the pre-init slice entry is caught here and
+				// nowhere else.
+				Expect(hasResolverFailureSeries("nested_source")).To(BeTrue(),
+					"nested_source must be pre-initialised in init() so the series exists before any rejection")
+
+				beforeNested := gatherResolverFailure("nested_source")
+				beforeQuarantined := gatherQuarantinedFiles()
+
+				err := pg.Pull(ctx)
+				Expect(err).To(HaveOccurred())
+				Expect(errors.Is(err, git.ErrConflictResolutionFailed)).To(BeTrue(),
+					"expected wrapped ErrConflictResolutionFailed, got: %v", err)
+
+				// AC4: the rejection is counted exactly once. Delta, not absolute: the
+				// counter lives in the process-global registry and sibling specs in this
+				// binary increment it too.
+				afterNested := gatherResolverFailure("nested_source")
+				Expect(afterNested-beforeNested).To(Equal(1.0),
+					"nested_source must increment by exactly 1")
+
+				// AC6: a rejected re-quarantine records no quarantine event.
+				afterQuarantined := gatherQuarantinedFiles()
+				Expect(afterQuarantined-beforeQuarantined).To(Equal(0.0),
+					"a rejected re-quarantine must not increment git_rest_quarantined_files_total")
+
+				// Negative evidence: no second _conflicts/ level was created.
+				_, statErr = os.Stat(filepath.Join(workDir, "_conflicts", "_conflicts"))
+				Expect(os.IsNotExist(statErr)).To(BeTrue(),
+					"_conflicts/_conflicts must not exist after a rejected re-quarantine")
+
+				// The source is untouched: same content, same mode, not staged.
+				contentAfter, readErr := os.ReadFile(absNested)
+				Expect(readErr).NotTo(HaveOccurred())
+				Expect(contentAfter).To(Equal(contentBefore))
+				statAfter, statErr := os.Stat(absNested)
+				Expect(statErr).NotTo(HaveOccurred())
+				Expect(statAfter.Mode()).To(Equal(statBefore.Mode()))
+				Expect(gitOutputStr(workDir, "diff", "--cached", "--name-only")).
+					NotTo(ContainSubstring(nestedPath))
+
+				// AC5: one WARN naming the nested source path.
+				logStr := logs.String()
+				Expect(logStr).To(ContainSubstring("level=WARN"))
+				Expect(logStr).To(ContainSubstring("nested"))
+				Expect(logStr).To(ContainSubstring(nestedPath))
+			},
+		)
+	})
+
+	Context("a merge contains a nested path and an ordinary resolvable path", func() {
+		const (
+			nestedPath   = "_conflicts/25 Tasks/Prev A.md"
+			ordinaryPath = "notes/plain.md"
+		)
+
+		It(
+			"AC3: the whole merge aborts, the worktree is restored and no commit is created",
+			func() {
+				workDir, localEdit, externalPush, cleanup := setupQuarantineFixturePaths(
+					[]string{nestedPath, ordinaryPath},
+				)
+				defer cleanup()
+
+				externalPush(nestedPath, "---\ntitle: [unclosed\n---\nREMOTE CHANGE\n")
+				externalPush(ordinaryPath, "---\nshared: remote\n---\nremote body\n")
+				localEdit(nestedPath, "---\ntitle: a\n---\nLOCAL CHANGE\n")
+				localEdit(ordinaryPath, "---\nshared: local\n---\nlocal body\n")
+
+				// Baseline immediately before the pull: the two localEdit calls above each
+				// create a commit, and `git merge --abort` restores HEAD to the local tip.
+				// A baseline captured earlier compares against the seed commit and fails on
+				// a correct implementation.
+				headBefore := strings.TrimSpace(gitOutputStr(workDir, "rev-parse", "HEAD"))
+
+				pg := git.New(
+					workDir,
+					metrics.NewMetrics(),
+					libtime.NewCurrentDateTime(),
+					"",
+					git.NewYAMLMergeResolver(workDir, metrics.NewMetrics()),
+				)
+
+				err := pg.Pull(ctx)
+				Expect(err).To(HaveOccurred())
+				Expect(errors.Is(err, git.ErrConflictResolutionFailed)).To(BeTrue(),
+					"expected wrapped ErrConflictResolutionFailed, got: %v", err)
+
+				Expect(strings.TrimSpace(gitOutputStr(workDir, "status", "--porcelain"))).
+					To(BeEmpty(), "the abort must restore the worktree")
+				Expect(strings.TrimSpace(gitOutputStr(workDir, "rev-parse", "HEAD"))).
+					To(Equal(headBefore), "the aborted merge must not create a commit")
+			},
+		)
+	})
+})
+
+var _ = Describe("Quarantine backlog gauge", func() {
+	var ctx context.Context
+
+	BeforeEach(func() {
+		ctx = context.Background()
+	})
+
+	It("AC8: reports the live _conflicts/ file count and counts down after a deletion", func() {
+		workDir, cleanup := initRepo()
+		defer cleanup()
+
+		Expect(os.MkdirAll(filepath.Join(workDir, "_conflicts", "dir"), 0o750)).To(Succeed())
+		for _, rel := range []string{"a.md", "dir/b.md", "dir/c.md"} {
+			Expect(os.WriteFile(filepath.Join(workDir, "_conflicts", rel), []byte("x"), 0o600)).
+				To(Succeed())
+		}
+
+		logs, restore := captureSlogLogs()
+		defer restore()
+
+		pg := git.New(
+			workDir,
+			metrics.NewMetrics(),
+			libtime.NewCurrentDateTime(),
+			"",
+			git.NewMarkerResolver(workDir),
+		)
+
+		Expect(pg.Pull(ctx)).To(Succeed())
+		Expect(
+			gatherQuarantinedBacklog(),
+		).To(Equal(3.0), "three quarantined files must be reported")
+
+		Expect(os.Remove(filepath.Join(workDir, "_conflicts", "dir", "c.md"))).To(Succeed())
+		Expect(pg.Pull(ctx)).To(Succeed())
+		Expect(gatherQuarantinedBacklog()).To(Equal(2.0),
+			"a deleted quarantine file must be counted down — this is the gauge-vs-counter assertion")
+
+		// A removed directory takes the ErrNotExist branch: report 0, and do NOT warn
+		// (the directory is absent on a healthy vault, so warning would be noise).
+		Expect(os.RemoveAll(filepath.Join(workDir, "_conflicts"))).To(Succeed())
+		Expect(pg.Pull(ctx)).To(Succeed())
+		Expect(gatherQuarantinedBacklog()).To(Equal(0.0),
+			"a missing _conflicts/ directory must report 0")
+		Expect(strings.Count(logs.String(), "level=WARN")).To(Equal(0),
+			"an absent _conflicts/ must not emit a WARN — only the unreadable case warns")
+	})
+
+	It("AC9: counts nested files so legacy residue is not invisible", func() {
+		workDir, cleanup := initRepo()
+		defer cleanup()
+
+		Expect(os.MkdirAll(filepath.Join(workDir, "_conflicts", "_conflicts"), 0o750)).To(Succeed())
+		Expect(os.WriteFile(filepath.Join(workDir, "_conflicts", "a.md"), []byte("x"), 0o600)).
+			To(Succeed())
+		Expect(
+			os.WriteFile(
+				filepath.Join(workDir, "_conflicts", "_conflicts", "b.md"),
+				[]byte("x"),
+				0o600,
+			),
+		).
+			To(Succeed())
+
+		pg := git.New(
+			workDir,
+			metrics.NewMetrics(),
+			libtime.NewCurrentDateTime(),
+			"",
+			git.NewMarkerResolver(workDir),
+		)
+
+		Expect(pg.Pull(ctx)).To(Succeed())
+		Expect(gatherQuarantinedBacklog()).To(Equal(2.0),
+			"a nested _conflicts/ level must be counted, not hidden")
+	})
+
+	It(
+		"AC11: an unreadable _conflicts/ degrades to 0 and logs a WARN without failing the pull",
+		func() {
+			if os.Geteuid() == 0 {
+				Skip(
+					"running as root: a 0000 directory stays readable, so the case would pass vacuously",
+				)
+			}
+
+			workDir, cleanup := initRepo()
+			defer cleanup()
+
+			conflictsDir := filepath.Join(workDir, "_conflicts")
+			Expect(os.MkdirAll(conflictsDir, 0o750)).To(Succeed())
+			Expect(
+				os.WriteFile(filepath.Join(conflictsDir, "a.md"), []byte("x"), 0o600),
+			).To(Succeed())
+			Expect(os.Chmod(conflictsDir, 0o000)).To(Succeed())
+			DeferCleanup(func() { _ = os.Chmod(conflictsDir, 0o750) })
+
+			logs, restore := captureSlogLogs()
+			defer restore()
+
+			pg := git.New(
+				workDir,
+				metrics.NewMetrics(),
+				libtime.NewCurrentDateTime(),
+				"",
+				git.NewMarkerResolver(workDir),
+			)
+
+			Expect(pg.Pull(ctx)).To(Succeed(), "an unreadable _conflicts/ must never fail the pull")
+			Expect(gatherQuarantinedBacklog()).To(Equal(0.0))
+
+			logStr := logs.String()
+			Expect(logStr).To(ContainSubstring("level=WARN"))
+			Expect(logStr).To(ContainSubstring("_conflicts"))
+		},
+	)
 })

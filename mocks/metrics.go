@@ -49,6 +49,11 @@ type FakeMetrics struct {
 		arg1 string
 		arg2 float64
 	}
+	SetQuarantinedBacklogStub        func(int)
+	setQuarantinedBacklogMutex       sync.RWMutex
+	setQuarantinedBacklogArgsForCall []struct {
+		arg1 int
+	}
 	invocations      map[string][][]interface{}
 	invocationsMutex sync.RWMutex
 }
@@ -294,6 +299,38 @@ func (fake *FakeMetrics) ObserveGitOperationArgsForCall(i int) (string, float64)
 	defer fake.observeGitOperationMutex.RUnlock()
 	argsForCall := fake.observeGitOperationArgsForCall[i]
 	return argsForCall.arg1, argsForCall.arg2
+}
+
+func (fake *FakeMetrics) SetQuarantinedBacklog(arg1 int) {
+	fake.setQuarantinedBacklogMutex.Lock()
+	fake.setQuarantinedBacklogArgsForCall = append(fake.setQuarantinedBacklogArgsForCall, struct {
+		arg1 int
+	}{arg1})
+	stub := fake.SetQuarantinedBacklogStub
+	fake.recordInvocation("SetQuarantinedBacklog", []interface{}{arg1})
+	fake.setQuarantinedBacklogMutex.Unlock()
+	if stub != nil {
+		fake.SetQuarantinedBacklogStub(arg1)
+	}
+}
+
+func (fake *FakeMetrics) SetQuarantinedBacklogCallCount() int {
+	fake.setQuarantinedBacklogMutex.RLock()
+	defer fake.setQuarantinedBacklogMutex.RUnlock()
+	return len(fake.setQuarantinedBacklogArgsForCall)
+}
+
+func (fake *FakeMetrics) SetQuarantinedBacklogCalls(stub func(int)) {
+	fake.setQuarantinedBacklogMutex.Lock()
+	defer fake.setQuarantinedBacklogMutex.Unlock()
+	fake.SetQuarantinedBacklogStub = stub
+}
+
+func (fake *FakeMetrics) SetQuarantinedBacklogArgsForCall(i int) int {
+	fake.setQuarantinedBacklogMutex.RLock()
+	defer fake.setQuarantinedBacklogMutex.RUnlock()
+	argsForCall := fake.setQuarantinedBacklogArgsForCall[i]
+	return argsForCall.arg1
 }
 
 func (fake *FakeMetrics) Invocations() map[string][][]interface{} {

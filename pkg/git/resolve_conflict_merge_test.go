@@ -27,6 +27,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 
@@ -75,6 +76,8 @@ func (u *unsafeTestMetrics) IncResolverFailure(category string) {
 }
 
 func (u *unsafeTestMetrics) IncQuarantinedFiles() {}
+
+func (u *unsafeTestMetrics) SetQuarantinedBacklog(_ int) {}
 
 func (u *unsafeTestMetrics) unsafePathCount() int {
 	u.mu.Lock()
@@ -256,11 +259,80 @@ func TestQuarantineDestPath(t *testing.T) {
 			"README",
 			filepath.Join("_conflicts", "README.1700000000.quarantined"),
 		},
+		{
+			"md already under _conflicts at repo root",
+			"_conflicts/note.md",
+			filepath.Join("_conflicts", "note.1700000000.md"),
+		},
+		{
+			"md already under _conflicts in nested dir",
+			"_conflicts/tasks/build/note.md",
+			filepath.Join("_conflicts", "tasks/build", "note.1700000000.md"),
+		},
+		{
+			"doubly nested md collapses to one level",
+			"_conflicts/_conflicts/note.md",
+			filepath.Join("_conflicts", "note.1700000000.md"),
+		},
+		{
+			"non-md already under _conflicts",
+			"_conflicts/foo.bin",
+			filepath.Join("_conflicts", "foo.bin.1700000000.quarantined"),
+		},
 	}
 	for _, tc := range cases {
 		got := quarantineDestPath(tc.path, ts)
 		if got != tc.want {
 			t.Errorf("%s: quarantineDestPath(%q) = %q, want %q", tc.name, tc.path, got, tc.want)
+		}
+	}
+}
+
+// TestQuarantineDestPathSingleConflictsSegment asserts the spec's destination
+// contract: whatever the input, the destination carries exactly one "_conflicts/"
+// segment. Both a nested input and an ordinary input are checked, so the
+// normalization is total rather than special-cased.
+func TestQuarantineDestPathSingleConflictsSegment(t *testing.T) {
+	const ts int64 = 1700000000
+	for _, path := range []string{"_conflicts/dir/b.md", "dir/b.md", "_conflicts/_conflicts/b.md"} {
+		got := quarantineDestPath(path, ts)
+		if n := strings.Count(got, "_conflicts/"); n != 1 {
+			t.Errorf(
+				"quarantineDestPath(%q) = %q carries %d \"_conflicts/\" segments, want 1",
+				path, got, n,
+			)
+		}
+	}
+}
+
+// TestNestedConflictPath covers the prefix rule that decides whether a conflicted
+// path is already quarantined. The "_conflicts-archive/a.md" case pins the
+// boundary: only the exact "_conflicts" directory and its children count.
+func TestNestedConflictPath(t *testing.T) {
+	cases := []struct {
+		name  string
+		paths []string
+		want  string
+	}{
+		{"empty list", nil, ""},
+		{"ordinary path", []string{"notes/a.md"}, ""},
+		{"sibling dir with the same prefix", []string{"_conflicts-archive/a.md"}, ""},
+		{"nested path at the root", []string{"_conflicts/a.md"}, "_conflicts/a.md"},
+		{
+			"nested path in a subdir",
+			[]string{"_conflicts/25 Tasks/Prev A.md"},
+			"_conflicts/25 Tasks/Prev A.md",
+		},
+		{"bare _conflicts", []string{"_conflicts"}, "_conflicts"},
+		{
+			"first nested path wins",
+			[]string{"notes/a.md", "_conflicts/b.md", "_conflicts/c.md"},
+			"_conflicts/b.md",
+		},
+	}
+	for _, tc := range cases {
+		if got := nestedConflictPath(tc.paths); got != tc.want {
+			t.Errorf("%s: nestedConflictPath(%v) = %q, want %q", tc.name, tc.paths, got, tc.want)
 		}
 	}
 }
