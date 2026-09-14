@@ -43,7 +43,7 @@ Prerequisites:
 
 Pattern: **one StatefulSet per repo**. Each vault/repo becomes a named service (e.g. `vault-obsidian-trading`), with a dedicated PVC and a secret holding the SSH key.
 
-Reference deployment: `trading-agent-trade-analysis/vault/obsidian-trading/k8s/` (see [`vault-obsidian-trading-sts.yaml`](https://github.com/bborbe/trading/tree/master/vault/obsidian-trading/k8s)).
+Reference deployment: `~/Documents/workspaces/nuke/git-rest/` (see the [`nuke` repository](https://github.com/bborbe/nuke)).
 
 ### Required manifests
 
@@ -149,7 +149,7 @@ Raise memory if the repo is large (>100 MB working tree) or if write volume is h
 
 ### Upgrades
 
-- New image tag → rolling restart re-pulls the image; existing PVC data is reused, so no re-clone is needed.
+- New image tag → rolling restart re-pulls the image; existing PVC data is reused, so no re-clone is needed. The deployed tag is pinned by the `VERSION` variable in `~/Documents/workspaces/nuke/git-rest/Makefile`, which is the source of truth for what gets applied.
 - Major config changes (e.g. new remote URL) → wipe the PVC or move the pod to a fresh PVC so bootstrap re-clones.
 
 ### Monitoring
@@ -163,11 +163,24 @@ annotations:
   prometheus.io/scrape: "true"
 ```
 
-Key metrics: request count + latency histogram, git operation durations, build info.
+Key metrics: request count + latency histogram, git operation durations, quarantine backlog, build info.
+
+### Quarantine backlog
+
+Quarantined files accumulate under `_conflicts/` in the served repo until an operator drains them. Two series make that visible:
+
+| Series | Meaning |
+|--------|---------|
+| `git_rest_quarantined_files_total` | Monotonic counter over lifetime quarantine *events*. It never decreases, so it cannot express a backlog. |
+| `git_rest_quarantined_backlog` | Gauge: regular files currently under `_conflicts/`, counted recursively. Refreshed once per pull cycle. A missing `_conflicts/` directory reports 0; an unreadable one reports 0 and logs one WARN, and never fails a pull. |
+
+Every vault with `alerts.enabled=true` also gets an alert, `VaultObsidian<Realm>QuarantineBacklog`: `git_rest_quarantined_backlog{app="vault-obsidian-<name>"} > 0` for `1h`, severity `warning`. The one-hour window keeps a single transient quarantine event from paging an operator who is already handling it.
+
+To drain: inspect `_conflicts/` inside the pod, repair the file or deliberately discard it, then remove it from the repo. The gauge follows the directory, so a removal is reflected on the next pull cycle and the alert clears once the count returns to zero. Quarantine surfaces and preserves; the drain is a signal, not an automatic repair.
 
 ## Operational notes
 
 - **Auto-commit noise**: every write produces a commit. For high-write workloads, upstream consumers should accept this or batch through a higher-level API.
 - **Conflict handling**: git-rest auto-recovers from divergence (local ahead AND remote ahead, no content conflict) by rebase + push within one PullInterval. Real content conflicts during rebase leave the repo in conflicted state, readiness reports 503 with the conflict path (`last pull failed: rebase conflict at <path>`), and require human inspection (`kubectl exec` + manual resolve, or PVC reset for recoverable churn).
-- **Vault-write mode**: set `VAULT_WRITE_MODE=true` (or `--vault-write`) on pods that serve agent vault writes. The pod then uses `YAMLMergeResolver`: on a merge conflict in a markdown file with YAML frontmatter, the resolver deep-merges frontmatter keys (theirs wins on overlap) and combines bodies, producing a syntactically valid file. On YAML parse failure or missing frontmatter delimiters, the resolver returns `ErrConflictResolutionFailed` and the puller aborts the merge (same blast radius as today's `MarkerResolver` failure). Leave `VAULT_WRITE_MODE` unset (or `false`) on pods serving human-touched repos — they continue using `MarkerResolver`. Watch `git_rest_resolver_failures_total{category}` on `/metrics` to distinguish failure modes (`yaml_parse_failed`, `no_frontmatter`, `write_failed`, `git_add_failed`).
+- **Vault-write mode**: set `VAULT_WRITE_MODE=true` (or `--vault-write`) on pods that serve agent vault writes. The pod then uses `YAMLMergeResolver`: on a merge conflict in a markdown file with YAML frontmatter, the resolver deep-merges frontmatter keys (theirs wins on overlap) and combines bodies, producing a syntactically valid file. On YAML parse failure or missing frontmatter delimiters, the resolver fails for that file only: the puller moves the file to `_conflicts/<path>.<unix-ts>.md` and continues the merge, so one corrupt file no longer wedges the pod. The merge aborts only when every conflicted path fails both resolve and quarantine, or when a pre-flight guard rejects the merge — an unsafe path, a conflicted path that already lives under `_conflicts/`, or `_conflicts/` existing as a regular file. Leave `VAULT_WRITE_MODE` unset (or `false`) on pods serving human-touched repos — they continue using `MarkerResolver`. Watch `git_rest_resolver_failures_total{category}` on `/metrics` to distinguish failure modes (`yaml_parse_failed`, `no_frontmatter`, `write_failed`, `git_add_failed`, `unsafe_path`, `quarantine_io_failed`, `nested_source`).
 - **Backups**: since data lives in the remote, the PVC is effectively a cache. Losing it triggers a re-clone on next bootstrap.

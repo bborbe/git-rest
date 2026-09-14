@@ -1,8 +1,13 @@
 ---
-status: approved
+status: completed
 spec: [013-quarantine-nesting-and-drain]
+summary: Corrected the quarantine conflict-handling claims, documented the backlog gauge/alert/drain procedure, and updated the deploy paths in docs/deployment.md and docs/verifying-specs.md to nuke/git-rest and the nukedev/nukeprod wrappers
+execution_id: git-rest-quarantine-drain-exec-053-spec-013-docs-and-changelog
+dark-factory-version: dev
 created: "2026-09-13T21:20:00Z"
 queued: "2026-09-14T06:08:34Z"
+started: "2026-09-14T06:16:58Z"
+completed: "2026-09-14T06:19:13Z"
 branch: dark-factory/quarantine-nesting-and-drain
 ---
 
