@@ -8,7 +8,7 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 * MINOR version when you add functionality in a backwards-compatible manner, and
 * PATCH version when you make backwards-compatible bug fixes.
 
-## Unreleased
+## v0.27.0
 
 - fix: Recover automatically from a dirty working tree that blocks a fast-forward pull. When `git merge --ff-only` fails because uncommitted changes (staged, unstaged, deletions or untracked files) would be overwritten, the puller now captures the whole working-tree state as an object-only commit on a `rescue/<timestamp>` branch, pushes it to the upstream remote, and only after that push succeeds returns the working tree to the upstream state (`git reset --hard` + `git clean -fd`). A rejected rescue push resets nothing — HEAD stays put, the tree stays dirty, and the local rescue branch remains for a manual retry — so no change is ever discarded. `.gitignore`d paths are excluded by construction. This narrows spec 006's `git reset --hard` ban to this one path, where the content is already safe on the remote. Fixes the 2026-09-24 `vault-obsidian-agent-0` incident, where one wedged puller stalled the agent-task-executor reconcile loop and no Seibert-Data PR got a bot review.
 
