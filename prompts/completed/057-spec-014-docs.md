@@ -1,8 +1,13 @@
 ---
-status: approved
+status: completed
 spec: [014-bug-pull-cannot-recover-from-dirty-working-tree]
+summary: 'Documented the dirty-tree rescue: added the rung-1 recipe (with the load-bearing boot-ordering constraint and all five negative probes) and the GKE agent-vault rung-2 recipe to docs/verifying-specs.md, and the stash-vs-rescue-branch rationale plus the git_rest_pull_rescues_total counter to docs/deployment.md.'
+execution_id: git-rest-exec-057-spec-014-docs
+dark-factory-version: v0.196.0
 created: "2026-09-25T10:39:18Z"
 queued: "2026-09-25T11:34:36Z"
+started: "2026-09-25T11:47:12Z"
+completed: "2026-09-25T11:50:37Z"
 branch: dark-factory/bug-pull-cannot-recover-from-dirty-working-tree
 ---
 
