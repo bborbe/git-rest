@@ -56,6 +56,8 @@ func (n *noopMetrics) IncQuarantinedFiles() {}
 
 func (n *noopMetrics) SetQuarantinedBacklog(_ int) {}
 
+func (n *noopMetrics) IncPullRescue() {}
+
 // initRepo creates a temporary git repo with a local bare remote so that push works.
 func initRepo() (workDir string, cleanup func()) {
 	remoteDir, err := os.MkdirTemp("", "git-remote-*")
@@ -2025,6 +2027,22 @@ var _ = Describe("Quarantine backlog gauge", func() {
 	)
 })
 
+// gatherPullRescues returns the current value of the process-global
+// git_rest_pull_rescues_total counter. Returns 0 if the counter is not registered.
+func gatherPullRescues() float64 {
+	mfs, err := prometheus.DefaultGatherer.Gather()
+	Expect(err).NotTo(HaveOccurred())
+	for _, mf := range mfs {
+		if mf.GetName() != "git_rest_pull_rescues_total" {
+			continue
+		}
+		for _, m := range mf.GetMetric() {
+			return m.GetCounter().GetValue()
+		}
+	}
+	return 0
+}
+
 var _ = Describe("Dirty working tree rescue", func() {
 	var (
 		workDir       string
@@ -2197,5 +2215,14 @@ var _ = Describe("Dirty working tree rescue", func() {
 		// remote has no rescue branch.
 		Expect(rescueRefs()).NotTo(BeEmpty())
 		Expect(remoteRescueRefs()).To(BeEmpty())
+	})
+
+	It("AC3: increments git_rest_pull_rescues_total by exactly one per rescue", func() {
+		advanceRemote()
+		dirtyTree()
+
+		before := gatherPullRescues()
+		Expect(pg.Pull(ctx)).To(Succeed())
+		Expect(gatherPullRescues() - before).To(Equal(1.0))
 	})
 })

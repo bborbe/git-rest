@@ -91,6 +91,43 @@ var _ = Describe("QuarantinedBacklog", func() {
 	})
 })
 
+// gatherCounterPresent returns the value of an unlabeled counter from the
+// prometheus default registry, and whether the series was present. Mirrors the
+// existing gatherGauge helper: gatherCounter returns 0 both for an absent series
+// and for one present with value 0, so it cannot prove pre-registration.
+func gatherCounterPresent(name string) (float64, bool) {
+	mfs, err := prometheus.DefaultGatherer.Gather()
+	Expect(err).NotTo(HaveOccurred())
+	for _, mf := range mfs {
+		if mf.GetName() != name {
+			continue
+		}
+		for _, m := range mf.GetMetric() {
+			return m.GetCounter().GetValue(), true
+		}
+	}
+	return 0, false
+}
+
+var _ = Describe("PullRescuesTotal", func() {
+	It("is registered with value 0 in the default registry at init() time", func() {
+		value, found := gatherCounterPresent("git_rest_pull_rescues_total")
+		Expect(found).To(BeTrue(), "the counter series must exist at init() time")
+		Expect(value).To(Equal(0.0))
+	})
+
+	It("increments when IncPullRescue is called via the interface", func() {
+		// Use a fresh metrics implementation to avoid bleeding counter state into
+		// other test cases that share the default registry. (The default registry
+		// is process-global; the unlabeled counter at init() is the baseline.)
+		before := gatherCounter("git_rest_pull_rescues_total")
+		m := metrics.NewMetrics()
+		m.IncPullRescue()
+		after := gatherCounter("git_rest_pull_rescues_total")
+		Expect(after - before).To(Equal(1.0))
+	})
+})
+
 var _ = Describe("ResolverFailuresTotal quarantine_io_failed label", func() {
 	It("is pre-initialised to 0 alongside the existing five label values", func() {
 		Expect(gatherCounterVecLabelValue(

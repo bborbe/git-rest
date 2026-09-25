@@ -1,8 +1,13 @@
 ---
-status: approved
+status: completed
 spec: [014-bug-pull-cannot-recover-from-dirty-working-tree]
+summary: Added the git_rest_pull_rescues_total counter with one Metrics interface method, regenerated the counterfeiter mock, stubbed both hand-written fakes, and incremented it once per rescue after the INFO log in rescueDirtyTree
+execution_id: git-rest-exec-055-spec-014-rescue-counter
+dark-factory-version: v0.196.0
 created: "2026-09-25T10:39:18Z"
 queued: "2026-09-25T11:34:36Z"
+started: "2026-09-25T11:38:50Z"
+completed: "2026-09-25T11:42:23Z"
 branch: dark-factory/bug-pull-cannot-recover-from-dirty-working-tree
 ---
 

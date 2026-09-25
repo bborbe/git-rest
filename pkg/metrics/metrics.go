@@ -51,6 +51,15 @@ var QuarantinedBacklog = prometheus.NewGauge(prometheus.GaugeOpts{
 	Help: "Number of regular files currently under _conflicts/ in the served repo (counted recursively).",
 })
 
+// PullRescuesTotal counts dirty-working-tree rescues performed during pull. One
+// increment per rescue event: the working-tree state was captured on a
+// rescue/<timestamp> branch and pushed, then the working tree was returned to the
+// upstream state.
+var PullRescuesTotal = prometheus.NewCounter(prometheus.CounterOpts{
+	Name: "git_rest_pull_rescues_total",
+	Help: "Total number of dirty-working-tree rescues performed during pull (working-tree state captured on a rescue/<timestamp> branch and pushed, then the working tree returned to the upstream state).",
+})
+
 // ResolverFailuresTotal counts conflict-resolver failures by category.
 // Categories: yaml_parse_failed, no_frontmatter, write_failed, git_add_failed,
 // quarantine_io_failed, unsafe_path, nested_source. The quarantine_io_failed bucket covers
@@ -74,6 +83,7 @@ func init() {
 		ResolverFailuresTotal,
 		QuarantinedFilesTotal,
 		QuarantinedBacklog,
+		PullRescuesTotal,
 	)
 	for _, op := range []string{"write_file", "delete_file", "read_file", "list_files", "pull", "fetch", "push", "rebase"} {
 		GitOperationErrors.WithLabelValues(op, "").Add(0)
@@ -104,6 +114,10 @@ func init() {
 	// the series is registered at init() time so /metrics exposes it as 0 before
 	// the first pull cycle refreshes it.
 	QuarantinedBacklog.Add(0)
+	// Explicit .Add(0) on the unlabeled rescue counter, mirroring
+	// QuarantinedFilesTotal: the series is registered at init() time so /metrics
+	// exposes it as 0 before the first rescue has ever happened.
+	PullRescuesTotal.Add(0)
 	for _, category := range []string{
 		"yaml_parse_failed",
 		"no_frontmatter",
@@ -139,6 +153,10 @@ type Metrics interface {
 	// _conflicts/ in the served repo. It is a setter rather than an increment so a
 	// deletion reduces the reported backlog.
 	SetQuarantinedBacklog(count int)
+	// IncPullRescue records one dirty-working-tree rescue: the working-tree state
+	// was captured on a rescue/<timestamp> branch and pushed to the upstream
+	// remote, and the working tree was then returned to the upstream state.
+	IncPullRescue()
 }
 
 // NewMetrics returns a Prometheus-backed Metrics implementation.
@@ -182,4 +200,8 @@ func (p *prometheusMetrics) IncQuarantinedFiles() {
 
 func (p *prometheusMetrics) SetQuarantinedBacklog(count int) {
 	QuarantinedBacklog.Set(float64(count))
+}
+
+func (p *prometheusMetrics) IncPullRescue() {
+	PullRescuesTotal.Inc()
 }

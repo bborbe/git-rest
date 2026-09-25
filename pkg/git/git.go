@@ -1444,6 +1444,8 @@ func (g *git) rescueDirtyTree(ctx context.Context, upstream string) error {
 		strings.Join(paths, ","),
 	)
 
+	g.metrics.IncPullRescue()
+
 	// Only now is the content safe on the remote, so only now may the local
 	// working tree be returned to the upstream state.
 	if err := g.runCmd(ctx, g.repoPath, "reset", "--hard", upstream); err != nil {
