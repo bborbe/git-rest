@@ -1,8 +1,12 @@
 ---
-status: approved
+status: completed
 spec: [014-bug-pull-cannot-recover-from-dirty-working-tree]
+execution_id: git-rest-exec-056-spec-014-regression-lock-in
+dark-factory-version: v0.196.0
 created: "2026-09-25T10:39:18Z"
 queued: "2026-09-25T11:34:36Z"
+started: "2026-09-25T11:42:25Z"
+completed: "2026-09-25T11:47:10Z"
 branch: dark-factory/bug-pull-cannot-recover-from-dirty-working-tree
 ---
 

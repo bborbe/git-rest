@@ -1121,6 +1121,15 @@ var _ = Describe("Pull state machine", func() {
 				strings.TrimSpace(gitOutputStr(workDir, "rev-parse", "HEAD")),
 			).To(Equal(headBefore))
 		})
+
+		It("AC6: the localSHA == remoteSHA no-op path creates no rescue branch", func() {
+			before := gatherPullRescues()
+			Expect(pg.Pull(ctx)).To(BeNil())
+			Expect(strings.TrimSpace(gitOutputStr(
+				workDir, "for-each-ref", "--format=%(refname)", "refs/heads/rescue/",
+			))).To(BeEmpty())
+			Expect(gatherPullRescues() - before).To(Equal(0.0))
+		})
 	})
 
 	Context("local clean, remote has new commits (fast-forward)", func() {
@@ -1140,6 +1149,15 @@ var _ = Describe("Pull state machine", func() {
 			unpushed := strings.TrimSpace(gitOutputStr(workDir, "log", "@{u}..HEAD", "--oneline"))
 			Expect(unpushed).To(BeEmpty())
 		})
+
+		It("AC4a: a clean fast-forward creates no rescue branch and counts no rescue", func() {
+			before := gatherPullRescues()
+			Expect(pg.Pull(ctx)).To(BeNil())
+			Expect(strings.TrimSpace(gitOutputStr(
+				workDir, "for-each-ref", "--format=%(refname)", "refs/heads/rescue/",
+			))).To(BeEmpty(), "a clean tree must never be rescued")
+			Expect(gatherPullRescues() - before).To(Equal(0.0))
+		})
 	})
 
 	Context("local ahead, remote unchanged (push)", func() {
@@ -1151,6 +1169,15 @@ var _ = Describe("Pull state machine", func() {
 			Expect(pg.Pull(ctx)).To(BeNil())
 			unpushed := strings.TrimSpace(gitOutputStr(workDir, "log", "@{u}..HEAD", "--oneline"))
 			Expect(unpushed).To(BeEmpty())
+		})
+
+		It("AC6: the remoteSHA == baseSHA push path creates no rescue branch", func() {
+			before := gatherPullRescues()
+			Expect(pg.Pull(ctx)).To(BeNil())
+			Expect(strings.TrimSpace(gitOutputStr(
+				workDir, "for-each-ref", "--format=%(refname)", "refs/heads/rescue/",
+			))).To(BeEmpty())
+			Expect(gatherPullRescues() - before).To(Equal(0.0))
 		})
 	})
 
@@ -1179,6 +1206,15 @@ var _ = Describe("Pull state machine", func() {
 			unpushed := strings.TrimSpace(gitOutputStr(workDir, "log", "@{u}..HEAD", "--oneline"))
 			Expect(unpushed).To(BeEmpty())
 		})
+
+		It("AC6: spec 006's committed-divergence merge creates no rescue branch", func() {
+			before := gatherPullRescues()
+			Expect(pg.Pull(ctx)).To(BeNil())
+			Expect(strings.TrimSpace(gitOutputStr(
+				workDir, "for-each-ref", "--format=%(refname)", "refs/heads/rescue/",
+			))).To(BeEmpty())
+			Expect(gatherPullRescues() - before).To(Equal(0.0))
+		})
 	})
 
 	Context("HEAD has no upstream tracking ref", func() {
@@ -1196,6 +1232,76 @@ var _ = Describe("Pull state machine", func() {
 			_ = pg.Pull(ctx)
 			Expect(fakeMetrics.IncRebaseConflictCallCount()).To(Equal(0))
 			Expect(fakeMetrics.IncGitOperationErrorCallCount()).To(BeNumerically(">=", 1))
+		})
+	})
+
+	Context("fast-forward fails for a reason other than a dirty tree", func() {
+		BeforeEach(func() {
+			externalPush("remote.txt", "from remote\n")
+			// An index.lock makes `git merge --ff-only` fail while the working tree
+			// itself is clean, so this pins DB1's "every other cause" clause.
+			Expect(os.WriteFile(
+				filepath.Join(workDir, ".git", "index.lock"), []byte{}, 0o600,
+			)).To(Succeed())
+			DeferCleanup(func() {
+				_ = os.Remove(filepath.Join(workDir, ".git", "index.lock"))
+			})
+		})
+
+		It("AC4b: returns the merge's own error and rescues nothing", func() {
+			before := gatherPullRescues()
+
+			logs, restore := captureSlogLogs()
+			defer restore()
+
+			err := pg.Pull(ctx)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("fast-forward merge failed"))
+			Expect(logs.String()).NotTo(ContainSubstring("rescue branch pushed"))
+
+			Expect(strings.TrimSpace(gitOutputStr(
+				workDir, "for-each-ref", "--format=%(refname)", "refs/heads/rescue/",
+			))).To(BeEmpty())
+			Expect(gatherPullRescues() - before).To(Equal(0.0))
+		})
+	})
+
+	Context("git status itself fails", func() {
+		BeforeEach(func() {
+			externalPush("remote.txt", "from remote\n")
+			// `git status --porcelain` must fail while `git fetch` and `git rev-parse`
+			// still succeed. An unreadable .git/index does NOT qualify: git fetch
+			// refreshes the index too, so the pull would abort at the fetch and never
+			// reach the merge. An invalid status.showUntrackedFiles value fails ONLY
+			// `git status` (verified: fetch and merge ignore it), and the index.lock
+			// then fails only the merge. Together they pin AC4(c) exactly: the failing
+			// status reports a clean tree, the merge is still attempted, and the
+			// merge's own error — not a status error — is what surfaces.
+			runGit(workDir, "config", "status.showUntrackedFiles", "bogus")
+			Expect(os.WriteFile(
+				filepath.Join(workDir, ".git", "index.lock"), []byte{}, 0o600,
+			)).To(Succeed())
+			DeferCleanup(func() {
+				_ = os.Remove(filepath.Join(workDir, ".git", "index.lock"))
+			})
+		})
+
+		It("AC4c: still attempts the merge and surfaces the merge's error", func() {
+			before := gatherPullRescues()
+
+			logs, restore := captureSlogLogs()
+			defer restore()
+
+			err := pg.Pull(ctx)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("fast-forward merge failed"))
+			Expect(logs.String()).
+				To(ContainSubstring("git status failed before fast-forward"))
+
+			Expect(strings.TrimSpace(gitOutputStr(
+				workDir, "for-each-ref", "--format=%(refname)", "refs/heads/rescue/",
+			))).To(BeEmpty())
+			Expect(gatherPullRescues() - before).To(Equal(0.0))
 		})
 	})
 
