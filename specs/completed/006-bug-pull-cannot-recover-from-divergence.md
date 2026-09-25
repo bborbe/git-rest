@@ -136,7 +136,8 @@ git-rest exists to automate git. The current `Pull()` cannot complete the most c
 ## Constraints
 
 - MUST NOT change the public HTTP contract documented in `docs/api.md` (URLs, status codes, response shapes).
-- MUST NOT auto-clobber local commits. Rebase preserves local work; on conflict the repo is left for human inspection. `git reset --hard` and `git rebase --abort` are NEVER invoked automatically.
+- MUST NOT auto-clobber local commits. Rebase preserves local work; on conflict the repo is left for human inspection. `git rebase --abort` is NEVER invoked automatically.
+- **Amended by spec 014 (`014-bug-pull-cannot-recover-from-dirty-working-tree.md`):** `git reset --hard`, paired with `git clean -fd`, IS invoked automatically on exactly one path — the dirty-working-tree rescue — and only AFTER the whole working-tree state has been pushed to a `rescue/<timestamp>` branch on the remote, so no commit and no uncommitted change can be lost. Everywhere else the ban stands unchanged.
 - MUST honor the single-writer assumption (`replicas: 1` in vault StatefulSets). Behavior under multi-writer (`replicas > 1`) is explicitly undefined and out of scope.
 - MUST stay within the `--pull-timeout` budget from spec 005 (`005-bug-readiness-blocks-on-pull-mutex.md`). Fetch + rebase + push together must fit within the existing per-tick timeout.
 - MUST preserve spec 005's healthy-path readiness behavior (cache flips Ready after first successful pull, 503 with named cause when stuck).

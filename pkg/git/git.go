@@ -260,6 +260,63 @@ func (g *git) runCmdRaw(ctx context.Context, dir string, args ...string) ([]byte
 	return buf.Bytes(), err
 }
 
+// childEnv returns the child-process environment for git: the inherited
+// environment, plus GIT_SSH_COMMAND when an SSH key is configured, plus any
+// extra entries supplied by the caller.
+func (g *git) childEnv(extraEnv ...string) []string {
+	env := os.Environ()
+	if g.sshKeyPath != "" {
+		env = append(
+			env,
+			"GIT_SSH_COMMAND=ssh -i "+string(g.sshKeyPath)+
+				" -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no",
+		)
+	}
+	return append(env, extraEnv...)
+}
+
+// runCmdEnv executes a git subcommand in dir with extra environment entries,
+// combining stdout+stderr into any error message.
+func (g *git) runCmdEnv(
+	ctx context.Context,
+	dir string,
+	extraEnv []string,
+	args ...string,
+) error {
+	// #nosec G204 -- binary is hardcoded to "git"; args are internal subcommands, not user input
+	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd.Dir = dir
+	cmd.Env = g.childEnv(extraEnv...)
+	var buf bytes.Buffer
+	cmd.Stdout = &buf
+	cmd.Stderr = &buf
+	if err := cmd.Run(); err != nil {
+		return errors.Wrapf(ctx, err, "git %v: %s", args, buf.String())
+	}
+	return nil
+}
+
+// runCmdOutputEnv executes a git subcommand in dir with extra environment
+// entries and returns its stdout.
+func (g *git) runCmdOutputEnv(
+	ctx context.Context,
+	dir string,
+	extraEnv []string,
+	args ...string,
+) ([]byte, error) {
+	// #nosec G204 -- binary is hardcoded to "git"; args are internal subcommands, not user input
+	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd.Dir = dir
+	cmd.Env = g.childEnv(extraEnv...)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return nil, errors.Wrapf(ctx, err, "git %v: %s", args, stderr.String())
+	}
+	return stdout.Bytes(), nil
+}
+
 // conflictsDirName is the repo-root directory quarantined files are moved into.
 // Quarantine mirrors the source path one level under it and never nests deeper.
 const conflictsDirName = "_conflicts"
@@ -1156,15 +1213,11 @@ func (g *git) recoverRepoState(ctx context.Context) error {
 	return nil
 }
 
-// Pull implements a deterministic 4-state sync:
-//   - local == remote        → no-op
-//   - local clean, remote new → fast-forward (git merge --ff-only)
-//   - local ahead, remote same → push
-//   - diverged (both ahead)  → rebase onto remote tracking ref, then push
-//
-// On a rebase content conflict, Pull returns *RebaseConflictError and leaves
-// the repo in its conflicted state. git rebase --abort is NEVER invoked.
-// Branch name is derived from HEAD's upstream tracking ref, never hardcoded.
+// Pull takes the repo mutex, skips a repo with no remote, heals any abandoned
+// entry state (abandoned rebase / detached HEAD), resolves the upstream tracking
+// ref from @{u} — never a hardcoded branch name — and then delegates the sync
+// itself to syncWithUpstream. See syncWithUpstream for the 4-state machine and
+// for the dirty-working-tree rescue that the fast-forward case may trigger.
 func (g *git) Pull(ctx context.Context) error {
 	start := g.currentDateTimeGetter.Now()
 	defer func() {
@@ -1200,6 +1253,23 @@ func (g *git) Pull(ctx context.Context) error {
 	}
 	upstream := strings.TrimSpace(string(upstreamOut))
 
+	return g.syncWithUpstream(ctx, upstream)
+}
+
+// syncWithUpstream runs the deterministic 4-state sync against the resolved
+// upstream tracking ref:
+//   - local == remote        → no-op
+//   - local clean, remote new → fast-forward (git merge --ff-only), with a
+//     dirty-working-tree rescue when the merge refuses to clobber the tree
+//   - local ahead, remote same → push
+//   - diverged (both ahead)  → merge + push via pullMergeAndPush
+//
+// It recurses ONCE after a successful dirty-tree rescue, to re-evaluate the
+// state machine. It must never call g.Pull(ctx): Pull holds g.mu for its whole
+// body and sync.Mutex is not reentrant. Recursion depth is bounded to one — the
+// rescue resets and cleans the working tree, so the re-evaluated pass can never
+// take the dirty-tree branch again.
+func (g *git) syncWithUpstream(ctx context.Context, upstream string) error {
 	localSHA, remoteSHA, baseSHA, err := g.pullFetchSHAs(ctx, upstream)
 	if err != nil {
 		return err
@@ -1209,9 +1279,12 @@ func (g *git) Pull(ctx context.Context) error {
 	case localSHA == remoteSHA:
 		return nil
 	case localSHA == baseSHA:
-		if err := g.runCmd(ctx, g.repoPath, "merge", "--ff-only", upstream); err != nil {
-			g.metrics.IncGitOperationError("pull")
-			return errors.Wrap(ctx, err, "fast-forward merge failed")
+		rescued, err := g.fastForwardOrRescue(ctx, upstream)
+		if err != nil {
+			return err
+		}
+		if rescued {
+			return g.syncWithUpstream(ctx, upstream)
 		}
 		return nil
 	case remoteSHA == baseSHA:
@@ -1223,6 +1296,163 @@ func (g *git) Pull(ctx context.Context) error {
 	default:
 		return g.pullMergeAndPush(ctx, upstream)
 	}
+}
+
+// fastForwardOrRescue handles the localSHA == baseSHA case. Returns
+// (rescued, err): rescued is true only when a dirty-working-tree rescue
+// succeeded, which tells the caller to re-evaluate the state machine.
+//
+// The working tree is inspected BEFORE the merge is attempted, so the decision
+// never depends on matching git's abort text. A failing git status reports a
+// clean tree, so the merge is still attempted and its own error surfaces.
+func (g *git) fastForwardOrRescue(ctx context.Context, upstream string) (bool, error) {
+	dirty := g.workingTreeDirty(ctx)
+
+	mergeErr := g.runCmd(ctx, g.repoPath, "merge", "--ff-only", upstream)
+	if mergeErr == nil {
+		return false, nil
+	}
+	if !dirty {
+		g.metrics.IncGitOperationError("pull")
+		return false, errors.Wrap(ctx, mergeErr, "fast-forward merge failed")
+	}
+	if err := g.rescueDirtyTree(ctx, upstream); err != nil {
+		// The pull did NOT succeed: the rescue push failed and the repo is left
+		// dirty and not-ready, so the existing git-operation-error signal — and the
+		// alert on it at helm/templates/alerts.yaml:16 — must still fire.
+		g.metrics.IncGitOperationError("pull")
+		return false, err
+	}
+	return true, nil
+}
+
+// workingTreeDirty reports whether `git status --porcelain` lists at least one
+// path — a staged change, an unstaged change to a tracked file, a deletion, or an
+// untracked file. A FAILING `git status` reports false, so the caller still
+// attempts the merge and surfaces the merge's own error.
+func (g *git) workingTreeDirty(ctx context.Context) bool {
+	out, err := g.runCmdOutput(ctx, g.repoPath, "status", "--porcelain")
+	if err != nil {
+		slog.WarnContext(
+			ctx,
+			"git-rest: git status failed before fast-forward; treating tree as clean",
+			"err",
+			err.Error(),
+		)
+		return false
+	}
+	return strings.TrimSpace(string(out)) != ""
+}
+
+// createRescueCommit writes a commit object capturing the whole working-tree
+// state — staged, unstaged, deletions and untracked, excluding .gitignore'd
+// paths — against HEAD as parent, WITHOUT moving HEAD and WITHOUT touching the
+// real index. Returns the commit SHA and the captured paths (repo-relative).
+func (g *git) createRescueCommit(ctx context.Context) (string, []string, error) {
+	indexDir, err := os.MkdirTemp("", "git-rest-rescue-index-*")
+	if err != nil {
+		return "", nil, errors.Wrap(ctx, err, "create temporary index dir")
+	}
+	defer func() { _ = os.RemoveAll(indexDir) }()
+	// The temporary index path must NOT exist yet: git rejects a zero-byte index
+	// with "index file smaller than expected".
+	indexFile := filepath.Join(indexDir, "index")
+	env := []string{"GIT_INDEX_FILE=" + indexFile}
+
+	if err := g.runCmdEnv(ctx, g.repoPath, env, "add", "-A"); err != nil {
+		return "", nil, errors.Wrap(ctx, err, "stage working tree into temporary index")
+	}
+	treeOut, err := g.runCmdOutputEnv(ctx, g.repoPath, env, "write-tree")
+	if err != nil {
+		return "", nil, errors.Wrap(ctx, err, "write rescue tree")
+	}
+	tree := strings.TrimSpace(string(treeOut))
+
+	commitOut, err := g.runCmdOutput(
+		ctx,
+		g.repoPath,
+		"commit-tree",
+		tree,
+		"-p",
+		"HEAD",
+		"-m",
+		"git-rest: rescue dirty working tree",
+	)
+	if err != nil {
+		return "", nil, errors.Wrap(ctx, err, "create rescue commit object")
+	}
+	commit := strings.TrimSpace(string(commitOut))
+
+	pathsOut, err := g.runCmdOutput(ctx, g.repoPath, "diff", "--name-only", "HEAD", commit)
+	if err != nil {
+		return "", nil, errors.Wrap(ctx, err, "list rescued paths")
+	}
+	paths := make([]string, 0, 8)
+	for _, line := range strings.Split(strings.TrimSpace(string(pathsOut)), "\n") {
+		if line != "" {
+			paths = append(paths, line)
+		}
+	}
+	return commit, paths, nil
+}
+
+// rescueDirtyTree captures the whole working-tree state on a
+// rescue/<timestamp> branch and pushes it to the upstream remote. Only after that
+// push succeeds does it return the working tree to the upstream state
+// (reset --hard + clean -fd). It never discards a change: a failed push leaves
+// HEAD unmoved, the working tree dirty, and the local rescue ref in place so the
+// push can be retried by hand.
+func (g *git) rescueDirtyTree(ctx context.Context, upstream string) error {
+	branch := "rescue/" + g.currentDateTimeGetter.Now().UTC().Format("20060102T150405Z")
+
+	commit, paths, err := g.createRescueCommit(ctx)
+	if err != nil {
+		return err
+	}
+
+	if err := g.runCmd(ctx, g.repoPath, "update-ref", "refs/heads/"+branch, commit); err != nil {
+		return errors.Wrapf(ctx, err, "create local rescue ref %s", branch)
+	}
+
+	remote := strings.SplitN(upstream, "/", 2)[0]
+	if err := g.runCmd(
+		ctx,
+		g.repoPath,
+		"push",
+		remote,
+		"refs/heads/"+branch+":refs/heads/"+branch,
+	); err != nil {
+		slog.ErrorContext(
+			ctx,
+			"rescue push failed, leaving repo for inspection",
+			"branch",
+			branch,
+			"err",
+			err.Error(),
+		)
+		return errors.Wrapf(ctx, err, "rescue push failed, leaving repo for inspection")
+	}
+
+	slog.InfoContext(
+		ctx,
+		"rescue branch pushed",
+		"branch",
+		branch,
+		"files",
+		len(paths),
+		"paths",
+		strings.Join(paths, ","),
+	)
+
+	// Only now is the content safe on the remote, so only now may the local
+	// working tree be returned to the upstream state.
+	if err := g.runCmd(ctx, g.repoPath, "reset", "--hard", upstream); err != nil {
+		return errors.Wrapf(ctx, err, "reset --hard %s after rescue", upstream)
+	}
+	if err := g.runCmd(ctx, g.repoPath, "clean", "-fd"); err != nil {
+		return errors.Wrap(ctx, err, "git clean -fd after rescue")
+	}
+	return nil
 }
 
 // Clone clones remoteURL into the repository path.
