@@ -20,6 +20,10 @@ func TestSuite(t *testing.T) {
 	format.TruncatedDiff = false
 	RegisterFailHandler(Fail)
 	suiteConfig, reporterConfig := GinkgoConfiguration()
-	suiteConfig.Timeout = 60 * time.Second
+	// The dirty-tree-rescue specs added real-git fixtures to this suite, pushing
+	// it past the previous 60s budget (it ran 105 of 110 specs in 60.03s and the
+	// heaviest quarantine fixture was killed by the deadline). 120s restores
+	// headroom without hiding a genuine hang.
+	suiteConfig.Timeout = 120 * time.Second
 	RunSpecs(t, "Git Test Suite", suiteConfig, reporterConfig)
 }

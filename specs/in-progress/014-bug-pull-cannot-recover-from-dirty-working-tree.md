@@ -1,8 +1,9 @@
 ---
-status: prompted
+status: verifying
 approved: "2026-09-25T09:34:46Z"
 generating: "2026-09-25T10:29:14Z"
 prompted: "2026-09-25T11:08:53Z"
+verifying: "2026-09-25T11:50:37Z"
 branch: dark-factory/bug-pull-cannot-recover-from-dirty-working-tree
 ---
 
