@@ -8,6 +8,12 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 * MINOR version when you add functionality in a backwards-compatible manner, and
 * PATCH version when you make backwards-compatible bug fixes.
 
+## Unreleased
+
+- fix: Recover automatically from a dirty working tree that blocks a fast-forward pull. When `git merge --ff-only` fails because uncommitted changes (staged, unstaged, deletions or untracked files) would be overwritten, the puller now captures the whole working-tree state as an object-only commit on a `rescue/<timestamp>` branch, pushes it to the upstream remote, and only after that push succeeds returns the working tree to the upstream state (`git reset --hard` + `git clean -fd`). A rejected rescue push resets nothing — HEAD stays put, the tree stays dirty, and the local rescue branch remains for a manual retry — so no change is ever discarded. `.gitignore`d paths are excluded by construction. This narrows spec 006's `git reset --hard` ban to this one path, where the content is already safe on the remote. Fixes the 2026-09-24 `vault-obsidian-agent-0` incident, where one wedged puller stalled the agent-task-executor reconcile loop and no Seibert-Data PR got a bot review.
+
+- feat: Add `git_rest_pull_rescues_total` counter — one increment per dirty-working-tree rescue. Registered and pre-initialised to zero at process start, so the series is visible on `/metrics` before any rescue has happened and `rate(git_rest_pull_rescues_total[5m])` is meaningful on a freshly started pod.
+
 ## v0.26.0
 
 - fix: Reject a re-quarantine of a conflicted path that already lives under `_conflicts/`. The quarantine destination builder now strips every leading `_conflicts/` segment, so it always produces exactly one `_conflicts/` level, and a new pre-flight guard rejects a merge whose conflict list contains an already-quarantined path — the file is left untouched, the merge aborts with `ErrConflictResolutionFailed`, a WARN names the nested path, and `git_rest_resolver_failures_total{category="nested_source"}` records the rejection. Fixes the 2026-09-13 Personal vault chain where an 11:08 run quarantined a file that had already been quarantined at 11:07, producing `_conflicts/_conflicts/...` with its conflict markers still embedded.

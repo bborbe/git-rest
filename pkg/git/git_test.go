@@ -56,6 +56,8 @@ func (n *noopMetrics) IncQuarantinedFiles() {}
 
 func (n *noopMetrics) SetQuarantinedBacklog(_ int) {}
 
+func (n *noopMetrics) IncPullRescue() {}
+
 // initRepo creates a temporary git repo with a local bare remote so that push works.
 func initRepo() (workDir string, cleanup func()) {
 	remoteDir, err := os.MkdirTemp("", "git-remote-*")
@@ -737,6 +739,87 @@ func setupPullFixture() (workDir string, externalPush func(file, content string)
 	return
 }
 
+// setupRescueFixture creates a working repo backed by a local bare remote whose
+// initial commit tracks tasks/x.md, tasks/doomed.md and .gitignore. Returns
+// workDir, a function that advances the remote with a commit touching
+// tasks/x.md, a function that dirties the working tree in all four shapes, the
+// bare remote path (for hook installation), and a cleanup func.
+func setupRescueFixture() (
+	workDir string,
+	advanceRemote func(),
+	dirtyTree func(),
+	remoteDir string,
+	cleanup func(),
+) {
+	remoteDir, err := os.MkdirTemp("", "git-remote-rescue-*")
+	Expect(err).NotTo(HaveOccurred())
+	workDir, err = os.MkdirTemp("", "git-work-rescue-*")
+	Expect(err).NotTo(HaveOccurred())
+
+	rg := func(dir string, args ...string) {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		out, e := cmd.CombinedOutput()
+		Expect(e).NotTo(HaveOccurred(), "git %v: %s", args, string(out))
+	}
+
+	rg(remoteDir, "init", "--bare")
+	rg(workDir, "init")
+	rg(workDir, "config", "user.email", "test@example.com")
+	rg(workDir, "config", "user.name", "Test User")
+	rg(workDir, "remote", "add", "origin", remoteDir)
+
+	Expect(os.MkdirAll(filepath.Join(workDir, "tasks"), 0o750)).To(Succeed())
+	Expect(os.WriteFile(
+		filepath.Join(workDir, "tasks", "x.md"), []byte("line one\n"), 0o600,
+	)).To(Succeed())
+	Expect(os.WriteFile(
+		filepath.Join(workDir, "tasks", "doomed.md"), []byte("gone\n"), 0o600,
+	)).To(Succeed())
+	Expect(os.WriteFile(
+		filepath.Join(workDir, ".gitignore"), []byte("secrets.env\n"), 0o600,
+	)).To(Succeed())
+	rg(workDir, "add", "-A")
+	rg(workDir, "commit", "-m", "init")
+	rg(workDir, "push", "-u", "origin", "HEAD")
+
+	advanceRemote = func() {
+		extDir, e := os.MkdirTemp("", "git-ext-rescue-*")
+		Expect(e).NotTo(HaveOccurred())
+		defer func() { _ = os.RemoveAll(extDir) }()
+		rg(extDir, "clone", remoteDir, ".")
+		rg(extDir, "config", "user.email", "ext@example.com")
+		rg(extDir, "config", "user.name", "External")
+		Expect(os.WriteFile(
+			filepath.Join(extDir, "tasks", "x.md"), []byte("line one\nline two\n"), 0o600,
+		)).To(Succeed())
+		rg(extDir, "add", "-A")
+		rg(extDir, "commit", "-m", "external: touches x")
+		rg(extDir, "push", "origin")
+	}
+
+	dirtyTree = func() {
+		Expect(os.WriteFile(
+			filepath.Join(workDir, "tasks", "x.md"),
+			[]byte("line one\nLOCAL UNCOMMITTED EDIT\n"),
+			0o600,
+		)).To(Succeed())
+		Expect(os.WriteFile(
+			filepath.Join(workDir, "tasks", "scratch.md"), []byte("scratch\n"), 0o600,
+		)).To(Succeed())
+		Expect(os.WriteFile(
+			filepath.Join(workDir, "secrets.env"), []byte("secret\n"), 0o600,
+		)).To(Succeed())
+		rg(workDir, "rm", "-q", "tasks/doomed.md")
+	}
+
+	cleanup = func() {
+		_ = os.RemoveAll(workDir)
+		_ = os.RemoveAll(remoteDir)
+	}
+	return
+}
+
 // writeLocalCommit stages and commits a new file in workDir without pushing.
 func writeLocalCommit(workDir, file, content string) {
 	if err := os.WriteFile(filepath.Join(workDir, file), []byte(content), 0600); err != nil {
@@ -1038,6 +1121,15 @@ var _ = Describe("Pull state machine", func() {
 				strings.TrimSpace(gitOutputStr(workDir, "rev-parse", "HEAD")),
 			).To(Equal(headBefore))
 		})
+
+		It("AC6: the localSHA == remoteSHA no-op path creates no rescue branch", func() {
+			before := gatherPullRescues()
+			Expect(pg.Pull(ctx)).To(BeNil())
+			Expect(strings.TrimSpace(gitOutputStr(
+				workDir, "for-each-ref", "--format=%(refname)", "refs/heads/rescue/",
+			))).To(BeEmpty())
+			Expect(gatherPullRescues() - before).To(Equal(0.0))
+		})
 	})
 
 	Context("local clean, remote has new commits (fast-forward)", func() {
@@ -1057,6 +1149,15 @@ var _ = Describe("Pull state machine", func() {
 			unpushed := strings.TrimSpace(gitOutputStr(workDir, "log", "@{u}..HEAD", "--oneline"))
 			Expect(unpushed).To(BeEmpty())
 		})
+
+		It("AC4a: a clean fast-forward creates no rescue branch and counts no rescue", func() {
+			before := gatherPullRescues()
+			Expect(pg.Pull(ctx)).To(BeNil())
+			Expect(strings.TrimSpace(gitOutputStr(
+				workDir, "for-each-ref", "--format=%(refname)", "refs/heads/rescue/",
+			))).To(BeEmpty(), "a clean tree must never be rescued")
+			Expect(gatherPullRescues() - before).To(Equal(0.0))
+		})
 	})
 
 	Context("local ahead, remote unchanged (push)", func() {
@@ -1068,6 +1169,15 @@ var _ = Describe("Pull state machine", func() {
 			Expect(pg.Pull(ctx)).To(BeNil())
 			unpushed := strings.TrimSpace(gitOutputStr(workDir, "log", "@{u}..HEAD", "--oneline"))
 			Expect(unpushed).To(BeEmpty())
+		})
+
+		It("AC6: the remoteSHA == baseSHA push path creates no rescue branch", func() {
+			before := gatherPullRescues()
+			Expect(pg.Pull(ctx)).To(BeNil())
+			Expect(strings.TrimSpace(gitOutputStr(
+				workDir, "for-each-ref", "--format=%(refname)", "refs/heads/rescue/",
+			))).To(BeEmpty())
+			Expect(gatherPullRescues() - before).To(Equal(0.0))
 		})
 	})
 
@@ -1096,6 +1206,15 @@ var _ = Describe("Pull state machine", func() {
 			unpushed := strings.TrimSpace(gitOutputStr(workDir, "log", "@{u}..HEAD", "--oneline"))
 			Expect(unpushed).To(BeEmpty())
 		})
+
+		It("AC6: spec 006's committed-divergence merge creates no rescue branch", func() {
+			before := gatherPullRescues()
+			Expect(pg.Pull(ctx)).To(BeNil())
+			Expect(strings.TrimSpace(gitOutputStr(
+				workDir, "for-each-ref", "--format=%(refname)", "refs/heads/rescue/",
+			))).To(BeEmpty())
+			Expect(gatherPullRescues() - before).To(Equal(0.0))
+		})
 	})
 
 	Context("HEAD has no upstream tracking ref", func() {
@@ -1113,6 +1232,76 @@ var _ = Describe("Pull state machine", func() {
 			_ = pg.Pull(ctx)
 			Expect(fakeMetrics.IncRebaseConflictCallCount()).To(Equal(0))
 			Expect(fakeMetrics.IncGitOperationErrorCallCount()).To(BeNumerically(">=", 1))
+		})
+	})
+
+	Context("fast-forward fails for a reason other than a dirty tree", func() {
+		BeforeEach(func() {
+			externalPush("remote.txt", "from remote\n")
+			// An index.lock makes `git merge --ff-only` fail while the working tree
+			// itself is clean, so this pins DB1's "every other cause" clause.
+			Expect(os.WriteFile(
+				filepath.Join(workDir, ".git", "index.lock"), []byte{}, 0o600,
+			)).To(Succeed())
+			DeferCleanup(func() {
+				_ = os.Remove(filepath.Join(workDir, ".git", "index.lock"))
+			})
+		})
+
+		It("AC4b: returns the merge's own error and rescues nothing", func() {
+			before := gatherPullRescues()
+
+			logs, restore := captureSlogLogs()
+			defer restore()
+
+			err := pg.Pull(ctx)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("fast-forward merge failed"))
+			Expect(logs.String()).NotTo(ContainSubstring("rescue branch pushed"))
+
+			Expect(strings.TrimSpace(gitOutputStr(
+				workDir, "for-each-ref", "--format=%(refname)", "refs/heads/rescue/",
+			))).To(BeEmpty())
+			Expect(gatherPullRescues() - before).To(Equal(0.0))
+		})
+	})
+
+	Context("git status itself fails", func() {
+		BeforeEach(func() {
+			externalPush("remote.txt", "from remote\n")
+			// `git status --porcelain` must fail while `git fetch` and `git rev-parse`
+			// still succeed. An unreadable .git/index does NOT qualify: git fetch
+			// refreshes the index too, so the pull would abort at the fetch and never
+			// reach the merge. An invalid status.showUntrackedFiles value fails ONLY
+			// `git status` (verified: fetch and merge ignore it), and the index.lock
+			// then fails only the merge. Together they pin AC4(c) exactly: the failing
+			// status reports a clean tree, the merge is still attempted, and the
+			// merge's own error — not a status error — is what surfaces.
+			runGit(workDir, "config", "status.showUntrackedFiles", "bogus")
+			Expect(os.WriteFile(
+				filepath.Join(workDir, ".git", "index.lock"), []byte{}, 0o600,
+			)).To(Succeed())
+			DeferCleanup(func() {
+				_ = os.Remove(filepath.Join(workDir, ".git", "index.lock"))
+			})
+		})
+
+		It("AC4c: still attempts the merge and surfaces the merge's error", func() {
+			before := gatherPullRescues()
+
+			logs, restore := captureSlogLogs()
+			defer restore()
+
+			err := pg.Pull(ctx)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("fast-forward merge failed"))
+			Expect(logs.String()).
+				To(ContainSubstring("git status failed before fast-forward"))
+
+			Expect(strings.TrimSpace(gitOutputStr(
+				workDir, "for-each-ref", "--format=%(refname)", "refs/heads/rescue/",
+			))).To(BeEmpty())
+			Expect(gatherPullRescues() - before).To(Equal(0.0))
 		})
 	})
 
@@ -1942,4 +2131,204 @@ var _ = Describe("Quarantine backlog gauge", func() {
 			Expect(logStr).To(ContainSubstring("_conflicts"))
 		},
 	)
+})
+
+// gatherPullRescues returns the current value of the process-global
+// git_rest_pull_rescues_total counter. Returns 0 if the counter is not registered.
+func gatherPullRescues() float64 {
+	mfs, err := prometheus.DefaultGatherer.Gather()
+	Expect(err).NotTo(HaveOccurred())
+	for _, mf := range mfs {
+		if mf.GetName() != "git_rest_pull_rescues_total" {
+			continue
+		}
+		for _, m := range mf.GetMetric() {
+			return m.GetCounter().GetValue()
+		}
+	}
+	return 0
+}
+
+var _ = Describe("Dirty working tree rescue", func() {
+	var (
+		workDir       string
+		advanceRemote func()
+		dirtyTree     func()
+		remoteDir     string
+		rescueCleanup func()
+		pg            git.Git
+		ctx           context.Context
+	)
+
+	// rescueRefs returns the local rescue refs in workDir, one per line, or "".
+	rescueRefs := func() string {
+		return strings.TrimSpace(gitOutputStr(
+			workDir, "for-each-ref", "--format=%(refname)", "refs/heads/rescue/",
+		))
+	}
+	// remoteRescueRefs returns the rescue refs visible on the remote, or "".
+	remoteRescueRefs := func() string {
+		return strings.TrimSpace(gitOutputStr(
+			workDir, "ls-remote", "--heads", "origin", "refs/heads/rescue/*",
+		))
+	}
+
+	BeforeEach(func() {
+		ctx = context.Background()
+		workDir, advanceRemote, dirtyTree, remoteDir, rescueCleanup = setupRescueFixture()
+		pg = git.New(
+			workDir,
+			metrics.NewMetrics(),
+			libtime.NewCurrentDateTime(),
+			"",
+			git.NewMarkerResolver(workDir),
+		)
+	})
+
+	AfterEach(func() {
+		rescueCleanup()
+	})
+
+	It("AC1: completes the pull, cleans the tree and fast-forwards to the remote", func() {
+		advanceRemote()
+		dirtyTree()
+
+		Expect(pg.Pull(ctx)).To(Succeed())
+
+		upstream := strings.TrimSpace(gitOutputStr(
+			workDir, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}",
+		))
+		Expect(strings.TrimSpace(gitOutputStr(workDir, "status", "--porcelain"))).
+			To(BeEmpty(), "the working tree must return to the remote state")
+		Expect(gitOutputStr(workDir, "rev-parse", "HEAD")).
+			To(Equal(gitOutputStr(workDir, "rev-parse", upstream)))
+	})
+
+	It("AC2: preserves every dirty shape on one rescue branch and excludes ignored files", func() {
+		advanceRemote()
+		dirtyTree()
+
+		Expect(pg.Pull(ctx)).To(Succeed())
+
+		refs := strings.Fields(rescueRefs())
+		Expect(refs).To(HaveLen(1), "exactly one rescue branch per rescue event")
+		Expect(refs[0]).To(MatchRegexp(`^refs/heads/rescue/[0-9]{8}T[0-9]{6}Z$`))
+
+		// The same single ref is the one published to the remote.
+		Expect(remoteRescueRefs()).To(ContainSubstring(refs[0]))
+
+		commit := strings.TrimSpace(gitOutputStr(workDir, "rev-parse", refs[0]))
+		Expect(gitOutputStr(workDir, "show", commit+":tasks/x.md")).
+			To(ContainSubstring("LOCAL UNCOMMITTED EDIT"))
+		Expect(gitOutputStr(workDir, "show", commit+":tasks/scratch.md")).
+			To(ContainSubstring("scratch"))
+		// The staged deletion is recorded as a tree-vs-parent diff; the path is
+		// ABSENT from the rescue tree.
+		Expect(gitOutputStr(workDir, "diff", "--name-status", commit+"^", commit)).
+			To(ContainSubstring("D\ttasks/doomed.md"))
+		Expect(gitOutputStr(workDir, "ls-tree", "-r", "--name-only", commit)).
+			NotTo(ContainSubstring("tasks/doomed.md"))
+		Expect(gitOutputStr(workDir, "ls-tree", "-r", "--name-only", commit)).
+			NotTo(ContainSubstring("secrets.env"))
+	})
+
+	It("AC2: rescues an untracked-only collision (git stash create would lose it)", func() {
+		// Advance the remote so the incoming commit ADDS tasks/scratch.md, then
+		// leave only an untracked file at that path.
+		extDir, err := os.MkdirTemp("", "git-ext-untracked-*")
+		Expect(err).NotTo(HaveOccurred())
+		defer func() { _ = os.RemoveAll(extDir) }()
+		runGit(extDir, "clone", remoteDir, ".")
+		runGit(extDir, "config", "user.email", "ext@example.com")
+		runGit(extDir, "config", "user.name", "External")
+		Expect(os.WriteFile(
+			filepath.Join(extDir, "tasks", "scratch.md"), []byte("remote scratch\n"), 0o600,
+		)).To(Succeed())
+		runGit(extDir, "add", "-A")
+		runGit(extDir, "commit", "-m", "external: adds scratch")
+		runGit(extDir, "push", "origin")
+
+		Expect(os.WriteFile(
+			filepath.Join(workDir, "tasks", "scratch.md"), []byte("local untracked\n"), 0o600,
+		)).To(Succeed())
+		Expect(strings.TrimSpace(gitOutputStr(workDir, "status", "--porcelain"))).
+			To(Equal("?? tasks/scratch.md"))
+
+		Expect(pg.Pull(ctx)).To(Succeed())
+
+		refs := strings.Fields(rescueRefs())
+		Expect(refs).To(HaveLen(1))
+		commit := strings.TrimSpace(gitOutputStr(workDir, "rev-parse", refs[0]))
+		Expect(gitOutputStr(workDir, "show", commit+":tasks/scratch.md")).
+			To(ContainSubstring("local untracked"))
+		Expect(strings.TrimSpace(gitOutputStr(workDir, "status", "--porcelain"))).To(BeEmpty())
+	})
+
+	It("logs one INFO line naming the rescue branch and the captured paths", func() {
+		advanceRemote()
+		dirtyTree()
+
+		logs, restore := captureSlogLogs()
+		defer restore()
+
+		Expect(pg.Pull(ctx)).To(Succeed())
+
+		logStr := logs.String()
+		Expect(strings.Count(logStr, "rescue branch pushed")).To(Equal(1))
+		Expect(logStr).To(ContainSubstring("files=3"))
+		Expect(logStr).To(ContainSubstring("paths=tasks/doomed.md,tasks/scratch.md,tasks/x.md"))
+	})
+
+	It("AC5: a rejected rescue push resets nothing and leaves the rescue ref for retry", func() {
+		advanceRemote()
+		dirtyTree()
+		headBefore := strings.TrimSpace(gitOutputStr(workDir, "rev-parse", "HEAD"))
+
+		// A pre-receive hook in the bare remote rejects rescue/* refs. The bare
+		// repo must point at its own hooks directory: a global core.hooksPath (as
+		// set on some machines) makes git ignore the per-repo hooks/ directory,
+		// the hook silently no-ops, and this spec would false-fail.
+		hooksDir := filepath.Join(remoteDir, "hooks")
+		Expect(os.MkdirAll(hooksDir, 0o750)).To(Succeed())
+		hook := "#!/bin/sh\n" +
+			"while read old new ref; do\n" +
+			"  case \"$ref\" in refs/heads/rescue/*) echo \"rejected by test hook\" >&2; exit 1;; esac\n" +
+			"done\n" +
+			"exit 0\n"
+		Expect(os.WriteFile(filepath.Join(hooksDir, "pre-receive"), []byte(hook), 0o755)).
+			To(Succeed())
+		runGit(remoteDir, "config", "core.hooksPath", "hooks")
+
+		logs, restore := captureSlogLogs()
+		defer restore()
+
+		err := pg.Pull(ctx)
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("rescue push failed"))
+		Expect(
+			logs.String(),
+		).To(ContainSubstring("rescue push failed, leaving repo for inspection"))
+
+		// Nothing was reset and nothing was cleaned: HEAD unmoved, the edit still
+		// in the working tree, and the REAL index still holds the staged deletion
+		// (proving the temporary index never leaked into it).
+		Expect(strings.TrimSpace(gitOutputStr(workDir, "rev-parse", "HEAD"))).To(Equal(headBefore))
+		Expect(gitOutputStr(workDir, "status", "--porcelain")).To(ContainSubstring(" M tasks/x.md"))
+		Expect(gitOutputStr(workDir, "diff", "--cached", "--name-only", "HEAD")).
+			To(ContainSubstring("tasks/doomed.md"))
+
+		// The local rescue ref exists so the push can be retried by hand; the
+		// remote has no rescue branch.
+		Expect(rescueRefs()).NotTo(BeEmpty())
+		Expect(remoteRescueRefs()).To(BeEmpty())
+	})
+
+	It("AC3: increments git_rest_pull_rescues_total by exactly one per rescue", func() {
+		advanceRemote()
+		dirtyTree()
+
+		before := gatherPullRescues()
+		Expect(pg.Pull(ctx)).To(Succeed())
+		Expect(gatherPullRescues() - before).To(Equal(1.0))
+	})
 })

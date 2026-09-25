@@ -54,6 +54,115 @@ What to assert per spec category:
 | New CLI arg / env var | Pass via `-flag` and `ENV_VAR=...`; verify behavior changes; verify default unchanged |
 | `git pull` cadence (e.g. spec-006 readiness) | Use a remote-clone fixture; observe pull cycles; cycle adjustments via `-pull-interval` |
 
+### Rung 1 recipe: dirty working tree + moved remote
+
+The shape: the served repo's working tree holds uncommitted changes to tracked files while the remote has moved. `git merge --ff-only` refuses rather than clobbering the working tree, so the pull aborts with `fast-forward merge failed`. This is **recoverable state, not a terminal one** — a healthy puller must report ready and heal the tree on its own.
+
+> **The ordering below is a hard requirement, not an incidental detail.** The binary must boot against a **clean, level clone**; the remote is advanced and the tree dirtied only afterwards. Booting with the dirty state already present produces a false negative: the boot path's `recoverUntracked` runs `git add -A && git commit` on any `??` line (which stages tracked edits too), and `syncOnStartup` performs a raw `git pull` before the HTTP server serves. Either one clears the condition before the puller's first cycle, so the pull takes the committed-divergence route instead and the dirty-tree fast-forward failure never happens.
+
+```bash
+set -e
+BASE=/tmp/git-rest-repro && rm -rf "$BASE" && mkdir -p "$BASE" && cd "$BASE"
+
+# 1. Bare origin. tasks/doomed.md and .gitignore are tracked HERE, at the
+#    merge-base: the staged deletion in step 5 then needs no commit of its own
+#    (a commit would move HEAD off the merge-base and route the pull into the
+#    diverged, out-of-scope path), and .gitignore survives the post-rescue
+#    `git clean -fd` that would otherwise delete it and un-ignore secrets.env.
+#    The branch is named explicitly so the recipe replays on a machine whose
+#    push guardrail gates `master`.
+git init -q --bare -b test/repro origin.git
+git clone -q origin.git seed && cd seed
+git config user.email repro@local && git config user.name repro
+mkdir -p tasks && printf 'line one\n' > tasks/x.md && printf 'gone\n' > tasks/doomed.md
+printf 'secrets.env\n' > .gitignore
+git add -A && git commit -q -m init
+BRANCH=$(git rev-parse --abbrev-ref HEAD) && git push -q origin "$BRANCH"
+cd "$BASE"
+
+# 2. Work clone — the repo the puller serves. Its remote is LEVEL at this point.
+git clone -q origin.git work && cd work
+git config user.email repro@local && git config user.name repro
+
+# 3. Boot the puller FIRST, against the clean, level clone.
+cd ~/Documents/workspaces/git-rest && go build -o /tmp/git-rest-repro-bin .
+/tmp/git-rest-repro-bin -listen=:18445 -repo="$BASE/work" -pull-interval=10s -v=1 > "$BASE/run.log" 2>&1 &
+sleep 3
+
+# 4. NOW advance the remote, so the incoming commit touches tasks/x.md.
+cd "$BASE/seed" && printf 'line one\nline two\n' > tasks/x.md
+git add -A && git commit -q -m "remote touches x" && git push -q origin "$BRANCH"
+
+# 5. NOW dirty the tree, four ways at once. No commit here: HEAD must stay at
+#    the merge-base or the puller takes the diverged path instead.
+#      - a TRACKED edit colliding with the incoming commit (this causes the abort)
+#      - an UNTRACKED file that does not collide (the rescue must preserve it)
+#      - a STAGED DELETION of a tracked file (the rescue must capture it)
+#      - an IGNORED file, which the rescue must NOT capture
+cd "$BASE/work" && printf 'line one\nLOCAL UNCOMMITTED EDIT\n' > tasks/x.md
+printf 'scratch\n' > tasks/scratch.md
+printf 'secret\n' > secrets.env
+git rm -q tasks/doomed.md
+
+# Guard the premise the fix depends on: local must still be at the merge-base.
+echo "mergebase: $(git merge-base HEAD "origin/$BRANCH" | cut -c1-8)  HEAD: $(git rev-parse --short HEAD)"
+git status --porcelain
+
+# 6. Wait one pull interval, then read readiness AND the counter. Both must be
+#    read while this process is alive — the counter is per-process.
+sleep 12
+curl -s -o /dev/null -w 'readiness HTTP %{http_code}\n' http://localhost:18445/readiness
+curl -s http://localhost:18445/metrics | grep '^git_rest_pull_rescues_total'
+
+# 7. Teardown. Every AC below re-runs this recipe on the same port, so each run
+#    must start from a clean process — a survivor keeps answering :18445 and
+#    returns stale evidence.
+kill "$(pgrep -f /tmp/git-rest-repro-bin)" 2>/dev/null || true
+```
+
+Assertions:
+
+- **Tree clean:** `git -C "$BASE/work" status --porcelain` returns 0 lines.
+- **Level again:** `git -C "$BASE/work" rev-parse HEAD` equals `git -C "$BASE/work" rev-parse origin/"$BRANCH"`.
+- **Ready:** `curl -s -o /dev/null -w '%{http_code}' http://localhost:18445/readiness` returns `200`.
+- **Exactly one rescue ref, legally named:** `git -C "$BASE/work" ls-remote --heads origin 'refs/heads/rescue/*'` returns exactly 1 ref matching `| grep -Eq 'refs/heads/rescue/[0-9]{8}T[0-9]{6}Z$'`.
+- **Counted:** `curl -s localhost:18445/metrics | grep '^git_rest_pull_rescues_total'` reads `1`, asserted **while the process is still alive**. The counter is per-process and pre-initialised to 0 in `init()`, so the assertion is the absolute value, not a delta across restarts.
+
+Then derive the ref from the **authoritative remote** (not from a tracking ref) and assert all four rescue-branch contents:
+
+```bash
+REF=origin/$(git -C "$BASE/work" ls-remote --heads origin 'refs/heads/rescue/*' | awk '{print $2}' | sed 's#refs/heads/##')
+
+# The tracked edit and the untracked file are both in the rescue tree.
+git -C "$BASE/work" show "${REF}:tasks/x.md"          # contains LOCAL UNCOMMITTED EDIT
+git -C "$BASE/work" show "${REF}:tasks/scratch.md"    # contains scratch
+
+# The staged deletion is a tree-vs-parent diff, and the path is ABSENT from the
+# rescue tree (the tree is built from a temporary index where `git add -A`
+# applied the deletion). Asserting `git show "${REF}:tasks/doomed.md"` would
+# fail a correct implementation.
+git -C "$BASE/work" diff --name-status "${REF}^" "${REF}" | grep -qE '^D\tasks/doomed\.md$'   # exits 0
+git -C "$BASE/work" ls-tree -r --name-only "${REF}" | grep -c 'tasks/doomed\.md'               # 0
+
+# The .gitignore'd file is excluded by construction.
+git -C "$BASE/work" ls-tree -r --name-only "${REF}" | grep -cE 'secrets\.env$'                 # 0
+```
+
+The brace form `${REF}` is required: in zsh, `"$VAR:tasks/x.md"` is mangled by the `:t` / `:r` modifiers.
+
+Negative probes. Three of them pin "only a dirty-tree failure is rescued":
+
+- **(a) Clean tree, successful fast-forward.** Run the recipe with step 5 skipped: `git -C "$BASE/work" ls-remote --heads origin 'refs/heads/rescue/*'` returns 0 lines and `git_rest_pull_rescues_total` reads `0`.
+- **(b) Clean tree, `merge --ff-only` fails for an environmental reason.** Run the recipe through step 4 with step 5 skipped — the remote **must** be ahead, or `localSHA == remoteSHA` returns before any merge is attempted. Then `touch "$BASE/work/.git/index.lock"` **while the binary runs** (booting with the lock present does not work: `main.go`'s `cleanupStaleLocks` deletes every `*.lock` under `.git` at startup) and wait one pull interval. Assert: 0 rescue refs, `git_rest_pull_rescues_total` reads `0`, and `grep -c 'fast-forward merge failed' "$BASE/run.log"` returns ≥1. This probe is constructible and definitively not a dirty tree, which is what pins the "every other cause" clause.
+- **(c) `git status` itself fails.** Same setup as (b), with `chmod 000 "$BASE/work/.git/index"` in place of the lock, then the same three assertions.
+
+Two more negatives close the mechanism:
+
+- **(d) A rejected rescue push never resets.** Install a `pre-receive` hook in `origin.git` that exits 1 for `refs/heads/rescue/*`, **and point that repo at its own hooks directory** with `git -C "$BASE/origin.git" config core.hooksPath hooks` — a global `core.hooksPath` makes git ignore the per-repo `hooks/` directory entirely, so without that line the hook silently no-ops, the push succeeds, the implementation correctly resets, and this probe false-fails against correct code. Then run the recipe and assert: `git -C "$BASE/work" status --porcelain` still lists `tasks/x.md` as ` M` (the edit is still in the working tree, not discarded), `git -C "$BASE/work" rev-parse HEAD` is unchanged, and the log contains `rescue push failed, leaving repo for inspection`.
+- **(e) The committed-divergence path is unchanged.** With a committed local divergence (no dirty file) against a moved remote, the two commits still merge — `git -C "$BASE/work" log --oneline` contains both subjects — and `ls-remote --heads origin 'refs/heads/rescue/*'` returns 0 lines.
+
+Spec 014's `## Reproduction` is the authoritative form of this recipe; the version above is a condensation of it. The rung-2 section below is the next rung for this shape.
+
 For specs whose ACs include a Reproduction section (`kind: bug` specs always do), replay the EXACT reproduction commands. Their HTTP status codes are the contract.
 
 ## Rung 2: dev cluster e2e
@@ -107,6 +216,63 @@ The vault server's own logs are useful for white-box verification (see what HTTP
 kubectlnukedev -n dev logs vault-obsidian-openclaw-0 --since=5m \
   | grep -E "POST|status="
 ```
+
+### Rung 2 recipe: the GKE agent vault (`vault-obsidian-agent`)
+
+The nuke-hosted `vault-obsidian-{openclaw,personal,trading}` vaults are described above. The **agent vault** is a different deployment: a hand-written StatefulSet in namespace `agent` on GKE, reached with `kubectldev -n agent` on dev and `kubectlprod -n agent` on prod. The two are different clusters — the `kubectlnuke{dev,prod}` wrappers do not reach the agent vault.
+
+**The repo inside the agent pod is `/data`, not `/data/repo`.** `vault-obsidian-agent-sts.yaml` sets `REPO` to `/data` and mounts the PVC at `mountPath: /data` with `subPath: repo`. `subPath` selects a directory *within the volume*; it is not appended to the container path, so the clone lands at `/data` and `git -C /data/repo` fails with `fatal: not a git repository` even on a correct deploy.
+
+**The dev image is not built from this repo's working tree.** `agent/git-rest/Dockerfile` in `seibert-data/agent` is a one-line mirror (`FROM docker.io/bborbe/git-rest:<pinned tag>`), so `BRANCH=dev make buca` there re-tags whatever that pin names, and `--build-arg BUILD_GIT_COMMIT` on that path is inert because the mirror's Dockerfile declares no `ARG`. Getting a change onto dev therefore requires publishing a new git-rest image **and** moving that pin. Four steps, in order:
+
+```bash
+# 1. Publish the new git-rest image from the source repo. The `build` target is
+#    gated by `check-version-tag`, which refuses any $(VERSION) whose tag is not
+#    exactly at HEAD, so an untagged working tree needs ALLOW_UNTAGGED_BUILD=1.
+cd ~/Documents/workspaces/git-rest
+VERSION=dev ALLOW_UNTAGGED_BUILD=1 make buca     # publishes docker.io/bborbe/git-rest:dev
+
+# 2. Move the one-line mirror's FROM pin to the tag published in step 1:
+#      FROM docker.io/bborbe/git-rest:dev
+cd ~/Documents/workspaces/sm-octopus/agent/git-rest
+
+# 3. Rebuild the mirror image. This Makefile includes ../Makefile.docker, which is
+#    where `buca` lives. (`vault/obsidian-agent/`'s Makefile does NOT include
+#    Makefile.docker, so it carries no `buca` target — it is only where the
+#    StatefulSet manifest lives.)
+BRANCH=dev make buca
+
+# 4. Restart the StatefulSet. Its image is the floating `git-rest:dev` tag and it
+#    sets imagePullPolicy: Always, so a restart suffices — no manifest edit needed.
+kubectldev -n agent rollout restart statefulset/vault-obsidian-agent
+```
+
+> **Step 2 MUST be reverted.** The pin move is a deliberate temporary deviation from the mirror's version-pin convention. The same Dockerfile also serves the **prod mirror** (`BRANCH=master make buca`), so a pin left at `:dev` would build the prod image from the dev tag. Restoring it to a released `vX.Y.Z` tag belongs to the prod-promotion task, not to a pre-merge verification.
+
+Post-deploy assertions, after one pull interval:
+
+```bash
+kubectldev -n agent get pod vault-obsidian-agent-0 -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}'   # True
+kubectldev -n agent exec vault-obsidian-agent-0 -- git -C /data rev-parse HEAD                                     # equals origin/master
+kubectldev -n agent logs vault-obsidian-agent-0 --since=10m | grep -c 'rescue branch pushed'                        # >= 1
+kubectldev -n agent get pod vault-obsidian-agent-0 -o jsonpath='{.status.startTime}'                                # later than the deploy
+```
+
+Build-identity check — the freshness anchor is the **build commit**, not the image tag:
+
+```bash
+# deploy_check: the build commit the pod is actually running. The trailing grep
+# makes a missing metric exit non-zero, so the gate fails rather than passing falsely.
+kubectldev -n agent exec vault-obsidian-agent-0 -- wget -qO- http://localhost:9090/metrics \
+  | grep -m1 '^git_rest_build_info' | sed -E 's/.*commit="([^"]+)".*/\1/' | grep -E '^[0-9a-f]{7,40}$'
+
+# deploy_target: the commit the source repo is at
+$(git -C ~/Documents/workspaces/git-rest rev-parse --short HEAD)
+```
+
+The StatefulSet renders `image: '{{"IMAGE_PREFIX" | env}}/git-rest:{{"BRANCH" | env}}'`, so dev runs the floating tag `git-rest:dev`; comparing a pod's image tag against `:dev` would succeed no matter which build is deployed, i.e. a check that cannot fail. The commit baked into the binary can differ from `HEAD`, so this check discriminates. It is a **short-SHA against short-SHA** comparison: `Makefile` passes `--build-arg BUILD_GIT_COMMIT=$(git rev-parse --short HEAD)`, so `deploy_target` must use `--short` — a full 40-character `rev-parse HEAD` would never compare equal even on a correct deploy. `wget` is present in the image, and the metric renders as `git_rest_build_info{commit="2b492ed",date="…",version="…"} 1`.
+
+Rung 3 (prod promotion and verifying the prod symptom) is a separate task for this spec and is deliberately not covered here.
 
 ## Rung 3: prod cluster e2e
 
