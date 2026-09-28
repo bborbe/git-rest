@@ -6,7 +6,7 @@ HTTP endpoints exposed by git-rest. All file operations are under `/api/v1/files
 
 `http://<host>:<listen-port>`
 
-Default port: `8080` (set via `--listen`).
+Default port: `9090` (set via `--listen`).
 
 ## Endpoints
 

@@ -56,7 +56,7 @@ All flags can be set as environment variables.
 
 | Flag | Env Var | Required | Default | Description |
 |------|---------|----------|---------|-------------|
-| `--listen` | `LISTEN` | yes | `:8080` | HTTP listen address |
+| `--listen` | `LISTEN` | yes | `:9090` | HTTP listen address |
 | `--repo` | `REPO` | yes | — | Path to git repository on disk |
 | `--pull-interval` | `PULL_INTERVAL` | no | `30s` | Periodic `git pull` interval |
 | `--git-remote-url` | `GIT_REMOTE_URL` | no | — | Remote URL to clone on startup (omit for local-only) |
