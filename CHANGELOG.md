@@ -8,11 +8,13 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 * MINOR version when you add functionality in a backwards-compatible manner, and
 * PATCH version when you make backwards-compatible bug fixes.
 
+## Unreleased
+
+- fix: Default `--listen` to `:9090` instead of `:8080`, matching the bborbe admin-port convention that every sibling service and the Kubernetes manifests already use. The default was previously reachable only when `LISTEN` was unset — every deployment sets it explicitly — so this changes no running service, but a standalone run now lands on the port operators expect. README and `docs/api.md` updated to state the new default, including the `curl` examples in `docs/api.md` that target it; the example commands that pass `--listen :8080` explicitly are unchanged.
+
 ## v0.28.0
 
 - feat: Add a memory reporter that logs where the process's memory is going. Every `--mem-report-interval` (default 30s) it samples the Go heap and the container's cgroup, and once either reaches `--mem-report-threshold-mib` (default 256) it logs the full breakdown — `cgroup_anon_bytes` (process memory, unreclaimable) separately from `cgroup_file_bytes` (page cache, reclaimable), since those two need opposite fixes — followed by the `--mem-report-top-n` largest allocation sites, symbolised to function/file/line. It exists because a container OOMKilled at its cgroup limit is otherwise opaque: `/metrics` already reports *how much* memory is in use but never *which code* holds it, and a pprof endpoint is unreachable precisely when the pod is crash-looping behind a cluster-internal Service. The report goes to the service log, so `kubectl logs` is enough to diagnose it. A non-positive interval or threshold disables the reporter.
-
-- fix: Default `--listen` to `:9090` instead of `:8080`, matching the bborbe admin-port convention that every sibling service and the Kubernetes manifests already use. The default was previously reachable only when `LISTEN` was unset — every deployment sets it explicitly — so this changes no running service, but a standalone run now lands on the port operators expect. README and `docs/api.md` updated to state the new default, including the `curl` examples in `docs/api.md` that target it; the example commands that pass `--listen :8080` explicitly are unchanged.
 
 ## v0.27.0
 
