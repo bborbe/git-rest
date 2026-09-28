@@ -27,6 +27,7 @@ import (
 
 	"github.com/bborbe/git-rest/pkg/factory"
 	"github.com/bborbe/git-rest/pkg/git"
+	"github.com/bborbe/git-rest/pkg/memprof"
 	"github.com/bborbe/git-rest/pkg/metrics"
 	"github.com/bborbe/git-rest/pkg/puller"
 )
@@ -37,22 +38,25 @@ func main() {
 }
 
 type application struct {
-	SentryDSN       string            `required:"false" arg:"sentry-dsn"        env:"SENTRY_DSN"        usage:"Sentry DSN"                                                                                                                                          display:"length"`
-	SentryProxy     string            `required:"false" arg:"sentry-proxy"      env:"SENTRY_PROXY"      usage:"Sentry Proxy"`
-	Listen          string            `required:"true"  arg:"listen"            env:"LISTEN"            usage:"HTTP listen address"                                                                                                                                                  default:":8080"`
-	Repo            string            `required:"true"  arg:"repo"              env:"REPO"              usage:"path to git repository on disk"`
-	PullInterval    libtime.Duration  `required:"false" arg:"pull-interval"     env:"PULL_INTERVAL"     usage:"git pull interval"                                                                                                                                                    default:"30s"`
-	PullTimeout     libtime.Duration  `required:"false" arg:"pull-timeout"      env:"PULL_TIMEOUT"      usage:"per-pull timeout; subprocess is aborted if it exceeds this duration (0 = no timeout)"                                                                                 default:"60s"`
-	BuildGitVersion string            `required:"false" arg:"build-git-version" env:"BUILD_GIT_VERSION" usage:"Build Git version"                                                                                                                                                    default:"dev"`
-	BuildGitCommit  string            `required:"false" arg:"build-git-commit"  env:"BUILD_GIT_COMMIT"  usage:"Build Git commit hash"                                                                                                                                                default:"none"`
-	BuildDate       *libtime.DateTime `required:"false" arg:"build-date"        env:"BUILD_DATE"        usage:"Build timestamp (RFC3339)"`
-	GitSSHKey       git.SSHKeyPath    `required:"false" arg:"git-ssh-key"       env:"GIT_SSH_KEY"       usage:"Path to SSH private key for git operations"`
-	GitSSHCommand   string            `required:"false" arg:"git-ssh-command"   env:"GIT_SSH_COMMAND"   usage:"Full SSH command for git network ops (overrides default derived from --git-ssh-key). Empty = derive from --git-ssh-key."`
-	GitRemoteURL    git.RemoteURL     `required:"false" arg:"git-remote-url"    env:"GIT_REMOTE_URL"    usage:"Git remote URL to clone from on startup"`
-	GitUserName     string            `required:"false" arg:"git-user-name"     env:"GIT_USER_NAME"     usage:"Git author name for commits"`
-	GitUserEmail    string            `required:"false" arg:"git-user-email"    env:"GIT_USER_EMAIL"    usage:"Git author email for commits"`
-	GatewaySecret   string            `required:"false" arg:"gateway-secret"    env:"GATEWAY_SECRET"    usage:"Shared secret required in X-Gateway-Secret header for /api/v1/* requests. Empty = no auth (backward compatible)."                                    display:"length"`
-	VaultWrite      bool              `required:"false" arg:"vault-write"       env:"VAULT_WRITE_MODE"  usage:"When true, use YAMLMergeResolver for merge conflicts (deep-merges YAML frontmatter). Default false uses MarkerResolver (preserves <<<<<<< markers)."                  default:"false"`
+	SentryDSN          string            `required:"false" arg:"sentry-dsn"               env:"SENTRY_DSN"               usage:"Sentry DSN"                                                                                                                                          display:"length"`
+	SentryProxy        string            `required:"false" arg:"sentry-proxy"             env:"SENTRY_PROXY"             usage:"Sentry Proxy"`
+	Listen             string            `required:"true"  arg:"listen"                   env:"LISTEN"                   usage:"HTTP listen address"                                                                                                                                                  default:":8080"`
+	Repo               string            `required:"true"  arg:"repo"                     env:"REPO"                     usage:"path to git repository on disk"`
+	PullInterval       libtime.Duration  `required:"false" arg:"pull-interval"            env:"PULL_INTERVAL"            usage:"git pull interval"                                                                                                                                                    default:"30s"`
+	PullTimeout        libtime.Duration  `required:"false" arg:"pull-timeout"             env:"PULL_TIMEOUT"             usage:"per-pull timeout; subprocess is aborted if it exceeds this duration (0 = no timeout)"                                                                                 default:"60s"`
+	BuildGitVersion    string            `required:"false" arg:"build-git-version"        env:"BUILD_GIT_VERSION"        usage:"Build Git version"                                                                                                                                                    default:"dev"`
+	BuildGitCommit     string            `required:"false" arg:"build-git-commit"         env:"BUILD_GIT_COMMIT"         usage:"Build Git commit hash"                                                                                                                                                default:"none"`
+	BuildDate          *libtime.DateTime `required:"false" arg:"build-date"               env:"BUILD_DATE"               usage:"Build timestamp (RFC3339)"`
+	GitSSHKey          git.SSHKeyPath    `required:"false" arg:"git-ssh-key"              env:"GIT_SSH_KEY"              usage:"Path to SSH private key for git operations"`
+	GitSSHCommand      string            `required:"false" arg:"git-ssh-command"          env:"GIT_SSH_COMMAND"          usage:"Full SSH command for git network ops (overrides default derived from --git-ssh-key). Empty = derive from --git-ssh-key."`
+	GitRemoteURL       git.RemoteURL     `required:"false" arg:"git-remote-url"           env:"GIT_REMOTE_URL"           usage:"Git remote URL to clone from on startup"`
+	GitUserName        string            `required:"false" arg:"git-user-name"            env:"GIT_USER_NAME"            usage:"Git author name for commits"`
+	GitUserEmail       string            `required:"false" arg:"git-user-email"           env:"GIT_USER_EMAIL"           usage:"Git author email for commits"`
+	GatewaySecret      string            `required:"false" arg:"gateway-secret"           env:"GATEWAY_SECRET"           usage:"Shared secret required in X-Gateway-Secret header for /api/v1/* requests. Empty = no auth (backward compatible)."                                    display:"length"`
+	VaultWrite         bool              `required:"false" arg:"vault-write"              env:"VAULT_WRITE_MODE"         usage:"When true, use YAMLMergeResolver for merge conflicts (deep-merges YAML frontmatter). Default false uses MarkerResolver (preserves <<<<<<< markers)."                  default:"false"`
+	MemReportInterval  libtime.Duration  `required:"false" arg:"mem-report-interval"      env:"MEM_REPORT_INTERVAL"      usage:"how often to sample process memory; 0 disables the reporter"                                                                                                          default:"30s"`
+	MemReportThreshold int               `required:"false" arg:"mem-report-threshold-mib" env:"MEM_REPORT_THRESHOLD_MIB" usage:"log an allocation breakdown once memory reaches this many MiB"                                                                                                        default:"256"`
+	MemReportTopN      int               `required:"false" arg:"mem-report-top-n"         env:"MEM_REPORT_TOP_N"         usage:"how many largest allocation sites to log per report"                                                                                                                  default:"10"`
 }
 
 func (a *application) Run(ctx context.Context, sentryClient libsentry.Client) error {
@@ -79,6 +83,7 @@ func (a *application) Run(ctx context.Context, sentryClient libsentry.Client) er
 	return service.Run(ctx,
 		a.createGitRefresher(gitClient, pullState),
 		a.createHTTPServer(gitClient, metrics.NewMetrics(), pullState),
+		a.createMemoryReporter(),
 	)
 }
 
@@ -397,6 +402,43 @@ func (a *application) createGitClient(ctx context.Context) (git.Git, error) {
 		a.GitSSHKey,
 		a.selectResolver(m),
 	), nil
+}
+
+// createMemoryReporter returns a run.Func that samples process memory and logs
+// an allocation breakdown once it crosses the configured threshold.
+//
+// A non-positive interval or threshold disables the reporter. The disabled path
+// blocks on ctx until shutdown rather than returning, because a run.Func that
+// returns tears down the whole service group.
+func (a *application) createMemoryReporter() run.Func {
+	return func(ctx context.Context) error {
+		interval := time.Duration(a.MemReportInterval)
+		if interval <= 0 || a.MemReportThreshold <= 0 {
+			slog.InfoContext(
+				ctx,
+				"memory reporter disabled",
+				"reason", "interval or threshold not positive",
+				"interval", interval.String(),
+				"threshold_mib", a.MemReportThreshold,
+			)
+			<-ctx.Done()
+			return ctx.Err()
+		}
+		// The guard above is what makes this conversion safe: without it a
+		// negative threshold would wrap to a huge uint64 and the reporter would
+		// never fire, silently.
+		thresholdBytes := uint64(
+			a.MemReportThreshold,
+		) * 1024 * 1024 //nolint:gosec // guarded positive above
+		slog.InfoContext(
+			ctx,
+			"memory reporter started",
+			"interval", interval.String(),
+			"threshold_mib", a.MemReportThreshold,
+			"top_n", a.MemReportTopN,
+		)
+		return memprof.New(interval, thresholdBytes, a.MemReportTopN).Run(ctx)
+	}
 }
 
 func (a *application) createGitRefresher(gitClient git.Git, state puller.PullStateWriter) run.Func {
