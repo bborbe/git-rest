@@ -6,7 +6,7 @@ HTTP endpoints exposed by git-rest. All file operations are under `/api/v1/files
 
 `http://<host>:<listen-port>`
 
-Default port: `8080` (set via `--listen`).
+Default port: `9090` (set via `--listen`).
 
 ## Endpoints
 
@@ -27,7 +27,7 @@ Default port: `8080` (set via `--listen`).
 Read a file from the repo.
 
 ```bash
-curl http://localhost:8080/api/v1/files/README.md
+curl http://localhost:9090/api/v1/files/README.md
 ```
 
 Response: raw file bytes with `Content-Type: application/octet-stream`.
@@ -44,10 +44,10 @@ Pass `?glob=<pattern>` on a `GET` to list files instead of reading one. The path
 
 ```bash
 # list all markdown files at repo root
-curl 'http://localhost:8080/api/v1/files/?glob=*.md'
+curl 'http://localhost:9090/api/v1/files/?glob=*.md'
 
 # single-level subdirectory match
-curl 'http://localhost:8080/api/v1/files/?glob=30+Analysis/*.md'
+curl 'http://localhost:9090/api/v1/files/?glob=30+Analysis/*.md'
 ```
 
 Response: JSON array of paths, e.g. `["README.md","CHANGELOG.md"]`.
@@ -62,7 +62,7 @@ Create or overwrite a file. On success git-rest stages the change, commits, and 
 curl -X POST \
   -H 'Content-Type: application/octet-stream' \
   --data-binary @local-file.md \
-  http://localhost:8080/api/v1/files/30%20Analysis/my-note.md
+  http://localhost:9090/api/v1/files/30%20Analysis/my-note.md
 ```
 
 Response: `{"ok":true}` on success.
@@ -82,7 +82,7 @@ Commit message format: `git-rest: create <path>` or `git-rest: update <path>`.
 Remove a file. Auto-commits + pushes.
 
 ```bash
-curl -X DELETE http://localhost:8080/api/v1/files/30%20Analysis/my-note.md
+curl -X DELETE http://localhost:9090/api/v1/files/30%20Analysis/my-note.md
 ```
 
 Response: `{"ok":true}` on success.
@@ -98,7 +98,7 @@ Commit message format: `git-rest: delete <path>`.
 ## Healthz
 
 ```bash
-curl http://localhost:8080/healthz
+curl http://localhost:9090/healthz
 ```
 
 Always returns `200 OK` with body `ok` if the process is alive. Used for Kubernetes liveness probes.
@@ -106,7 +106,7 @@ Always returns `200 OK` with body `ok` if the process is alive. Used for Kuberne
 ## Readiness
 
 ```bash
-curl http://localhost:8080/readiness
+curl http://localhost:9090/readiness
 ```
 
 Returns `200 OK` with body `ok` if:
@@ -120,7 +120,7 @@ Returns `503 Service Unavailable` otherwise. Used for Kubernetes readiness probe
 ## Metrics
 
 ```bash
-curl http://localhost:8080/metrics
+curl http://localhost:9090/metrics
 ```
 
 Prometheus text format. Includes:
