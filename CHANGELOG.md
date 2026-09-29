@@ -8,7 +8,7 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 * MINOR version when you add functionality in a backwards-compatible manner, and
 * PATCH version when you make backwards-compatible bug fixes.
 
-## Unreleased
+## v0.29.1
 
 - fix: Bound the memory git may spend building a packfile, so the container stops OOMKilling itself during its own auto-maintenance. `git gc` forks `git repack`, which forks `git pack-objects`, and pack-objects' defaults are sized for a workstation rather than a 512Mi cgroup — `pack.windowMemory` is unlimited and `pack.deltaCacheSize` defaults to 256m. Measured in production on 2026-09-29, one pack-objects held **393 MiB** of RSS against a cgroup anonymous figure of 375 MiB: it was the entire OOM, while the Go service never exceeded 23 MiB. The limits go into the repository config rather than the process environment, because auto-maintenance is triggered from inside arbitrary git commands and a limit carried only by the commands this service launches directly would not bind the one that matters.
 
