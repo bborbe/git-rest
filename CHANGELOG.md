@@ -8,7 +8,7 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 * MINOR version when you add functionality in a backwards-compatible manner, and
 * PATCH version when you make backwards-compatible bug fixes.
 
-## Unreleased
+## v0.29.0
 
 - feat: Name the processes holding the container's memory when the reporter fires. The allocation sites cover the Go heap only, and a container can sit at its cgroup limit with a single-digit-MiB heap — in which case the memory belongs to a child process (git, for this service) or to memory the heap profile does not cover, and those two need opposite fixes. Each report now also lists the largest processes by resident memory, read from `/proc`, carrying both the current RSS and the `VmHWM` peak so a short-lived spike is still visible after the process has settled. It exists because the cgroup's anonymous memory reached ~400 MiB while the Go heap held under 8 MiB, which left the allocation unattributable from the heap profile alone.
 
