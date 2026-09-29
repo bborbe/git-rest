@@ -10,6 +10,8 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 
 ## Unreleased
 
+- feat: Name the processes holding the container's memory when the reporter fires. The allocation sites cover the Go heap only, and a container can sit at its cgroup limit with a single-digit-MiB heap — in which case the memory belongs to a child process (git, for this service) or to memory the heap profile does not cover, and those two need opposite fixes. Each report now also lists the largest processes by resident memory, read from `/proc`, carrying both the current RSS and the `VmHWM` peak so a short-lived spike is still visible after the process has settled. It exists because the cgroup's anonymous memory reached ~400 MiB while the Go heap held under 8 MiB, which left the allocation unattributable from the heap profile alone.
+
 - fix: Default `--listen` to `:9090` instead of `:8080`, matching the bborbe admin-port convention that every sibling service and the Kubernetes manifests already use. The default was previously reachable only when `LISTEN` was unset — every deployment sets it explicitly — so this changes no running service, but a standalone run now lands on the port operators expect. README and `docs/api.md` updated to state the new default, including the `curl` examples in `docs/api.md` that target it; the example commands that pass `--listen :8080` explicitly are unchanged.
 
 ## v0.28.0
