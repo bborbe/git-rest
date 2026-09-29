@@ -1871,6 +1871,69 @@ var _ = Describe("Git ConfigureUser", func() {
 	})
 })
 
+var _ = Describe("Git ConfigurePackMemory", func() {
+	var ctx context.Context
+	var repoDir string
+	var g git.Git
+
+	BeforeEach(func() {
+		ctx = context.Background()
+		var err error
+		repoDir, err = os.MkdirTemp("", "git-pack-memory-*")
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(func() { _ = os.RemoveAll(repoDir) })
+
+		runGit(repoDir, "init")
+		g = git.New(
+			repoDir,
+			&noopMetrics{},
+			libtime.NewCurrentDateTime(),
+			"",
+			git.NewMarkerResolver(repoDir),
+		)
+	})
+
+	readConfig := func(key string) string {
+		cmd := exec.Command("git", "config", "--local", key)
+		cmd.Dir = repoDir
+		out, _ := cmd.Output()
+		return strings.TrimSpace(string(out))
+	}
+
+	It("leaves no pack budget at a value that can fill the container", func() {
+		Expect(g.ConfigurePackMemory(ctx)).To(Succeed())
+
+		// git's own defaults are unlimited window memory and a 256m delta cache,
+		// which together let one pack-objects reach several hundred MiB.
+		Expect(readConfig("pack.windowMemory")).To(Equal("64m"))
+		Expect(readConfig("pack.deltaCacheSize")).To(Equal("32m"))
+		Expect(readConfig("pack.threads")).To(Equal("1"))
+	})
+
+	It("writes the limits into the repository config, not the process environment", func() {
+		// Auto-maintenance is triggered from inside arbitrary git commands, so a
+		// limit carried only by the commands this service launches directly would
+		// not bind the pack-objects that actually matters. The repository config
+		// binds every invocation, including the ones git forks for itself.
+		Expect(g.ConfigurePackMemory(ctx)).To(Succeed())
+
+		raw, err := os.ReadFile(filepath.Join(repoDir, ".git", "config"))
+		Expect(err).NotTo(HaveOccurred())
+		// git is free to normalise key casing, so compare case-insensitively.
+		config := strings.ToLower(string(raw))
+		Expect(config).To(ContainSubstring("windowmemory = 64m"))
+		Expect(config).To(ContainSubstring("deltacachesize = 32m"))
+		Expect(config).To(ContainSubstring("threads = 1"))
+	})
+
+	It("is idempotent across restarts", func() {
+		Expect(g.ConfigurePackMemory(ctx)).To(Succeed())
+		Expect(g.ConfigurePackMemory(ctx)).To(Succeed())
+
+		Expect(readConfig("pack.windowMemory")).To(Equal("64m"))
+	})
+})
+
 var _ = Describe("Pull nested quarantine guard", func() {
 	var ctx context.Context
 
