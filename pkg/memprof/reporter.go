@@ -110,6 +110,21 @@ func (r *reporter) report(ctx context.Context) {
 			"inuse_objects", site.inuseObjects,
 		)
 	}
+
+	// The allocation sites cover the Go heap only. When the cgroup is full but
+	// the heap is small, the memory belongs to a child process or to memory the
+	// heap profile does not cover — and those two need opposite fixes, so the
+	// processes are named rather than left to inference.
+	for _, process := range topProcesses(r.topN) {
+		slog.WarnContext(
+			ctx,
+			"git-rest: memory process",
+			"pid", process.pid,
+			"command", process.command,
+			"rss_bytes", process.rssBytes,
+			"peak_rss_bytes", process.peakBytes,
+		)
+	}
 }
 
 // allocSite is one attributed allocation, symbolized to a source location.

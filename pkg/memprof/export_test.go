@@ -15,6 +15,32 @@ var (
 	ReadCgroupMemory = readCgroupMemory
 )
 
+// TestProcess is a process with exported fields, so the external test package
+// can assert on what topProcessesIn attributed.
+type TestProcess struct {
+	PID       int
+	Command   string
+	RSSBytes  uint64
+	PeakBytes uint64
+}
+
+// TopProcessesInForTest exposes topProcessesIn against an arbitrary procfs root,
+// so the parsing can be exercised on a fixture tree rather than on the host's
+// live process table.
+func TopProcessesInForTest(root string, n int) []TestProcess {
+	processes := topProcessesIn(root, n)
+	result := make([]TestProcess, 0, len(processes))
+	for _, process := range processes {
+		result = append(result, TestProcess{
+			PID:       process.pid,
+			Command:   process.command,
+			RSSBytes:  process.rssBytes,
+			PeakBytes: process.peakBytes,
+		})
+	}
+	return result
+}
+
 // TestSite is an allocation site with exported fields, so the external test
 // package can assert on what topSites attributed.
 type TestSite struct {
