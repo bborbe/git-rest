@@ -380,6 +380,9 @@ func (a *application) configureUserIfSet(ctx context.Context) error {
 	if err := gitClient.ConfigureUser(ctx, a.GitUserName, a.GitUserEmail); err != nil {
 		return errors.Wrap(ctx, err, "configure git user")
 	}
+	if err := gitClient.ConfigurePackMemory(ctx); err != nil {
+		return errors.Wrap(ctx, err, "configure git pack memory limits")
+	}
 	return nil
 }
 

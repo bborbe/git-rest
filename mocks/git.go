@@ -21,6 +21,17 @@ type FakeGit struct {
 	cloneReturnsOnCall map[int]struct {
 		result1 error
 	}
+	ConfigurePackMemoryStub        func(context.Context) error
+	configurePackMemoryMutex       sync.RWMutex
+	configurePackMemoryArgsForCall []struct {
+		arg1 context.Context
+	}
+	configurePackMemoryReturns struct {
+		result1 error
+	}
+	configurePackMemoryReturnsOnCall map[int]struct {
+		result1 error
+	}
 	ConfigureUserStub        func(context.Context, string, string) error
 	configureUserMutex       sync.RWMutex
 	configureUserArgsForCall []struct {
@@ -197,6 +208,67 @@ func (fake *FakeGit) CloneReturnsOnCall(i int, result1 error) {
 		})
 	}
 	fake.cloneReturnsOnCall[i] = struct {
+		result1 error
+	}{result1}
+}
+
+func (fake *FakeGit) ConfigurePackMemory(arg1 context.Context) error {
+	fake.configurePackMemoryMutex.Lock()
+	ret, specificReturn := fake.configurePackMemoryReturnsOnCall[len(fake.configurePackMemoryArgsForCall)]
+	fake.configurePackMemoryArgsForCall = append(fake.configurePackMemoryArgsForCall, struct {
+		arg1 context.Context
+	}{arg1})
+	stub := fake.ConfigurePackMemoryStub
+	fakeReturns := fake.configurePackMemoryReturns
+	fake.recordInvocation("ConfigurePackMemory", []interface{}{arg1})
+	fake.configurePackMemoryMutex.Unlock()
+	if stub != nil {
+		return stub(arg1)
+	}
+	if specificReturn {
+		return ret.result1
+	}
+	return fakeReturns.result1
+}
+
+func (fake *FakeGit) ConfigurePackMemoryCallCount() int {
+	fake.configurePackMemoryMutex.RLock()
+	defer fake.configurePackMemoryMutex.RUnlock()
+	return len(fake.configurePackMemoryArgsForCall)
+}
+
+func (fake *FakeGit) ConfigurePackMemoryCalls(stub func(context.Context) error) {
+	fake.configurePackMemoryMutex.Lock()
+	defer fake.configurePackMemoryMutex.Unlock()
+	fake.ConfigurePackMemoryStub = stub
+}
+
+func (fake *FakeGit) ConfigurePackMemoryArgsForCall(i int) context.Context {
+	fake.configurePackMemoryMutex.RLock()
+	defer fake.configurePackMemoryMutex.RUnlock()
+	argsForCall := fake.configurePackMemoryArgsForCall[i]
+	return argsForCall.arg1
+}
+
+func (fake *FakeGit) ConfigurePackMemoryReturns(result1 error) {
+	fake.configurePackMemoryMutex.Lock()
+	defer fake.configurePackMemoryMutex.Unlock()
+	fake.ConfigurePackMemoryStub = nil
+	fake.configurePackMemoryReturns = struct {
+		result1 error
+	}{result1}
+}
+
+func (fake *FakeGit) ConfigurePackMemoryReturnsOnCall(i int, result1 error) {
+	fake.configurePackMemoryMutex.Lock()
+	defer fake.configurePackMemoryMutex.Unlock()
+	fake.ConfigurePackMemoryStub = nil
+	if fake.configurePackMemoryReturnsOnCall == nil {
+		fake.configurePackMemoryReturnsOnCall = make(map[int]struct {
+			result1 error
+		})
+	}
+	fake.configurePackMemoryReturnsOnCall[i] = struct {
 		result1 error
 	}{result1}
 }

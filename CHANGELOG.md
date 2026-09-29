@@ -8,6 +8,10 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 * MINOR version when you add functionality in a backwards-compatible manner, and
 * PATCH version when you make backwards-compatible bug fixes.
 
+## Unreleased
+
+- fix: Bound the memory git may spend building a packfile, so the container stops OOMKilling itself during its own auto-maintenance. `git gc` forks `git repack`, which forks `git pack-objects`, and pack-objects' defaults are sized for a workstation rather than a 512Mi cgroup — `pack.windowMemory` is unlimited and `pack.deltaCacheSize` defaults to 256m. Measured in production on 2026-09-29, one pack-objects held **393 MiB** of RSS against a cgroup anonymous figure of 375 MiB: it was the entire OOM, while the Go service never exceeded 23 MiB. The limits go into the repository config rather than the process environment, because auto-maintenance is triggered from inside arbitrary git commands and a limit carried only by the commands this service launches directly would not bind the one that matters.
+
 ## v0.29.0
 
 - feat: Name the processes holding the container's memory when the reporter fires. The allocation sites cover the Go heap only, and a container can sit at its cgroup limit with a single-digit-MiB heap — in which case the memory belongs to a child process (git, for this service) or to memory the heap profile does not cover, and those two need opposite fixes. Each report now also lists the largest processes by resident memory, read from `/proc`, carrying both the current RSS and the `VmHWM` peak so a short-lived spike is still visible after the process has settled. It exists because the cgroup's anonymous memory reached ~400 MiB while the Go heap held under 8 MiB, which left the allocation unattributable from the heap profile alone.

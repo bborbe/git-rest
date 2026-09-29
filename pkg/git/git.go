@@ -131,6 +131,7 @@ type Git interface {
 	Status(ctx context.Context) (Status, error)
 	Clone(ctx context.Context, remoteURL RemoteURL) error
 	ConfigureUser(ctx context.Context, name string, email string) error
+	ConfigurePackMemory(ctx context.Context) error
 	Init(ctx context.Context) error
 }
 
@@ -1496,6 +1497,45 @@ func (g *git) ConfigureUser(ctx context.Context, name string, email string) erro
 	if email != "" {
 		if err := g.runCmd(ctx, g.repoPath, "config", "user.email", email); err != nil {
 			return errors.Wrapf(ctx, err, "set git user.email %s", email)
+		}
+	}
+	return nil
+}
+
+// packMemoryConfig bounds how much memory git may spend building a packfile.
+//
+// The values are deliberately conservative. A repack that takes longer is
+// cheap; a repack that OOMKills the container is not.
+var packMemoryConfig = []struct{ key, value string }{
+	// pack.windowMemory defaults to unlimited and pack.deltaCacheSize to 256m.
+	// Together they let a single pack-objects allocate several hundred MiB on a
+	// repository this size, which is most of a 512Mi cgroup on its own.
+	{"pack.windowMemory", "64m"},
+	{"pack.deltaCacheSize", "32m"},
+	{"pack.threads", "1"},
+}
+
+// ConfigurePackMemory bounds the memory git may use when it builds a packfile,
+// writing the limits into the repository config.
+//
+// It exists because git's auto-maintenance runs on git's own schedule, inside
+// this container, with no awareness of the container's memory limit. `git gc`
+// forks `git repack` which forks `git pack-objects`, and pack-objects' default
+// budget is sized for a workstation rather than a 512Mi cgroup. Measured on
+// 2026-09-29: one pack-objects held 393 MiB of RSS against a cgroup anonymous
+// figure of 375 MiB, driving the vault to its limit and OOMKilling it — which in
+// turn stalled every task-file write the agent platform depends on.
+//
+// The repository config is the right home rather than the process environment:
+// auto-maintenance is triggered from inside arbitrary git commands, so a limit
+// that only applies to the commands this service launches directly would not
+// bind the one that actually matters.
+//
+// This runs once at startup, before concurrent operations.
+func (g *git) ConfigurePackMemory(ctx context.Context) error {
+	for _, entry := range packMemoryConfig {
+		if err := g.runCmd(ctx, g.repoPath, "config", entry.key, entry.value); err != nil {
+			return errors.Wrapf(ctx, err, "set git %s %s", entry.key, entry.value)
 		}
 	}
 	return nil
