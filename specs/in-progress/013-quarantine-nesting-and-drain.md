@@ -29,14 +29,14 @@ A file that already sits under `_conflicts/` is never quarantined again: the gua
 
 ## Non-goals
 
-- Do NOT auto-repair, auto-restore, or auto-delete quarantined content. Quarantine surfaces and preserves; the operator owns repair. The drain is a *signal*, not a remediation.
+- Do NOT auto-repair, auto-restore, or auto-delete quarantined content. Quarantine surfaces and preserves; the operator owns repair. The drain is a *signal*, not a remediation. An operator drains a quarantined file by deleting it on the remote; that deletion arrives at the replica as an upstream deletion of a `_conflicts/` path, which spec 015 accepts — the path leaves the tree, the merge commits and pushes, and the local pre-drain content stays reachable in git history. The no-auto-delete rule is unchanged: git-rest never deletes quarantined content on its own.
 - Do NOT retroactively restore or re-import previously quarantined files. Content stays recoverable from git history.
 - Do NOT delete the existing `_conflicts/` residue in any vault from code. Clearing residue is a one-time operator action with its own commit, per the precedent set when the 2026-09-13 nested Personal artifact was cleared.
 - Do NOT change the `ConflictResolver` interface, `MarkerResolver`, or `YAMLMergeResolver` internals.
 - Do NOT change the `merge: resolved=[…] quarantined=[…]` commit-message format established by spec 012.
 - Do NOT add a per-repo label to any metric — one pod serves one repo, so the label would have cardinality 1; the pod identity already carries the repo via the `app` label at scrape time.
 - Do NOT add a quarantine-size cap or retention policy. Visibility bounds accumulation; deliberate truncation does not.
-- Do NOT suppress the abort for an all-rejected merge. Calling a guard-rejected nested file "handled" so the merge could commit would either stage a conflicted file with its markers intact — the exact harm the Problem section calls out — or require a new commit-with-unmerged-entries path that git refuses. The wedge is the correct trade: it surfaces the conflict as a readiness 503 within one pull interval instead of silently deepening the tree, and it is the same floor the pod already applies whenever no path can be resolved.
+- Do NOT suppress the abort for an all-rejected merge. Calling a guard-rejected nested file "handled" so the merge could commit would either stage a conflicted file with its markers intact — the exact harm the Problem section calls out — or require a new commit-with-unmerged-entries path that git refuses. The wedge is the correct trade: it surfaces the conflict as a readiness 503 within one pull interval instead of silently deepening the tree, and it is the same floor the pod already applies whenever no path can be resolved. The abort rule stands for every rejected merge, including a `_conflicts/` path both sides changed. The one exception is a `_conflicts/` path whose upstream change is a deletion — the operator drain — which spec 015 resolves rather than aborts, because it is a `git modify/delete` conflict rather than an all-rejected merge.
 
 ## Reproduction
 

@@ -2825,3 +2825,82 @@ var _ = Describe("Upstream drain of a quarantined path (spec 015)", func() {
 		})
 	})
 })
+
+// expectSpec015LockIn asserts the invariant pair every spec-015 resolution
+// shape shares — the repository is not mid-merge, the working tree is clean,
+// nothing sits under _conflicts/, no second _conflicts/ level exists, and no
+// quarantine event was recorded — as a delta against the counter reading taken
+// immediately before the pull. It deliberately re-asserts none of the positive
+// evidence (commit message, restored content, push, INFO line) that the
+// spec-015 Describe blocks already own.
+func expectSpec015LockIn(workDir string, quarantinedBefore float64) {
+	_, statErr := os.Stat(filepath.Join(workDir, ".git", "MERGE_HEAD"))
+	Expect(os.IsNotExist(statErr)).To(BeTrue(),
+		".git/MERGE_HEAD must not exist after the pull")
+	Expect(strings.TrimSpace(gitOutputStr(workDir, "status", "--porcelain"))).
+		To(BeEmpty(), "the working tree must be clean after the pull")
+	Expect(countFilesUnder(filepath.Join(workDir, "_conflicts"))).To(Equal(0),
+		"nothing may remain under _conflicts/")
+	_, statErr = os.Stat(filepath.Join(workDir, "_conflicts", "_conflicts"))
+	Expect(os.IsNotExist(statErr)).To(BeTrue(),
+		"no second _conflicts/ level may be created")
+	Expect(gatherQuarantinedFiles()-quarantinedBefore).To(Equal(0.0),
+		"no quarantine event may be recorded")
+}
+
+var _ = Describe("Spec 015 regression lock-in", func() {
+	var ctx context.Context
+
+	BeforeEach(func() {
+		ctx = context.Background()
+	})
+
+	It("AC3: a resolved modify/delete conflict leaves no merge and no quarantine residue", func() {
+		workDir, remoteEdit, localDelete, cleanup := setupModifyDeleteFixture()
+		defer cleanup()
+
+		remoteEdit()
+		localDelete()
+
+		pg := git.New(
+			workDir,
+			metrics.NewMetrics(),
+			libtime.NewCurrentDateTime(),
+			"",
+			git.NewMarkerResolver(workDir),
+		)
+
+		quarantinedBefore := gatherQuarantinedFiles()
+
+		Expect(pg.Pull(ctx)).To(Succeed())
+
+		expectSpec015LockIn(workDir, quarantinedBefore)
+	})
+
+	It(
+		"AC6/AC7: an accepted drain leaves no merge, no quarantine residue and no quarantine event",
+		func() {
+			const drainedPath = "_conflicts/25 Tasks/Prev A.1791388434.md"
+
+			workDir, remoteDelete, _, localEdit, cleanup := setupQuarantinePathFixture(drainedPath)
+			defer cleanup()
+
+			remoteDelete()
+			localEdit("---\ntitle: a\n---\nLOCAL REPLICA EDIT\n")
+
+			pg := git.New(
+				workDir,
+				metrics.NewMetrics(),
+				libtime.NewCurrentDateTime(),
+				"",
+				git.NewMarkerResolver(workDir),
+			)
+
+			quarantinedBefore := gatherQuarantinedFiles()
+
+			Expect(pg.Pull(ctx)).To(Succeed())
+
+			expectSpec015LockIn(workDir, quarantinedBefore)
+		},
+	)
+})

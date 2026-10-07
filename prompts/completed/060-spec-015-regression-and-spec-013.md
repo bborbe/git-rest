@@ -1,8 +1,13 @@
 ---
-status: approved
+status: completed
 spec: [015-bug-pull-wedges-on-modify-delete-conflict]
+summary: 'Added spec-015 regression lock-in tests (empty-conflict-list abort, resolved modify/delete and accepted-drain invariant probes), reconciled spec 013''s non-goals with the operator-drain exception, and recorded both fixes under a new ## Unreleased changelog section'
+execution_id: git-rest-modify-delete-exec-060-spec-015-regression-and-spec-013
+dark-factory-version: v0.196.0
 created: "2026-10-07T18:52:08Z"
 queued: "2026-10-07T19:36:29Z"
+started: "2026-10-07T19:48:33Z"
+completed: "2026-10-07T19:52:59Z"
 branch: dark-factory/bug-pull-wedges-on-modify-delete-conflict
 ---
 

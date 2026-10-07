@@ -199,6 +199,115 @@ func TestResolveConflictPathsUnsafePath(t *testing.T) {
 	}
 }
 
+// setupMidMergeFixture creates a temp repo holding a genuine in-progress merge:
+// a.md is committed on main and on a diverged `other` branch, and the merge is
+// left conflicted (unmerged entry in the index, MERGE_HEAD present). The repo is
+// removed via t.Cleanup. Used to prove a code path aborts a real merge rather
+// than one asserted only in the abstract.
+func setupMidMergeFixture(t *testing.T) string {
+	t.Helper()
+	workDir, err := os.MkdirTemp("", "git-empty-conflict-abort-*")
+	if err != nil {
+		t.Fatalf("mkdir workdir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(workDir) })
+
+	run := func(args ...string) {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = workDir
+		out, e := cmd.CombinedOutput()
+		if e != nil {
+			t.Fatalf("%s %v: %s", "git", args, string(out))
+		}
+	}
+	write := func(content string) {
+		if writeErr := os.WriteFile(
+			filepath.Join(workDir, "a.md"), []byte(content), 0o600,
+		); writeErr != nil {
+			t.Fatalf("write a.md: %v", writeErr)
+		}
+	}
+
+	run("init", "-q", "-b", "main")
+	run("config", "user.email", "test@example.com")
+	run("config", "user.name", "Test")
+	write("one\n")
+	run("add", "--", "a.md")
+	run("commit", "-q", "-m", "base")
+
+	run("checkout", "-q", "-b", "other")
+	write("two\n")
+	run("commit", "-q", "-am", "other change")
+
+	run("checkout", "-q", "main")
+	write("three\n")
+	run("commit", "-q", "-am", "main change")
+
+	// `git merge` exits non-zero on the conflict, so it runs directly rather
+	// than through the failing helper.
+	mergeCmd := exec.Command("git", "merge", "--no-edit", "other")
+	mergeCmd.Dir = workDir
+	if mergeOut, mergeErr := mergeCmd.CombinedOutput(); mergeErr == nil {
+		t.Fatalf("expected the merge to conflict, got success: %s", string(mergeOut))
+	}
+	return workDir
+}
+
+// TestResolveConflictMergeEmptyListAborts verifies AC3's third clause: the
+// empty-conflict-list branch aborts the in-progress merge before returning, so
+// Pull never returns while the repository is mid-merge.
+func TestResolveConflictMergeEmptyListAborts(t *testing.T) {
+	ctx := context.Background()
+	workDir := setupMidMergeFixture(t)
+
+	// Prove the fixture is mid-merge BEFORE the call under test, so the
+	// assertion below cannot pass vacuously.
+	if _, statErr := os.Stat(filepath.Join(workDir, ".git", "MERGE_HEAD")); statErr != nil {
+		t.Fatalf("fixture must be mid-merge before the call under test: %v", statErr)
+	}
+
+	metrics := &unsafeTestMetrics{}
+	repo, ok := New(
+		workDir, metrics, libtime.NewCurrentDateTime(), "", fakeResolver{},
+	).(*git)
+	if !ok {
+		t.Fatal("New did not return *git")
+	}
+
+	err := repo.resolveConflictMerge(
+		ctx,
+		"other",
+		[]byte("fatal: refusing to merge unrelated histories\n"),
+		stderrors.New("exit status 1"),
+	)
+	if err == nil {
+		t.Fatal("expected an error, got nil")
+	}
+
+	if _, statErr := os.Stat(filepath.Join(workDir, ".git", "MERGE_HEAD")); !os.IsNotExist(
+		statErr,
+	) {
+		t.Fatalf("the empty-conflict-list branch must abort the merge (stat err: %v)", statErr)
+	}
+
+	statusCmd := exec.Command("git", "status", "--porcelain")
+	statusCmd.Dir = workDir
+	statusOut, statusErr := statusCmd.CombinedOutput()
+	if statusErr != nil {
+		t.Fatalf("git status --porcelain: %s", string(statusOut))
+	}
+	if got := strings.TrimSpace(string(statusOut)); got != "" {
+		t.Fatalf("the worktree must be clean after the abort, got: %q", got)
+	}
+
+	if got := metrics.abortedCount(); got != 1 {
+		t.Fatalf(
+			"the empty-conflict-list branch must record the aborted outcome once, got %d",
+			got,
+		)
+	}
+}
+
 // TestParseMergeConflictPaths covers both conflict forms git emits on a failed
 // merge: the content form ("Merge conflict in <path>") and the modify/delete form
 // ("CONFLICT (modify/delete): <path> deleted in <ref> and modified in <ref>"),
