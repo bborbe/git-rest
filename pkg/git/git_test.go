@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -2393,5 +2394,176 @@ var _ = Describe("Dirty working tree rescue", func() {
 		before := gatherPullRescues()
 		Expect(pg.Pull(ctx)).To(Succeed())
 		Expect(gatherPullRescues() - before).To(Equal(1.0))
+	})
+})
+
+// setupModifyDeleteFixture seeds tasks/doomed.md at the merge base on a local
+// bare remote, then returns closures that advance the remote by MODIFYING that
+// path and delete it locally with `git rm` plus a commit — the shape the
+// quarantine flow produces.
+func setupModifyDeleteFixture() (
+	workDir string,
+	remoteEdit func(),
+	localDelete func(),
+	cleanup func(),
+) {
+	remoteDir, err := os.MkdirTemp("", "git-remote-modifydelete-*")
+	Expect(err).NotTo(HaveOccurred())
+	workDir, err = os.MkdirTemp("", "git-work-modifydelete-*")
+	Expect(err).NotTo(HaveOccurred())
+
+	rg := func(dir string, args ...string) {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		out, e := cmd.CombinedOutput()
+		Expect(e).NotTo(HaveOccurred(), "%s %v: %s", "git", args, string(out))
+	}
+
+	rg(remoteDir, "init", "--bare", "-b", "main")
+	rg(workDir, "init", "-b", "main")
+	rg(workDir, "config", "user.email", "test@example.com")
+	rg(workDir, "config", "user.name", "Test")
+	rg(workDir, "remote", "add", "origin", remoteDir)
+
+	Expect(os.MkdirAll(filepath.Join(workDir, "tasks"), 0o750)).To(Succeed())
+	Expect(
+		os.WriteFile(filepath.Join(workDir, "tasks", "doomed.md"), []byte("line one\n"), 0o644),
+	).To(Succeed())
+	rg(workDir, "add", "--", "tasks/doomed.md")
+	rg(workDir, "commit", "-q", "-m", "seed")
+	rg(workDir, "push", "-u", "origin", "main")
+
+	// remoteEdit: clone the bare remote, modify tasks/doomed.md, commit, push.
+	remoteEdit = func() {
+		extDir, err := os.MkdirTemp("", "git-ext-modifydelete-*")
+		Expect(err).NotTo(HaveOccurred())
+		defer func() { _ = os.RemoveAll(extDir) }()
+		rg(extDir, "clone", remoteDir, ".")
+		rg(extDir, "config", "user.email", "ext@example.com")
+		rg(extDir, "config", "user.name", "External")
+		Expect(
+			os.WriteFile(
+				filepath.Join(extDir, "tasks", "doomed.md"),
+				[]byte("line one\nUPSTREAM EDIT\n"),
+				0o644,
+			),
+		).To(Succeed())
+		rg(extDir, "add", "--", "tasks/doomed.md")
+		rg(extDir, "commit", "-q", "-m", "external modifies doomed")
+		rg(extDir, "push", "origin", "main")
+	}
+
+	// localDelete: git rm the path and commit, so HEAD diverges from the merge
+	// base. The commit is required — without it the puller fast-forwards.
+	localDelete = func() {
+		rg(workDir, "rm", "-q", "--", "tasks/doomed.md")
+		rg(workDir, "commit", "-q", "-m", "local deletes doomed")
+	}
+
+	cleanup = func() {
+		_ = os.RemoveAll(workDir)
+		_ = os.RemoveAll(remoteDir)
+	}
+	return workDir, remoteEdit, localDelete, cleanup
+}
+
+// countFilesUnder walks dir and counts non-directory entries. Returns 0 when dir
+// does not exist, so an absent quarantine tree counts as empty.
+func countFilesUnder(dir string) int {
+	count := 0
+	_ = filepath.WalkDir(dir, func(_ string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if !d.IsDir() {
+			count++
+		}
+		return nil
+	})
+	return count
+}
+
+// expectModifyDeleteResolved asserts every AC4 probe after a successful Pull of
+// the modify/delete fixture: the repo is not mid-merge, the tree is clean, the
+// upstream version was restored and committed, the commit message is the fixed
+// format, HEAD equals origin/main, and nothing was quarantined.
+func expectModifyDeleteResolved(workDir string) {
+	_, statErr := os.Stat(filepath.Join(workDir, ".git", "MERGE_HEAD"))
+	Expect(os.IsNotExist(statErr)).To(BeTrue(),
+		".git/MERGE_HEAD must not exist after the resolved merge")
+	Expect(strings.TrimSpace(gitOutputStr(workDir, "status", "--porcelain"))).
+		To(BeEmpty(), "the working tree must be clean after the resolved merge")
+	Expect(gitOutputStr(workDir, "show", "HEAD:tasks/doomed.md")).
+		To(ContainSubstring("UPSTREAM EDIT"),
+			"the upstream version must be restored and committed")
+
+	names := strings.Split(
+		strings.TrimSpace(gitOutputStr(workDir, "ls-tree", "-r", "--name-only", "HEAD")),
+		"\n",
+	)
+	Expect(names).To(ContainElement("tasks/doomed.md"))
+	occurrences := 0
+	for _, n := range names {
+		if n == "tasks/doomed.md" {
+			occurrences++
+		}
+	}
+	Expect(occurrences).To(Equal(1), "tasks/doomed.md must appear exactly once in the tree")
+
+	Expect(strings.TrimSpace(gitOutputStr(workDir, "log", "-1", "--format=%s"))).
+		To(MatchRegexp(`^merge: resolved=\[tasks/doomed\.md\] quarantined=\[\]$`))
+	Expect(strings.TrimSpace(gitOutputStr(workDir, "rev-parse", "HEAD"))).
+		To(Equal(strings.TrimSpace(gitOutputStr(workDir, "rev-parse", "origin/main"))),
+			"the resolved merge must have been pushed")
+
+	Expect(countFilesUnder(filepath.Join(workDir, "_conflicts"))).To(Equal(0),
+		"the restored path must never be quarantined")
+}
+
+var _ = Describe("Modify/delete conflict resolution (spec 015)", func() {
+	var (
+		ctx         context.Context
+		workDir     string
+		remoteEdit  func()
+		localDelete func()
+		cleanup     func()
+	)
+
+	BeforeEach(func() {
+		ctx = context.Background()
+		workDir, remoteEdit, localDelete, cleanup = setupModifyDeleteFixture()
+		DeferCleanup(cleanup)
+		// Advance the remote (modify) and delete locally, forming the
+		// modify/delete shape before the pull runs.
+		remoteEdit()
+		localDelete()
+	})
+
+	It("AC3/AC4/AC5: marker resolver restores the upstream version", func() {
+		pg := git.New(
+			workDir,
+			&mocks.FakeMetrics{},
+			libtime.NewCurrentDateTime(),
+			"",
+			git.NewMarkerResolver(workDir),
+		)
+		Expect(pg.Pull(ctx)).To(BeNil())
+		expectModifyDeleteResolved(workDir)
+	})
+
+	It("AC3/AC4/AC5: YAML merge resolver restores the upstream version", func() {
+		// The discriminating run: the version git leaves in the tree for a
+		// modify/delete conflict carries no conflict markers, so a resolution that
+		// delegates to the YAML merge resolver quarantines the path instead of
+		// restoring it.
+		pg := git.New(
+			workDir,
+			metrics.NewMetrics(),
+			libtime.NewCurrentDateTime(),
+			"",
+			git.NewYAMLMergeResolver(workDir, metrics.NewMetrics()),
+		)
+		Expect(pg.Pull(ctx)).To(BeNil())
+		expectModifyDeleteResolved(workDir)
 	})
 })

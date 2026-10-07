@@ -199,6 +199,72 @@ func TestResolveConflictPathsUnsafePath(t *testing.T) {
 	}
 }
 
+// TestParseMergeConflictPaths covers both conflict forms git emits on a failed
+// merge: the content form ("Merge conflict in <path>") and the modify/delete form
+// ("CONFLICT (modify/delete): <path> deleted in <ref> and modified in <ref>"),
+// where either ref order may appear. Paths may contain spaces, so the parser must
+// never split on whitespace.
+func TestParseMergeConflictPaths(t *testing.T) {
+	const incidentPath = "25 Tasks/The Parity Harness Compares Generated UUIDs and Timestamps Raw.md"
+	const drainPath = "_conflicts/25 Tasks/Prev A.1791388434.md"
+	cases := []struct {
+		name  string
+		input string
+		want  []string
+	}{
+		{
+			name:  "verbatim incident modify/delete line",
+			input: "CONFLICT (modify/delete): " + incidentPath + " deleted in HEAD and modified in origin/master.  Version origin/master of " + incidentPath + " left in tree.\n",
+			want:  []string{incidentPath},
+		},
+		{
+			name:  "swapped ref order on a _conflicts path",
+			input: "CONFLICT (modify/delete): " + drainPath + " deleted in origin/main and modified in HEAD.  Version HEAD of " + drainPath + " left in tree.\n",
+			want:  []string{drainPath},
+		},
+		{
+			name:  "content form is unchanged",
+			input: "CONFLICT (content): Merge conflict in a.md\n",
+			want:  []string{"a.md"},
+		},
+		{
+			name:  "no conflict line yields nothing",
+			input: "fatal: refusing to merge unrelated histories\n",
+			want:  []string{},
+		},
+		{
+			name: "content and modify/delete lines both extracted, duplicates collapse",
+			input: "CONFLICT (content): Merge conflict in a.md\n" +
+				"CONFLICT (modify/delete): " + incidentPath + " deleted in HEAD and modified in origin/master.  Version origin/master of " + incidentPath + " left in tree.\n" +
+				"CONFLICT (content): Merge conflict in a.md\n",
+			want: []string{"a.md", incidentPath},
+		},
+		{
+			name:  "modify/delete line without a ref marker yields nothing",
+			input: "CONFLICT (modify/delete): broken line with no ref phrase\n",
+			want:  []string{},
+		},
+	}
+	for _, tc := range cases {
+		got := parseMergeConflictPaths(tc.input)
+		if len(got) != len(tc.want) {
+			t.Fatalf(
+				"%s: got %v (len %d), want %v (len %d)",
+				tc.name,
+				got,
+				len(got),
+				tc.want,
+				len(tc.want),
+			)
+		}
+		for i := range tc.want {
+			if got[i] != tc.want[i] {
+				t.Fatalf("%s: element %d = %q, want %q", tc.name, i, got[i], tc.want[i])
+			}
+		}
+	}
+}
+
 // TestUnsafeConflictPathEdges covers the empty-path and absolute-path
 // short-circuit branches of unsafeConflictPath that the integration test
 // (which only exercises "../escape.md") does not reach.
