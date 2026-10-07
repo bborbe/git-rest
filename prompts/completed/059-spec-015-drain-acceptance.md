@@ -1,8 +1,13 @@
 ---
-status: approved
+status: completed
 spec: [015-bug-pull-wedges-on-modify-delete-conflict]
+summary: Accepted an operator's upstream drain of a _conflicts/ path in the puller (git rm -f, one INFO line, gauge to 0) while the nesting guard still refuses a genuine re-quarantine, with merge-level Ginkgo specs for both shapes
+execution_id: git-rest-modify-delete-exec-059-spec-015-drain-acceptance
+dark-factory-version: v0.196.0
 created: "2026-10-07T18:52:08Z"
 queued: "2026-10-07T19:36:29Z"
+started: "2026-10-07T19:40:45Z"
+completed: "2026-10-07T19:48:31Z"
 branch: dark-factory/bug-pull-wedges-on-modify-delete-conflict
 ---
 

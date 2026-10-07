@@ -559,3 +559,73 @@ func TestQuarantineOneSourceMissing(t *testing.T) {
 		t.Fatalf("quarantine_io_failed must increment exactly once, got %d", c)
 	}
 }
+
+// TestResolveModifyDeleteTheirsDeleted pins the drain arm of resolveModifyDelete
+// (spec 015 Desired Behavior 4) and its two fall-through edges:
+//
+//   - a theirs-deleted path OUTSIDE _conflicts/ is not this arm's business and
+//     must fall through to the configured resolver (returns false);
+//   - a theirs-deleted path under _conflicts/ is accepted by removing it from
+//     the index and working tree (returns true);
+//   - when that removal fails (the path is not in the index), the arm reports
+//     false so the caller falls through to the resolver and the quarantine
+//     fallback rather than wedging the pull.
+//
+// The integration-level drain and refusal shapes live in git_test.go; this test
+// covers the branch edges a real merge cannot produce deterministically.
+func TestResolveModifyDeleteTheirsDeleted(t *testing.T) {
+	ctx := context.Background()
+	workDir, err := os.MkdirTemp("", "git-resolve-modify-delete-*")
+	if err != nil {
+		t.Fatalf("mkdir workdir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(workDir) })
+
+	run := func(args ...string) {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = workDir
+		out, e := cmd.CombinedOutput()
+		if e != nil {
+			t.Fatalf("%s %v: %s", "git", args, string(out))
+		}
+	}
+	run("init", "-q", "-b", "main")
+	run("config", "user.email", "test@example.com")
+	run("config", "user.name", "Test")
+
+	if mkErr := os.MkdirAll(filepath.Join(workDir, "_conflicts"), 0o750); mkErr != nil {
+		t.Fatalf("mkdir _conflicts: %v", mkErr)
+	}
+	tracked := filepath.Join(workDir, "_conflicts", "tracked.md")
+	if wErr := os.WriteFile(tracked, []byte("drained\n"), 0o644); wErr != nil {
+		t.Fatalf("write tracked path: %v", wErr)
+	}
+	run("add", "--", "_conflicts/tracked.md")
+	run("commit", "-q", "-m", "seed")
+
+	repo, ok := New(
+		workDir, &unsafeTestMetrics{}, libtime.NewCurrentDateTime(), "", fakeResolver{},
+	).(*git)
+	if !ok {
+		t.Fatal("New did not return *git")
+	}
+
+	// Outside _conflicts/: not a drain, fall through to the resolver.
+	if repo.resolveModifyDelete(ctx, "notes/plain.md", conflictKindTheirsDeleted) {
+		t.Error("a theirs-deleted path outside _conflicts/ must not be resolved here")
+	}
+
+	// Under _conflicts/ with the path present: the deletion is accepted.
+	if !repo.resolveModifyDelete(ctx, "_conflicts/tracked.md", conflictKindTheirsDeleted) {
+		t.Error("a theirs-deleted path under _conflicts/ must be accepted")
+	}
+	if _, statErr := os.Stat(tracked); !os.IsNotExist(statErr) {
+		t.Errorf("the accepted drain must remove the path, stat err = %v", statErr)
+	}
+
+	// Under _conflicts/ but absent from the index: git rm fails, so the arm
+	// reports false and the caller keeps the ordinary fallback.
+	if repo.resolveModifyDelete(ctx, "_conflicts/ghost.md", conflictKindTheirsDeleted) {
+		t.Error("a failing git rm must fall through, not report resolution")
+	}
+}

@@ -464,16 +464,44 @@ func nestedConflictPath(paths []string) string {
 	return ""
 }
 
+// isUnderConflictsDir reports whether path lives in the quarantine directory:
+// the path equals conflictsDirName or has the prefix conflictsDirName + "/".
+// Shared by the nesting guard's drain filter and the modify/delete resolution
+// arm so the two cannot drift apart.
+func isUnderConflictsDir(path string) bool {
+	return path == conflictsDirName || strings.HasPrefix(path, conflictsDirName+"/")
+}
+
+// dropAcceptedDrains returns paths minus the ones that are an operator drain: a
+// path under _conflicts/ whose upstream change is a deletion
+// (conflictKindTheirsDeleted). Those are resolved by accepting the deletion, so
+// the nesting guard must not reject them. A path absent from kinds is treated as
+// a content conflict and kept, preserving the guard's behaviour for callers that
+// pass no classification.
+func dropAcceptedDrains(paths []string, kinds map[string]conflictKind) []string {
+	kept := make([]string, 0, len(paths))
+	for _, path := range paths {
+		if isUnderConflictsDir(path) && kinds[path] == conflictKindTheirsDeleted {
+			continue
+		}
+		kept = append(kept, path)
+	}
+	return kept
+}
+
 // validateConflictPathsNotNested pre-flights the conflict path list before any disk
 // I/O. A conflicted path that already lives under _conflicts/ is rejected: the file
 // stays exactly one level deep, the nested_source counter records the rejection, and
-// the merge is aborted. Returns wrapped ErrConflictResolutionFailed when a nested path
-// is present, nil otherwise. Pure read of the path list; no file writes.
+// the merge is aborted. A _conflicts/ path whose upstream change is a deletion is an
+// operator drain and is resolved rather than rejected, so it is dropped from the
+// candidate list before the check. Returns wrapped ErrConflictResolutionFailed when a
+// nested path is present, nil otherwise. Pure read of the path list; no file writes.
 func (g *git) validateConflictPathsNotNested(
 	ctx context.Context,
 	conflictPaths []string,
+	kinds map[string]conflictKind,
 ) error {
-	path := nestedConflictPath(conflictPaths)
+	path := nestedConflictPath(dropAcceptedDrains(conflictPaths, kinds))
 	if path == "" {
 		return nil
 	}
@@ -876,34 +904,75 @@ func (g *git) stageUpstreamVersion(ctx context.Context, path string) error {
 	return nil
 }
 
+// acceptUpstreamDeletion resolves a modify/delete conflict in which the upstream
+// side deleted the path and HEAD modified it — the shape an operator drain of
+// _conflicts/ produces — by accepting the deletion: `git rm -f -- <path>` removes
+// the path from the index and the working tree, clearing the unmerged entry so the
+// merge can be committed. -f is required because the working-tree copy may differ
+// from HEAD's; nothing is lost, because the HEAD commit is the merge's first
+// parent and the pre-drain content therefore stays reachable in history.
+func (g *git) acceptUpstreamDeletion(ctx context.Context, path string) error {
+	if err := g.runCmd(ctx, g.repoPath, "rm", "-f", "--", path); err != nil {
+		return errors.Wrapf(ctx, err, "git rm -f %s", path)
+	}
+	return nil
+}
+
 // resolveModifyDelete resolves a modify/delete conflict at the pipeline level and
 // reports whether it did. It is called before the configured resolver, because
 // neither shipped resolver can resolve one: the marker resolver's git add happens
 // to stage the right content for an ours-deleted path, but a marker-less file is
 // rejected by the YAML merge resolver, which would quarantine the path instead of
 // restoring it.
+//
+// A theirs-deleted conflict is accepted only when the path is under _conflicts/:
+// that is the operator's drain of a quarantined entry (spec 015 Desired Behavior
+// 4). A theirs-deleted path outside the quarantine directory falls through to the
+// configured resolver, exactly as before.
 func (g *git) resolveModifyDelete(ctx context.Context, path string, kind conflictKind) bool {
-	if kind != conflictKindOursDeleted {
-		return false
-	}
-	if err := g.stageUpstreamVersion(ctx, path); err != nil {
-		slog.WarnContext(
+	if kind == conflictKindOursDeleted {
+		if err := g.stageUpstreamVersion(ctx, path); err != nil {
+			slog.WarnContext(
+				ctx,
+				"git-rest: taking the upstream version for a modify/delete conflict failed",
+				"path",
+				path,
+				"err",
+				err.Error(),
+			)
+			return false
+		}
+		slog.InfoContext(
 			ctx,
-			"git-rest: taking the upstream version for a modify/delete conflict failed",
+			"git-rest: modify/delete conflict resolved by taking the upstream version",
 			"path",
 			path,
-			"err",
-			err.Error(),
 		)
-		return false
+		return true
 	}
-	slog.InfoContext(
-		ctx,
-		"git-rest: modify/delete conflict resolved by taking the upstream version",
-		"path",
-		path,
-	)
-	return true
+	if kind == conflictKindTheirsDeleted && isUnderConflictsDir(path) {
+		if err := g.acceptUpstreamDeletion(ctx, path); err != nil {
+			slog.WarnContext(
+				ctx,
+				"git-rest: accepting the upstream deletion of a quarantined path failed",
+				"path",
+				path,
+				"err",
+				err.Error(),
+			)
+			return false
+		}
+		slog.InfoContext(
+			ctx,
+			"git-rest: accepted upstream deletion of quarantined path",
+			"path",
+			path,
+			"reason",
+			"upstream deletion",
+		)
+		return true
+	}
+	return false
 }
 
 // resolveConflictMerge handles the conflict path of pullMergeAndPush: delegates to g.resolver,
@@ -971,14 +1040,17 @@ func (g *git) resolveConflictPaths(
 	if err := g.validateConflictPathsSafe(ctx, conflictPaths); err != nil {
 		return err
 	}
+	// Read-only classification of the unmerged index. It must run after
+	// validateConflictPathsSafe and before the nesting guard, because the guard
+	// needs the classification to tell an accepted operator drain (a _conflicts/
+	// path whose upstream change is a deletion) from a genuine re-quarantine. It
+	// writes nothing, so the ordering invariant above is preserved.
+	kinds := g.classifyConflicts(ctx)
 	// Pre-flight: a conflicted path that already lives under _conflicts/ aborts the
 	// merge before any disk I/O, so a re-quarantine can never deepen the tree.
-	if err := g.validateConflictPathsNotNested(ctx, conflictPaths); err != nil {
+	if err := g.validateConflictPathsNotNested(ctx, conflictPaths, kinds); err != nil {
 		return err
 	}
-	// Read-only classification of the unmerged index. Placed after both pre-flights
-	// and before ensureConflictsDir so the ordering invariant above is preserved.
-	kinds := g.classifyConflicts(ctx)
 	if err := g.ensureConflictsDir(ctx); err != nil {
 		return err
 	}
