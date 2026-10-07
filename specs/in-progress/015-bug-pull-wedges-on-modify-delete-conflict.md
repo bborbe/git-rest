@@ -1,8 +1,9 @@
 ---
-status: prompted
+status: verifying
 approved: "2026-10-07T18:39:40Z"
 generating: "2026-10-07T18:42:44Z"
 prompted: "2026-10-07T19:24:03Z"
+verifying: "2026-10-07T19:55:10Z"
 branch: dark-factory/bug-pull-wedges-on-modify-delete-conflict
 ---
 
