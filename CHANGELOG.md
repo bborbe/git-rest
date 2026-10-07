@@ -8,7 +8,7 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 * MINOR version when you add functionality in a backwards-compatible manner, and
 * PATCH version when you make backwards-compatible bug fixes.
 
-## Unreleased
+## v0.29.2
 
 - fix: Recognise `CONFLICT (modify/delete):` in merge output so a modify/delete conflict resolves instead of wedging the pull. The conflict-path parser matched only the content-conflict form, so a modify/delete line produced an empty conflict list, the resolver was never reached, and the pull returned without running `git merge --abort` — leaving the repository mid-merge, readiness non-200, and every write failing with `Committing is not possible because there are unmerged files`. The parser now extracts both conflict forms, a modify/delete conflict resolves by taking the upstream version under both resolver configurations (marker and YAML), and the empty-conflict-list branch aborts the in-progress merge before returning so no pull leaves the repository mid-merge.
 
