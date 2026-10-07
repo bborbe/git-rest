@@ -163,6 +163,159 @@ Two more negatives close the mechanism:
 
 Spec 014's `## Reproduction` is the authoritative form of this recipe; the version above is a condensation of it. The rung-2 section below is the next rung for this shape.
 
+### Rung 1 recipe: modify/delete conflict and upstream drain
+
+The shape: a `git merge` that produces `CONFLICT (modify/delete):` is invisible to a conflict-path parser that matches only the content-conflict form. The conflict list comes back empty, the resolver is never reached, and the pull returns **without running `git merge --abort`** — the repository is left mid-merge, `/readiness` answers non-200, and every write fails with `Committing is not possible because there are unmerged files`. The quarantine flow manufactures exactly this shape: quarantining a file `git rm`s the original path, so that path is *deleted in HEAD* while it still exists upstream, and a later upstream edit to the canonical produces the modify/delete conflict. The failure is not exotic — it is what a quarantined vault reaches on its next upstream edit — and a puller must either resolve or abort it, never return mid-merge.
+
+> **The ordering below is a hard requirement, not an incidental detail.** The binary must boot against a **clean, level clone**; the divergence is formed only afterwards, **within one pull interval**. The puller's ticker has **no immediate first tick**, so the first pull happens one interval after boot. Booting with the divergence already present lets the boot path's raw `git pull` consume it, the merge path is never exercised, and the reproduction passes vacuously. This is the same trap spec 014's recipe documents, for a different symptom.
+
+> **Run the recipe from the worktree that holds the fix.** The build step compiles `${REPO_UNDER_TEST}`, whose default is `$(git rev-parse --show-toplevel)` — the tree you invoke the recipe from. Building the main checkout on master replays the **unfixed** binary and fails every assertion falsely.
+
+Fixture A — modify/delete conflict on a canonical:
+
+```bash
+set -e
+# Run this recipe FROM THE WORKTREE THAT HOLDS THE FIX. Step 3 builds
+# "$REPO_UNDER_TEST", and the default resolves to the tree you invoke this from —
+# building the main checkout on master would replay the UNFIXED binary and fail
+# every assertion falsely.
+REPO_UNDER_TEST="${REPO_UNDER_TEST:-$(git rev-parse --show-toplevel)}"
+BASE=/tmp/git-rest-md-repro && rm -rf "$BASE" && mkdir -p "$BASE" && cd "$BASE"
+
+# 1. Bare origin. tasks/doomed.md is tracked HERE, at the merge-base, so the local
+#    deletion in step 5 is a plain deletion of an existing path and the remote edit
+#    in step 4 is a plain modification of the same path.
+git init -q --bare -b test/repro origin.git
+git clone -q origin.git seed && cd seed
+git config user.email repro@local && git config user.name repro
+mkdir -p tasks && printf 'line one\n' > tasks/doomed.md
+git add -A && git commit -q -m init
+BRANCH=$(git rev-parse --abbrev-ref HEAD) && git push -q origin "$BRANCH"
+cd "$BASE"
+
+# 2. Work clone — the repo the puller serves. Its remote is LEVEL at this point.
+git clone -q origin.git work && cd work
+git config user.email repro@local && git config user.name repro
+
+# 3. Boot the puller FIRST, against the clean, level clone.
+cd "${REPO_UNDER_TEST}" && go build -o /tmp/git-rest-md-repro-bin .
+/tmp/git-rest-md-repro-bin -listen=:18445 -repo="$BASE/work" -pull-interval=10s -v=1 > "$BASE/run.log" 2>&1 &
+sleep 3
+
+# 4. NOW advance the remote: the upstream side MODIFIES tasks/doomed.md.
+cd "$BASE/seed" && printf 'line one\nUPSTREAM EDIT\n' > tasks/doomed.md
+git add -A && git commit -q -m "remote modifies doomed" && git push -q origin "$BRANCH"
+
+# 5. NOW delete it locally — the shape the quarantine flow produces (git rm on the
+#    original path). A commit is required: HEAD must differ from the merge-base or
+#    the puller takes the fast-forward path and never merges. Steps 4 and 5 must both
+#    finish inside one pull interval, or a tick fast-forwards between them.
+cd "$BASE/work" && git rm -q tasks/doomed.md && git commit -q -m "local deletes doomed"
+echo "mergebase: $(git merge-base HEAD "origin/$BRANCH" | cut -c1-8)  HEAD: $(git rev-parse --short HEAD)"
+git status --porcelain
+
+# 6. Wait one pull interval, then read the merge state AND readiness.
+sleep 12
+echo "MERGE_HEAD: $(test -e "$BASE/work/.git/MERGE_HEAD" && echo present || echo absent)"
+git -C "$BASE/work" status --porcelain
+curl -s -o /dev/null -w 'readiness HTTP %{http_code}\n' http://localhost:18445/readiness
+
+# 7. Teardown. Every assertion below re-runs this recipe on the same port, so each run
+#    must start from a clean process — a survivor keeps answering :18445 with stale evidence.
+kill "$(pgrep -f /tmp/git-rest-md-repro-bin)" 2>/dev/null || true
+```
+
+Fixture A assertions, after the one-interval wait:
+
+- **Never left mid-merge:** `test ! -e "$BASE/work/.git/MERGE_HEAD"` exits 0.
+- **Tree clean:** `git -C "$BASE/work" status --porcelain` prints 0 lines.
+- **Upstream version restored:** `git -C "$BASE/work" show HEAD:tasks/doomed.md` contains `UPSTREAM EDIT`.
+- **Path present exactly once:** `git -C "$BASE/work" ls-tree -r --name-only HEAD | grep -c 'tasks/doomed.md'` prints `1`.
+- **Resolved, not quarantined:** `git -C "$BASE/work" log -1 --format=%s` matches `^merge: resolved=\[tasks/doomed\.md\] quarantined=\[\]$`.
+- **Level again:** `git -C "$BASE/work" rev-parse HEAD` equals `git -C "$BASE/work" rev-parse origin/"$BRANCH"`.
+
+Replay fixture A **twice**: once with `-vault-write=false` (the marker resolver) and once with `-vault-write=true` (the YAML merge resolver). In both runs `find "$BASE/work/_conflicts" -type f 2>/dev/null | wc -l` must print `0`. The YAML-resolver run is the **discriminating** one: the version git leaves in the tree for a modify/delete conflict carries no conflict markers, so a resolution that merely delegates to the YAML merge resolver quarantines the path instead of restoring it — the marker-resolver run alone cannot tell a fix from a quarantine.
+
+Fixture B — upstream drain of a `_conflicts/` entry:
+
+```bash
+set -e
+# Same rule as fixture A: run from the worktree holding the fix.
+REPO_UNDER_TEST="${REPO_UNDER_TEST:-$(git rev-parse --show-toplevel)}"
+BASE=/tmp/git-rest-drain-repro && rm -rf "$BASE" && mkdir -p "$BASE" && cd "$BASE"
+
+# 1. Bare origin carrying a quarantined file, committed at the merge-base.
+git init -q --bare -b test/repro origin.git
+git clone -q origin.git seed && cd seed
+git config user.email repro@local && git config user.name repro
+mkdir -p "_conflicts/25 Tasks"
+printf -- '---\ntitle: a\n---\nbody\n' > "_conflicts/25 Tasks/Prev A.1791388434.md"
+git add -A && git commit -q -m init
+BRANCH=$(git rev-parse --abbrev-ref HEAD) && git push -q origin "$BRANCH"
+cd "$BASE"
+
+# 2. Work clone — level at this point.
+git clone -q origin.git work && cd work
+git config user.email repro@local && git config user.name repro
+
+# 3. Boot the puller FIRST, against the clean, level clone.
+cd "${REPO_UNDER_TEST}" && go build -o /tmp/git-rest-drain-repro-bin .
+/tmp/git-rest-drain-repro-bin -listen=:18446 -repo="$BASE/work" -pull-interval=10s -v=1 > "$BASE/run.log" 2>&1 &
+sleep 3
+
+# 4. NOW the operator drains origin: the upstream side DELETES the _conflicts/ entry.
+cd "$BASE/seed" && git rm -q "_conflicts/25 Tasks/Prev A.1791388434.md"
+git commit -q -m "operator drains the quarantine" && git push -q origin "$BRANCH"
+
+# 5. NOW the replica's own local change to the same quarantined path, committed so
+#    HEAD diverges from origin. Steps 4 and 5 must both finish inside one interval.
+cd "$BASE/work"
+printf -- '---\ntitle: a\n---\nLOCAL REPLICA EDIT\n' > "_conflicts/25 Tasks/Prev A.1791388434.md"
+git commit -q -am "local replica touches the quarantine"
+LOCAL_SHA=$(git rev-parse HEAD)
+git rev-parse --short HEAD "origin/$BRANCH"
+
+# 6. Wait one pull interval, then read readiness, the merge state and the counters.
+sleep 12
+curl -s -o /dev/null -w 'readiness HTTP %{http_code}\n' http://localhost:18446/readiness
+curl -s http://localhost:18446/metrics | grep -E '^git_rest_(quarantined_backlog|resolver_failures_total\{category="nested_source"\})'
+echo "MERGE_HEAD: $(test -e "$BASE/work/.git/MERGE_HEAD" && echo present || echo absent)"
+git -C "$BASE/work" status --porcelain
+
+# 7. Teardown.
+kill "$(pgrep -f /tmp/git-rest-drain-repro-bin)" 2>/dev/null || true
+```
+
+Fixture B assertions, after the one-interval wait:
+
+- **The drained path is gone:** `test ! -e "$BASE/work/_conflicts/25 Tasks/Prev A.1791388434.md"` exits 0.
+- **Absent from HEAD:** `git -C "$BASE/work" ls-tree -r --name-only HEAD | grep -c 'Prev A.1791388434'` prints `0`.
+- **Tree clean:** `git -C "$BASE/work" status --porcelain` prints 0 lines.
+- **Level again:** `git -C "$BASE/work" rev-parse HEAD` equals `git -C "$BASE/work" rev-parse origin/"$BRANCH"`.
+- **Ready:** `curl -s -o /dev/null -w '%{http_code}' http://localhost:18446/readiness` prints `200`.
+- **Backlog drained:** `curl -s http://localhost:18446/metrics | grep '^git_rest_quarantined_backlog'` prints `git_rest_quarantined_backlog 0`.
+- **No content discarded:** `git -C "$BASE/work" merge-base --is-ancestor "${LOCAL_SHA}" HEAD` exits 0 — the local commit is a parent of the merge, so its content stays reachable in history.
+- **The drain does not trip the nesting guard:** `git_rest_resolver_failures_total{category="nested_source"}` read after the pull equals the reading taken **before** the pull (delta 0). The pre-pull reading must be taken in the same process lifetime as the post-pull one — the counter is per-process.
+- **The drain is visible to an operator:** `$BASE/run.log` contains one INFO record naming `_conflicts/25 Tasks/Prev A.1791388434.md` and containing the substring `upstream deletion`.
+
+Fixture C — the shape that must stay refused:
+
+Same fixture as B, except step 4 **modifies** the `_conflicts/` path on the remote with **invalid YAML** frontmatter (`---\ntitle: [unclosed\n---\nREMOTE CHANGE\n`) and step 5 modifies it locally with valid frontmatter (`---\ntitle: a\n---\nLOCAL CHANGE\n`) — a content conflict in which both sides changed the path and the resolver cannot merge the remote side. Run the puller with `-vault-write=true`, the deployed configuration for the personal and openclaw vaults (`values-dev.yaml` sets `writeMode: true`), which selects the YAML merge resolver.
+
+Assertions:
+
+- `/readiness` is non-200.
+- `git_rest_resolver_failures_total{category="nested_source"}` climbs by one per pull interval.
+- No path exists at `_conflicts/_conflicts`.
+- `git -C "$BASE/work" status --porcelain` prints 0 lines — the abort restored the worktree.
+- The log carries a WARN naming the nested path.
+
+This is the shape the nesting guard exists for. A recipe run that "fixes" fixture C is a **regression, not a pass**: it means the tree gained a second `_conflicts/` level.
+
+Teardown: fixture A shares `:18445` with spec 014's recipe, so each run must start from a clean process — a survivor keeps answering the port and returns stale evidence. Both fixtures kill their binary by name, `kill "$(pgrep -f /tmp/git-rest-md-repro-bin)" 2>/dev/null || true` and `kill "$(pgrep -f /tmp/git-rest-drain-repro-bin)" 2>/dev/null || true`, before the next run.
+
+Spec 015's `## Reproduction` is the authoritative form of this recipe; the version above is a condensation of it. It carries **no `Post-Deploy` marker**: it is rung 1 against a locally built binary, matching the `Rung 1` entry in spec 015's `## Verification`. The released-image `docker run` replay and the dev and prod cluster rungs stay on spec 015's operator verification ladder.
+
 For specs whose ACs include a Reproduction section (`kind: bug` specs always do), replay the EXACT reproduction commands. Their HTTP status codes are the contract.
 
 ## Rung 2: dev cluster e2e

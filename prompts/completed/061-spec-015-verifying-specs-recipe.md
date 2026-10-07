@@ -1,8 +1,13 @@
 ---
-status: approved
+status: completed
 spec: [015-bug-pull-wedges-on-modify-delete-conflict]
+summary: Added the modify/delete and upstream-drain rung-1 recipe (fixtures A, B and C, boot-ordering constraint, REPO_UNDER_TEST rationale, YAML-resolver discriminator, teardown) to docs/verifying-specs.md beside spec 014's recipe.
+execution_id: git-rest-modify-delete-exec-061-spec-015-verifying-specs-recipe
+dark-factory-version: v0.196.0
 created: "2026-10-07T18:52:08Z"
 queued: "2026-10-07T19:36:29Z"
+started: "2026-10-07T19:53:00Z"
+completed: "2026-10-07T19:55:10Z"
 branch: dark-factory/bug-pull-wedges-on-modify-delete-conflict
 ---
 
