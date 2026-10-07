@@ -199,6 +199,181 @@ func TestResolveConflictPathsUnsafePath(t *testing.T) {
 	}
 }
 
+// setupMidMergeFixture creates a temp repo holding a genuine in-progress merge:
+// a.md is committed on main and on a diverged `other` branch, and the merge is
+// left conflicted (unmerged entry in the index, MERGE_HEAD present). The repo is
+// removed via t.Cleanup. Used to prove a code path aborts a real merge rather
+// than one asserted only in the abstract.
+func setupMidMergeFixture(t *testing.T) string {
+	t.Helper()
+	workDir, err := os.MkdirTemp("", "git-empty-conflict-abort-*")
+	if err != nil {
+		t.Fatalf("mkdir workdir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(workDir) })
+
+	run := func(args ...string) {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = workDir
+		out, e := cmd.CombinedOutput()
+		if e != nil {
+			t.Fatalf("%s %v: %s", "git", args, string(out))
+		}
+	}
+	write := func(content string) {
+		if writeErr := os.WriteFile(
+			filepath.Join(workDir, "a.md"), []byte(content), 0o600,
+		); writeErr != nil {
+			t.Fatalf("write a.md: %v", writeErr)
+		}
+	}
+
+	run("init", "-q", "-b", "main")
+	run("config", "user.email", "test@example.com")
+	run("config", "user.name", "Test")
+	write("one\n")
+	run("add", "--", "a.md")
+	run("commit", "-q", "-m", "base")
+
+	run("checkout", "-q", "-b", "other")
+	write("two\n")
+	run("commit", "-q", "-am", "other change")
+
+	run("checkout", "-q", "main")
+	write("three\n")
+	run("commit", "-q", "-am", "main change")
+
+	// `git merge` exits non-zero on the conflict, so it runs directly rather
+	// than through the failing helper.
+	mergeCmd := exec.Command("git", "merge", "--no-edit", "other")
+	mergeCmd.Dir = workDir
+	if mergeOut, mergeErr := mergeCmd.CombinedOutput(); mergeErr == nil {
+		t.Fatalf("expected the merge to conflict, got success: %s", string(mergeOut))
+	}
+	return workDir
+}
+
+// TestResolveConflictMergeEmptyListAborts verifies AC3's third clause: the
+// empty-conflict-list branch aborts the in-progress merge before returning, so
+// Pull never returns while the repository is mid-merge.
+func TestResolveConflictMergeEmptyListAborts(t *testing.T) {
+	ctx := context.Background()
+	workDir := setupMidMergeFixture(t)
+
+	// Prove the fixture is mid-merge BEFORE the call under test, so the
+	// assertion below cannot pass vacuously.
+	if _, statErr := os.Stat(filepath.Join(workDir, ".git", "MERGE_HEAD")); statErr != nil {
+		t.Fatalf("fixture must be mid-merge before the call under test: %v", statErr)
+	}
+
+	metrics := &unsafeTestMetrics{}
+	repo, ok := New(
+		workDir, metrics, libtime.NewCurrentDateTime(), "", fakeResolver{},
+	).(*git)
+	if !ok {
+		t.Fatal("New did not return *git")
+	}
+
+	err := repo.resolveConflictMerge(
+		ctx,
+		"other",
+		[]byte("fatal: refusing to merge unrelated histories\n"),
+		stderrors.New("exit status 1"),
+	)
+	if err == nil {
+		t.Fatal("expected an error, got nil")
+	}
+
+	if _, statErr := os.Stat(filepath.Join(workDir, ".git", "MERGE_HEAD")); !os.IsNotExist(
+		statErr,
+	) {
+		t.Fatalf("the empty-conflict-list branch must abort the merge (stat err: %v)", statErr)
+	}
+
+	statusCmd := exec.Command("git", "status", "--porcelain")
+	statusCmd.Dir = workDir
+	statusOut, statusErr := statusCmd.CombinedOutput()
+	if statusErr != nil {
+		t.Fatalf("git status --porcelain: %s", string(statusOut))
+	}
+	if got := strings.TrimSpace(string(statusOut)); got != "" {
+		t.Fatalf("the worktree must be clean after the abort, got: %q", got)
+	}
+
+	if got := metrics.abortedCount(); got != 1 {
+		t.Fatalf(
+			"the empty-conflict-list branch must record the aborted outcome once, got %d",
+			got,
+		)
+	}
+}
+
+// TestParseMergeConflictPaths covers both conflict forms git emits on a failed
+// merge: the content form ("Merge conflict in <path>") and the modify/delete form
+// ("CONFLICT (modify/delete): <path> deleted in <ref> and modified in <ref>"),
+// where either ref order may appear. Paths may contain spaces, so the parser must
+// never split on whitespace.
+func TestParseMergeConflictPaths(t *testing.T) {
+	const incidentPath = "25 Tasks/The Parity Harness Compares Generated UUIDs and Timestamps Raw.md"
+	const drainPath = "_conflicts/25 Tasks/Prev A.1791388434.md"
+	cases := []struct {
+		name  string
+		input string
+		want  []string
+	}{
+		{
+			name:  "verbatim incident modify/delete line",
+			input: "CONFLICT (modify/delete): " + incidentPath + " deleted in HEAD and modified in origin/master.  Version origin/master of " + incidentPath + " left in tree.\n",
+			want:  []string{incidentPath},
+		},
+		{
+			name:  "swapped ref order on a _conflicts path",
+			input: "CONFLICT (modify/delete): " + drainPath + " deleted in origin/main and modified in HEAD.  Version HEAD of " + drainPath + " left in tree.\n",
+			want:  []string{drainPath},
+		},
+		{
+			name:  "content form is unchanged",
+			input: "CONFLICT (content): Merge conflict in a.md\n",
+			want:  []string{"a.md"},
+		},
+		{
+			name:  "no conflict line yields nothing",
+			input: "fatal: refusing to merge unrelated histories\n",
+			want:  []string{},
+		},
+		{
+			name: "content and modify/delete lines both extracted, duplicates collapse",
+			input: "CONFLICT (content): Merge conflict in a.md\n" +
+				"CONFLICT (modify/delete): " + incidentPath + " deleted in HEAD and modified in origin/master.  Version origin/master of " + incidentPath + " left in tree.\n" +
+				"CONFLICT (content): Merge conflict in a.md\n",
+			want: []string{"a.md", incidentPath},
+		},
+		{
+			name:  "modify/delete line without a ref marker yields nothing",
+			input: "CONFLICT (modify/delete): broken line with no ref phrase\n",
+			want:  []string{},
+		},
+	}
+	for _, tc := range cases {
+		got := parseMergeConflictPaths(tc.input)
+		if len(got) != len(tc.want) {
+			t.Fatalf(
+				"%s: got %v (len %d), want %v (len %d)",
+				tc.name,
+				got,
+				len(got),
+				tc.want,
+				len(tc.want),
+			)
+		}
+		for i := range tc.want {
+			if got[i] != tc.want[i] {
+				t.Fatalf("%s: element %d = %q, want %q", tc.name, i, got[i], tc.want[i])
+			}
+		}
+	}
+}
+
 // TestUnsafeConflictPathEdges covers the empty-path and absolute-path
 // short-circuit branches of unsafeConflictPath that the integration test
 // (which only exercises "../escape.md") does not reach.
@@ -491,5 +666,75 @@ func TestQuarantineOneSourceMissing(t *testing.T) {
 	}
 	if c := metrics.quarantineIOCount(); c != 1 {
 		t.Fatalf("quarantine_io_failed must increment exactly once, got %d", c)
+	}
+}
+
+// TestResolveModifyDeleteTheirsDeleted pins the drain arm of resolveModifyDelete
+// (spec 015 Desired Behavior 4) and its two fall-through edges:
+//
+//   - a theirs-deleted path OUTSIDE _conflicts/ is not this arm's business and
+//     must fall through to the configured resolver (returns false);
+//   - a theirs-deleted path under _conflicts/ is accepted by removing it from
+//     the index and working tree (returns true);
+//   - when that removal fails (the path is not in the index), the arm reports
+//     false so the caller falls through to the resolver and the quarantine
+//     fallback rather than wedging the pull.
+//
+// The integration-level drain and refusal shapes live in git_test.go; this test
+// covers the branch edges a real merge cannot produce deterministically.
+func TestResolveModifyDeleteTheirsDeleted(t *testing.T) {
+	ctx := context.Background()
+	workDir, err := os.MkdirTemp("", "git-resolve-modify-delete-*")
+	if err != nil {
+		t.Fatalf("mkdir workdir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(workDir) })
+
+	run := func(args ...string) {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = workDir
+		out, e := cmd.CombinedOutput()
+		if e != nil {
+			t.Fatalf("%s %v: %s", "git", args, string(out))
+		}
+	}
+	run("init", "-q", "-b", "main")
+	run("config", "user.email", "test@example.com")
+	run("config", "user.name", "Test")
+
+	if mkErr := os.MkdirAll(filepath.Join(workDir, "_conflicts"), 0o750); mkErr != nil {
+		t.Fatalf("mkdir _conflicts: %v", mkErr)
+	}
+	tracked := filepath.Join(workDir, "_conflicts", "tracked.md")
+	if wErr := os.WriteFile(tracked, []byte("drained\n"), 0o644); wErr != nil {
+		t.Fatalf("write tracked path: %v", wErr)
+	}
+	run("add", "--", "_conflicts/tracked.md")
+	run("commit", "-q", "-m", "seed")
+
+	repo, ok := New(
+		workDir, &unsafeTestMetrics{}, libtime.NewCurrentDateTime(), "", fakeResolver{},
+	).(*git)
+	if !ok {
+		t.Fatal("New did not return *git")
+	}
+
+	// Outside _conflicts/: not a drain, fall through to the resolver.
+	if repo.resolveModifyDelete(ctx, "notes/plain.md", conflictKindTheirsDeleted) {
+		t.Error("a theirs-deleted path outside _conflicts/ must not be resolved here")
+	}
+
+	// Under _conflicts/ with the path present: the deletion is accepted.
+	if !repo.resolveModifyDelete(ctx, "_conflicts/tracked.md", conflictKindTheirsDeleted) {
+		t.Error("a theirs-deleted path under _conflicts/ must be accepted")
+	}
+	if _, statErr := os.Stat(tracked); !os.IsNotExist(statErr) {
+		t.Errorf("the accepted drain must remove the path, stat err = %v", statErr)
+	}
+
+	// Under _conflicts/ but absent from the index: git rm fails, so the arm
+	// reports false and the caller keeps the ordinary fallback.
+	if repo.resolveModifyDelete(ctx, "_conflicts/ghost.md", conflictKindTheirsDeleted) {
+		t.Error("a failing git rm must fall through, not report resolution")
 	}
 }

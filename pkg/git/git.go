@@ -89,20 +89,42 @@ func parseRebaseConflictPath(output string) string {
 }
 
 // parseMergeConflictPaths extracts all conflicting file paths from git merge output.
-// git merge emits "CONFLICT (content): Merge conflict in <path>" for each content conflict.
-// Returns an empty slice if no conflict lines are found (non-conflict merge failure).
+// git merge emits two conflict forms:
+//   - "CONFLICT (content): Merge conflict in <path>" for content conflicts;
+//   - "CONFLICT (modify/delete): <path> deleted in <ref> and modified in <ref>. ..."
+//     for modify/delete conflicts, where either ref order may appear.
+//
+// Paths are never split on whitespace because they may contain spaces. Returns an
+// empty slice if no conflict line of either form is found (non-conflict merge failure).
 func parseMergeConflictPaths(output string) []string {
-	const prefix = "Merge conflict in "
+	const contentPrefix = "Merge conflict in "
+	const modifyDeletePrefix = "CONFLICT (modify/delete): "
 	var paths []string
 	seen := make(map[string]bool)
-	for _, line := range strings.Split(output, "\n") {
-		if idx := strings.Index(line, prefix); idx >= 0 {
-			path := strings.TrimSpace(line[idx+len(prefix):])
-			if path != "" && !seen[path] {
-				paths = append(paths, path)
-				seen[path] = true
-			}
+	add := func(path string) {
+		if path != "" && !seen[path] {
+			paths = append(paths, path)
+			seen[path] = true
 		}
+	}
+	for _, line := range strings.Split(output, "\n") {
+		if idx := strings.Index(line, contentPrefix); idx >= 0 {
+			add(strings.TrimSpace(line[idx+len(contentPrefix):]))
+			continue
+		}
+		idx := strings.Index(line, modifyDeletePrefix)
+		if idx < 0 {
+			continue
+		}
+		rest := line[idx+len(modifyDeletePrefix):]
+		end := strings.Index(rest, " deleted in ")
+		if end < 0 {
+			end = strings.Index(rest, " modified in ")
+		}
+		if end < 0 {
+			continue
+		}
+		add(strings.TrimSpace(rest[:end]))
 	}
 	return paths
 }
@@ -442,16 +464,44 @@ func nestedConflictPath(paths []string) string {
 	return ""
 }
 
+// isUnderConflictsDir reports whether path lives in the quarantine directory:
+// the path equals conflictsDirName or has the prefix conflictsDirName + "/".
+// Shared by the nesting guard's drain filter and the modify/delete resolution
+// arm so the two cannot drift apart.
+func isUnderConflictsDir(path string) bool {
+	return path == conflictsDirName || strings.HasPrefix(path, conflictsDirName+"/")
+}
+
+// dropAcceptedDrains returns paths minus the ones that are an operator drain: a
+// path under _conflicts/ whose upstream change is a deletion
+// (conflictKindTheirsDeleted). Those are resolved by accepting the deletion, so
+// the nesting guard must not reject them. A path absent from kinds is treated as
+// a content conflict and kept, preserving the guard's behaviour for callers that
+// pass no classification.
+func dropAcceptedDrains(paths []string, kinds map[string]conflictKind) []string {
+	kept := make([]string, 0, len(paths))
+	for _, path := range paths {
+		if isUnderConflictsDir(path) && kinds[path] == conflictKindTheirsDeleted {
+			continue
+		}
+		kept = append(kept, path)
+	}
+	return kept
+}
+
 // validateConflictPathsNotNested pre-flights the conflict path list before any disk
 // I/O. A conflicted path that already lives under _conflicts/ is rejected: the file
 // stays exactly one level deep, the nested_source counter records the rejection, and
-// the merge is aborted. Returns wrapped ErrConflictResolutionFailed when a nested path
-// is present, nil otherwise. Pure read of the path list; no file writes.
+// the merge is aborted. A _conflicts/ path whose upstream change is a deletion is an
+// operator drain and is resolved rather than rejected, so it is dropped from the
+// candidate list before the check. Returns wrapped ErrConflictResolutionFailed when a
+// nested path is present, nil otherwise. Pure read of the path list; no file writes.
 func (g *git) validateConflictPathsNotNested(
 	ctx context.Context,
 	conflictPaths []string,
+	kinds map[string]conflictKind,
 ) error {
-	path := nestedConflictPath(conflictPaths)
+	path := nestedConflictPath(dropAcceptedDrains(conflictPaths, kinds))
 	if path == "" {
 		return nil
 	}
@@ -765,6 +815,166 @@ func (g *git) pullMergeAndPush(ctx context.Context, upstream string) error {
 	return g.resolveConflictMerge(ctx, upstream, out, mergeErr)
 }
 
+// conflictKind classifies a conflicted path by which sides of the merge carry
+// content in the unmerged index.
+type conflictKind int
+
+const (
+	// conflictKindContent: both sides changed the path (unmerged stages 1+2+3,
+	// or 2+3 for an add/add). The configured ConflictResolver handles it.
+	conflictKindContent conflictKind = iota
+	// conflictKindOursDeleted: HEAD deleted the path and the upstream side
+	// modified it (stages 1+3, no stage 2). git leaves the upstream version in
+	// the working tree with no conflict markers.
+	conflictKindOursDeleted
+	// conflictKindTheirsDeleted: the upstream side deleted the path and HEAD
+	// modified it (stages 1+2, no stage 3). This is the shape an operator drain
+	// of _conflicts/ produces. git leaves the HEAD version in the working tree.
+	conflictKindTheirsDeleted
+)
+
+// classifyConflicts reads the unmerged index once and maps each conflicted
+// repo-relative path to its conflictKind. A path absent from the returned map is
+// treated as conflictKindContent by the caller, so the pre-existing
+// resolver-then-quarantine path is the default. Read-only: nothing is created
+// on disk. A failed `git ls-files -u` logs a warning and returns an empty map,
+// which degrades to today's behaviour rather than wedging a pull.
+func (g *git) classifyConflicts(ctx context.Context) map[string]conflictKind {
+	kinds := make(map[string]conflictKind)
+	out, err := g.runCmdOutput(ctx, g.repoPath, "ls-files", "-u")
+	if err != nil {
+		slog.WarnContext(
+			ctx,
+			"git-rest: git ls-files -u failed; treating every conflict as a content conflict",
+			"err",
+			err.Error(),
+		)
+		return kinds
+	}
+	stages := make(map[string]map[int]bool)
+	for _, line := range strings.Split(string(out), "\n") {
+		meta, path, found := strings.Cut(line, "\t")
+		if !found {
+			continue
+		}
+		fields := strings.Fields(meta)
+		if len(fields) < 3 {
+			continue
+		}
+		stage, convErr := strconv.Atoi(fields[2])
+		if convErr != nil || stage < 1 || stage > 3 {
+			continue
+		}
+		if stages[path] == nil {
+			stages[path] = make(map[int]bool)
+		}
+		stages[path][stage] = true
+	}
+	for path, s := range stages {
+		switch {
+		case s[3] && !s[2]:
+			kinds[path] = conflictKindOursDeleted
+		case s[2] && !s[3]:
+			kinds[path] = conflictKindTheirsDeleted
+		default:
+			kinds[path] = conflictKindContent
+		}
+	}
+	return kinds
+}
+
+// stageUpstreamVersion resolves a modify/delete conflict in which HEAD deleted
+// the path and the upstream side modified it, by taking the upstream version:
+// `git checkout --theirs -- <path>` writes the upstream content into the working
+// tree and `git add -- <path>` stages it, clearing the unmerged index entry.
+// This is the automated form of the operator's manual repair
+// (`git checkout origin/master -- <path>`).
+//
+// Both commands are required: `git checkout --theirs` alone does not clear the
+// unmerged index entry, so the following `git add` is what stages the version
+// and resolves the conflict. The `--` separator before the path is required
+// because the path comes from git's own output and may contain spaces.
+func (g *git) stageUpstreamVersion(ctx context.Context, path string) error {
+	if err := g.runCmd(ctx, g.repoPath, "checkout", "--theirs", "--", path); err != nil {
+		return errors.Wrapf(ctx, err, "checkout --theirs %s", path)
+	}
+	if err := g.runCmd(ctx, g.repoPath, "add", "--", path); err != nil {
+		return errors.Wrapf(ctx, err, "git add %s", path)
+	}
+	return nil
+}
+
+// acceptUpstreamDeletion resolves a modify/delete conflict in which the upstream
+// side deleted the path and HEAD modified it — the shape an operator drain of
+// _conflicts/ produces — by accepting the deletion: `git rm -f -- <path>` removes
+// the path from the index and the working tree, clearing the unmerged entry so the
+// merge can be committed. -f is required because the working-tree copy may differ
+// from HEAD's; nothing is lost, because the HEAD commit is the merge's first
+// parent and the pre-drain content therefore stays reachable in history.
+func (g *git) acceptUpstreamDeletion(ctx context.Context, path string) error {
+	if err := g.runCmd(ctx, g.repoPath, "rm", "-f", "--", path); err != nil {
+		return errors.Wrapf(ctx, err, "git rm -f %s", path)
+	}
+	return nil
+}
+
+// resolveModifyDelete resolves a modify/delete conflict at the pipeline level and
+// reports whether it did. It is called before the configured resolver, because
+// neither shipped resolver can resolve one: the marker resolver's git add happens
+// to stage the right content for an ours-deleted path, but a marker-less file is
+// rejected by the YAML merge resolver, which would quarantine the path instead of
+// restoring it.
+//
+// A theirs-deleted conflict is accepted only when the path is under _conflicts/:
+// that is the operator's drain of a quarantined entry (spec 015 Desired Behavior
+// 4). A theirs-deleted path outside the quarantine directory falls through to the
+// configured resolver, exactly as before.
+func (g *git) resolveModifyDelete(ctx context.Context, path string, kind conflictKind) bool {
+	if kind == conflictKindOursDeleted {
+		if err := g.stageUpstreamVersion(ctx, path); err != nil {
+			slog.WarnContext(
+				ctx,
+				"git-rest: taking the upstream version for a modify/delete conflict failed",
+				"path",
+				path,
+				"err",
+				err.Error(),
+			)
+			return false
+		}
+		slog.InfoContext(
+			ctx,
+			"git-rest: modify/delete conflict resolved by taking the upstream version",
+			"path",
+			path,
+		)
+		return true
+	}
+	if kind == conflictKindTheirsDeleted && isUnderConflictsDir(path) {
+		if err := g.acceptUpstreamDeletion(ctx, path); err != nil {
+			slog.WarnContext(
+				ctx,
+				"git-rest: accepting the upstream deletion of a quarantined path failed",
+				"path",
+				path,
+				"err",
+				err.Error(),
+			)
+			return false
+		}
+		slog.InfoContext(
+			ctx,
+			"git-rest: accepted upstream deletion of quarantined path",
+			"path",
+			path,
+			"reason",
+			"upstream deletion",
+		)
+		return true
+	}
+	return false
+}
+
 // resolveConflictMerge handles the conflict path of pullMergeAndPush: delegates to g.resolver,
 // commits the resolved merge, then pushes. On per-file resolver failure, the failing file is
 // quarantined (via read + git rm + write + git add — git refuses to git mv conflicted files)
@@ -783,6 +993,22 @@ func (g *git) resolveConflictMerge(
 	conflictPaths := parseMergeConflictPaths(string(mergeOut))
 	if len(conflictPaths) == 0 {
 		g.metrics.IncGitOperationError("merge")
+		g.metrics.IncMergeOutcome("aborted")
+		// The merge must never be left in progress. The abort is best-effort in the
+		// sense that its own failure is logged rather than returned — `git merge
+		// --abort` legitimately fails when no merge is in progress (unrelated
+		// histories, an environmental failure), and the merge's own wrapped error is
+		// the one the operator needs.
+		if _, abortErr := g.runCmdRaw(
+			ctx, g.repoPath, "merge", "--abort",
+		); abortErr != nil {
+			slog.WarnContext(
+				ctx,
+				"git-rest: git merge --abort failed; repository may still be mid-merge",
+				"err",
+				abortErr.Error(),
+			)
+		}
 		return errors.Wrapf(
 			ctx,
 			mergeErr,
@@ -814,9 +1040,15 @@ func (g *git) resolveConflictPaths(
 	if err := g.validateConflictPathsSafe(ctx, conflictPaths); err != nil {
 		return err
 	}
+	// Read-only classification of the unmerged index. It must run after
+	// validateConflictPathsSafe and before the nesting guard, because the guard
+	// needs the classification to tell an accepted operator drain (a _conflicts/
+	// path whose upstream change is a deletion) from a genuine re-quarantine. It
+	// writes nothing, so the ordering invariant above is preserved.
+	kinds := g.classifyConflicts(ctx)
 	// Pre-flight: a conflicted path that already lives under _conflicts/ aborts the
 	// merge before any disk I/O, so a re-quarantine can never deepen the tree.
-	if err := g.validateConflictPathsNotNested(ctx, conflictPaths); err != nil {
+	if err := g.validateConflictPathsNotNested(ctx, conflictPaths, kinds); err != nil {
 		return err
 	}
 	if err := g.ensureConflictsDir(ctx); err != nil {
@@ -824,7 +1056,7 @@ func (g *git) resolveConflictPaths(
 	}
 
 	ts := g.currentDateTimeGetter.Now().Unix()
-	resolved, quarantined := g.resolveEachPath(ctx, conflictPaths, ts)
+	resolved, quarantined := g.resolveEachPath(ctx, conflictPaths, kinds, ts)
 
 	// Pathological case: every conflicted path failed BOTH resolve and quarantine.
 	if len(resolved) == 0 && len(quarantined) == 0 {
@@ -877,9 +1109,14 @@ func (g *git) validateConflictPathsSafe(
 // conflictPaths MUST already be safe (call validateConflictPathsSafe first).
 // Returns (resolved, quarantined). Honors ctx cancellation between iterations
 // so a cancelled context interrupts remaining path processing.
+//
+// Modify/delete conflicts are dispatched to resolveModifyDelete before the
+// configured resolver; a path absent from kinds behaves exactly as before and
+// goes to the resolver.
 func (g *git) resolveEachPath(
 	ctx context.Context,
 	conflictPaths []string,
+	kinds map[string]conflictKind,
 	ts int64,
 ) ([]string, []string) {
 	resolved := make([]string, 0, len(conflictPaths))
@@ -889,6 +1126,10 @@ func (g *git) resolveEachPath(
 		case <-ctx.Done():
 			return resolved, quarantined
 		default:
+		}
+		if g.resolveModifyDelete(ctx, path, kinds[path]) {
+			resolved = append(resolved, path)
+			continue
 		}
 		resolveErr := g.resolver.Resolve(ctx, []string{path})
 		if resolveErr == nil {
