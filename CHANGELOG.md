@@ -8,6 +8,10 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 * MINOR version when you add functionality in a backwards-compatible manner, and
 * PATCH version when you make backwards-compatible bug fixes.
 
+## Unreleased
+
+- chore: update Go to 1.27.2 and github.com/bborbe/errors to v1.6.3, github.com/bborbe/log to v1.7.3, github.com/bborbe/run to v1.11.0, github.com/bborbe/sentry to v1.10.3, github.com/bborbe/service to v1.10.14, github.com/bborbe/time to v1.27.16, github.com/onsi/ginkgo/v2 to v2.33.1, github.com/onsi/gomega to v1.44.0, github.com/prometheus/client_golang to v1.25.0
+
 ## v0.29.2
 
 - fix: Recognise `CONFLICT (modify/delete):` in merge output so a modify/delete conflict resolves instead of wedging the pull. The conflict-path parser matched only the content-conflict form, so a modify/delete line produced an empty conflict list, the resolver was never reached, and the pull returned without running `git merge --abort` — leaving the repository mid-merge, readiness non-200, and every write failing with `Committing is not possible because there are unmerged files`. The parser now extracts both conflict forms, a modify/delete conflict resolves by taking the upstream version under both resolver configurations (marker and YAML), and the empty-conflict-list branch aborts the in-progress merge before returning so no pull leaves the repository mid-merge.
