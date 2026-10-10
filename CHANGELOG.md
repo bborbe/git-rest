@@ -8,6 +8,10 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 * MINOR version when you add functionality in a backwards-compatible manner, and
 * PATCH version when you make backwards-compatible bug fixes.
 
+## Unreleased
+
+- fix: bump `osv-scanner` to v2.6.0 and `golang.org/x/net` to v0.60.0 so the Linux vulnerability gates stop failing. v2.3.1 pins `golang.org/x/tools` v0.38.0, whose SSA builder aborts with `unexpected expr: *ast.KeyValueExpr` on the promoted-field composite-literal key Go 1.27 permits in the Linux stdlib, so a repo on the old pin passes locally on darwin and fails only in Linux CI. `x/net` v0.58.0 carries `GO-2026-6603/6610/6611/6612/6617`, which fail both `vulncheck` and `trivy`.
+
 ## v0.29.2
 
 - fix: Recognise `CONFLICT (modify/delete):` in merge output so a modify/delete conflict resolves instead of wedging the pull. The conflict-path parser matched only the content-conflict form, so a modify/delete line produced an empty conflict list, the resolver was never reached, and the pull returned without running `git merge --abort` — leaving the repository mid-merge, readiness non-200, and every write failing with `Committing is not possible because there are unmerged files`. The parser now extracts both conflict forms, a modify/delete conflict resolves by taking the upstream version under both resolver configurations (marker and YAML), and the empty-conflict-list branch aborts the in-progress merge before returning so no pull leaves the repository mid-merge.
