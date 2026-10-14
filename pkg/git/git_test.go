@@ -1379,18 +1379,23 @@ var _ = Describe("Pull state machine", func() {
 			))
 		})
 
-		It("AC3: resolver-failed file is moved to _conflicts/", func() {
-			Expect(pg.Pull(ctx)).To(BeNil())
-			qGlob, _ := filepath.Glob(
-				filepath.Join(workDir, "_conflicts", "conflict.txt.*.quarantined"),
-			)
-			Expect(
-				qGlob,
-			).To(HaveLen(1), "exactly one _conflicts/conflict.txt.<ts>.quarantined must exist; got: %v", qGlob)
-			_, statErr := os.Stat(filepath.Join(workDir, "conflict.txt"))
-			Expect(os.IsNotExist(statErr)).To(BeTrue(),
-				"original conflict.txt must not exist after quarantine")
-		})
+		It(
+			"AC3: resolver-failed file is copied to _conflicts/ and the canonical is restored",
+			func() {
+				Expect(pg.Pull(ctx)).To(BeNil())
+				qGlob, _ := filepath.Glob(
+					filepath.Join(workDir, "_conflicts", "conflict.txt.*.quarantined"),
+				)
+				Expect(
+					qGlob,
+				).To(HaveLen(1), "exactly one _conflicts/conflict.txt.<ts>.quarantined must exist; got: %v", qGlob)
+				canonical, readErr := os.ReadFile(filepath.Join(workDir, "conflict.txt"))
+				Expect(readErr).NotTo(HaveOccurred(),
+					"the canonical must exist after a resolver-failure quarantine")
+				Expect(string(canonical)).To(Equal("local content\n"),
+					"the canonical must hold the local pre-merge side after a resolver-failure quarantine")
+			},
+		)
 
 		It("AC3: repo is clean after committed merge (on branch, no MERGE_HEAD)", func() {
 			Expect(pg.Pull(ctx)).To(BeNil())
@@ -1474,10 +1479,10 @@ var _ = Describe("Pull state machine", func() {
 					Expect(afterQuarantined-beforeQuarantined).To(Equal(1.0),
 						"git_rest_quarantined_files_total must increment by exactly 1 in this test")
 
-					// AC2: corrupt file is in _conflicts/ tree; no longer at the original path.
-					// Spec evidence: filepath.Glob finds exactly one matching quarantine file;
-					// os.Stat of the original path returns IsNotExist. The quarantine
-					// destination is "_conflicts/note-00.<ts>.md" (the timestamp is inserted
+					// AC2: corrupt file is in _conflicts/ tree; the canonical path is
+					// restored from HEAD. Spec evidence: filepath.Glob finds exactly one
+					// matching quarantine file. The quarantine destination is
+					// "_conflicts/note-00.<ts>.md" (the timestamp is inserted
 					// BEFORE the final ".md" — see quarantineDestPath in pkg/git/git.go).
 					stripped := strings.TrimSuffix(corruptPath, ".md")
 					qGlob, _ := filepath.Glob(
@@ -1486,9 +1491,13 @@ var _ = Describe("Pull state machine", func() {
 					Expect(
 						qGlob,
 					).To(HaveLen(1), "exactly one _conflicts/<name-without-md>.<ts>.md must exist; got: %v", qGlob)
-					_, statErr := os.Stat(filepath.Join(workDir, corruptPath))
-					Expect(os.IsNotExist(statErr)).To(BeTrue(),
-						"corrupt file must not exist at original path after quarantine")
+					canonical, readErr := os.ReadFile(filepath.Join(workDir, corruptPath))
+					Expect(readErr).NotTo(HaveOccurred(),
+						"the canonical must exist after a resolver-failure quarantine")
+					Expect(
+						string(canonical),
+					).To(Equal("---\nbad: : : colon: storm\n---\nlocal corrupt body\n"),
+						"the canonical must be restored to the local pre-merge side after quarantine")
 
 					// AC3: 10 clean files at original paths with merged content (local body preserved).
 					for i := 1; i < 11; i++ {
@@ -1538,6 +1547,49 @@ var _ = Describe("Pull state machine", func() {
 						Expect(commitMsg).To(ContainSubstring(name),
 							"clean path %s must be in commit message", name)
 					}
+				},
+			)
+
+			It(
+				"AC2b: a quarantined path is restored to the local pre-merge side while the quarantine copy keeps both sides",
+				func() {
+					logs, restore := captureSlogLogs()
+					defer restore()
+
+					Expect(pgLocal.Pull(ctx)).To(BeNil())
+
+					canonical, readErr := os.ReadFile(filepath.Join(workDir, corruptPath))
+					Expect(readErr).NotTo(HaveOccurred(),
+						"the canonical must exist after a resolver-failure quarantine")
+					Expect(string(canonical)).
+						To(Equal("---\nbad: : : colon: storm\n---\nlocal corrupt body\n"),
+							"the canonical must be restored to the local pre-merge side after quarantine")
+
+					qGlob, _ := filepath.Glob(
+						filepath.Join(workDir, "_conflicts", "note-00.*.md"),
+					)
+					Expect(qGlob).To(HaveLen(1),
+						"exactly one _conflicts/note-00.<ts>.md must exist; got: %v", qGlob)
+					qBytes, qErr := os.ReadFile(qGlob[0])
+					Expect(qErr).NotTo(HaveOccurred())
+					Expect(string(qBytes)).To(ContainSubstring("local corrupt body"),
+						"the quarantine copy must preserve the local side")
+					Expect(string(qBytes)).To(ContainSubstring("remote body 0"),
+						"the quarantine copy must preserve the remote side")
+
+					Expect(strings.TrimSpace(gitOutputStr(workDir, "status", "--porcelain"))).
+						To(BeEmpty(), "working tree must be clean after the committed merge")
+					_, statErr := os.Stat(filepath.Join(workDir, ".git", "MERGE_HEAD"))
+					Expect(os.IsNotExist(statErr)).To(BeTrue(),
+						".git/MERGE_HEAD must not exist after the committed merge")
+
+					logStr := logs.String()
+					Expect(logStr).To(ContainSubstring("restored canonical after quarantine"))
+					Expect(logStr).To(ContainSubstring(corruptPath))
+					Expect(
+						strings.Count(logStr, "restored canonical after quarantine"),
+					).To(Equal(1),
+						"exactly one restore INFO line must be emitted per quarantined path")
 				},
 			)
 		},

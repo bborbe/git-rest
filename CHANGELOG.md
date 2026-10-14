@@ -8,6 +8,10 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 * MINOR version when you add functionality in a backwards-compatible manner, and
 * PATCH version when you make backwards-compatible bug fixes.
 
+## Unreleased
+
+- fix: Restore the canonical path after a resolver-failure quarantine instead of deleting it. `quarantineOne` ran `git rm -- <path>` to clear the conflict and never put the path back, so every resolver-failure quarantine removed a live file from the repository while the commit message's `quarantined=[…]` read as "preserved alongside" — the canonical is now restored from `HEAD` after the conflicted bytes are written to `_conflicts/`, and a failed restore still reports rather than failing silently.
+
 ## v0.29.5
 
 - chore: update github.com/bborbe/http to v1.26.29, github.com/bborbe/log to v1.7.4, github.com/bborbe/run to v1.11.2, github.com/bborbe/sentry to v1.10.4, github.com/bborbe/service to v1.10.16
