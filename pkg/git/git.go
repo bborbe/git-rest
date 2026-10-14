@@ -1249,7 +1249,7 @@ func (g *git) ensureConflictsDir(ctx context.Context) error {
 // path). `git mv` is not used because git refuses to move conflicted files;
 // instead we read the source, git rm the source to clear the conflict, then
 // write the destination and git add it.
-// nolint:funlen // 5 sequential IO steps (read → rm → mkdir → write → add),
+// nolint:funlen // 6 sequential IO steps (read → rm → mkdir → write → add → checkout),
 // each with its own metric + slog + early return. Linear flow is clearer than
 // extracting per-step helpers that would all share the same signature.
 func (g *git) quarantineOne(ctx context.Context, path string, unixSeconds int64) bool {
@@ -1331,6 +1331,19 @@ func (g *git) quarantineOne(ctx context.Context, path string, unixSeconds int64)
 		)
 		return false
 	}
+	if coErr := g.runCmd(ctx, g.repoPath, "checkout", "HEAD", "--", path); coErr != nil {
+		g.metrics.IncResolverFailure(quarantineFailureIO)
+		slog.ErrorContext(
+			ctx,
+			"git-rest: restore canonical after quarantine failed",
+			"path",
+			path,
+			"err",
+			coErr.Error(),
+		)
+		return false
+	}
+	slog.InfoContext(ctx, "git-rest: restored canonical after quarantine", "path", path)
 	g.metrics.IncQuarantinedFiles()
 	slog.WarnContext(
 		ctx,
