@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/bborbe/errors"
@@ -92,17 +93,19 @@ func (r *yamlMergeResolver) resolveOne(ctx context.Context, path string) error {
 		return errors.Wrap(ctx, ErrConflictResolutionFailed, "no conflict region")
 	}
 
-	oursFM, oursBody, ok := splitFrontmatter(ours)
-	if !ok {
+	oursFM, oursBody, oursOK := splitFrontmatter(ours)
+	theirsFM, theirsBody, theirsOK := splitFrontmatter(theirs)
+	if !oursOK || !theirsOK {
+		applied, ruleErr := r.applyScalarFrontmatterRule(ctx, path, abs, string(raw))
+		if applied {
+			return ruleErr
+		}
 		r.metrics.IncResolverFailure(resolverFailureNoFront)
-		glog.Warningf("yaml-merge-resolver: %q ours side has no frontmatter delimiter pair", path)
-		return errors.Wrap(ctx, ErrConflictResolutionFailed, "ours: no frontmatter")
-	}
-	theirsFM, theirsBody, ok := splitFrontmatter(theirs)
-	if !ok {
-		r.metrics.IncResolverFailure(resolverFailureNoFront)
-		glog.Warningf("yaml-merge-resolver: %q theirs side has no frontmatter delimiter pair", path)
-		return errors.Wrap(ctx, ErrConflictResolutionFailed, "theirs: no frontmatter")
+		glog.Warningf(
+			"yaml-merge-resolver: %q has no frontmatter delimiter pair on one side and the scalar-frontmatter rule does not apply",
+			path,
+		)
+		return errors.Wrap(ctx, ErrConflictResolutionFailed, "no frontmatter delimiter pair")
 	}
 
 	oursMap, err := r.parseYAML(ctx, oursFM, path, "ours")
@@ -316,4 +319,361 @@ func combineBodies(ours, theirs string) string {
 	default:
 		return ours + "\n\n" + theirs
 	}
+}
+
+// conflictRegion is one conflict region located in the original file's lines.
+type conflictRegion struct {
+	startLine   int      // index of the "<<<<<<<" line
+	oursLines   []string // lines between "<<<<<<<" and "=======", in order
+	theirsLines []string // lines between "=======" and ">>>>>>>", in order
+	endLine     int      // index of the ">>>>>>>" line
+}
+
+// enumerateConflictRegions returns every conflict region in lines, in file
+// order. ok is false when the markers are unbalanced, a region is nested, or
+// the file holds no region at all.
+func enumerateConflictRegions(lines []string) ([]conflictRegion, bool) {
+	scanner := &conflictRegionScanner{regions: make([]conflictRegion, 0, len(lines))}
+	for i, line := range lines {
+		if !scanner.consume(line, i) {
+			return nil, false
+		}
+	}
+	if scanner.open || len(scanner.regions) == 0 {
+		return nil, false
+	}
+	return scanner.regions, true
+}
+
+// conflictRegionScanner is the state machine enumerateConflictRegions drives,
+// split out so each function stays under the cognitive-complexity limit.
+type conflictRegionScanner struct {
+	regions       []conflictRegion
+	current       conflictRegion
+	open          bool
+	separatorSeen bool
+}
+
+// consume advances the scanner by one line. ok is false on unbalanced markers.
+func (s *conflictRegionScanner) consume(line string, index int) bool {
+	switch {
+	case strings.HasPrefix(line, "<<<<<<<"):
+		if s.open {
+			return false
+		}
+		s.open = true
+		s.separatorSeen = false
+		s.current = conflictRegion{startLine: index}
+	case strings.HasPrefix(line, "======="):
+		if !s.open || s.separatorSeen {
+			return false
+		}
+		s.separatorSeen = true
+	case strings.HasPrefix(line, ">>>>>>>"):
+		if !s.open || !s.separatorSeen {
+			return false
+		}
+		s.current.endLine = index
+		s.regions = append(s.regions, s.current)
+		s.open = false
+		s.separatorSeen = false
+	default:
+		s.appendContentLine(line)
+	}
+	return true
+}
+
+func (s *conflictRegionScanner) appendContentLine(line string) {
+	if !s.open {
+		return
+	}
+	if s.separatorSeen {
+		s.current.theirsLines = append(s.current.theirsLines, line)
+		return
+	}
+	s.current.oursLines = append(s.current.oursLines, line)
+}
+
+// frontmatterBounds returns the index of the closing "---" line in the original
+// file. The opening delimiter is always line 0 when ok is true.
+func frontmatterBounds(lines []string) (closeIndex int, ok bool) {
+	const delim = "---"
+	if len(lines) == 0 || strings.TrimRight(lines[0], "\r") != delim {
+		return 0, false
+	}
+	for i := 1; i < len(lines); i++ {
+		if strings.TrimRight(lines[i], "\r") == delim {
+			return i, true
+		}
+	}
+	return 0, false
+}
+
+// scalarEntry is one parsed frontmatter line: the raw line plus its parsed YAML
+// value node.
+type scalarEntry struct {
+	line  string
+	value *yaml.Node
+}
+
+// parseScalarEntry reports whether line is a single-line "key: value" mapping
+// entry whose value is a YAML scalar, returning the key.
+func parseScalarEntry(line string) (key string, entry scalarEntry, ok bool) {
+	trimmed := strings.TrimRight(line, "\r")
+	if trimmed == "" {
+		return "", scalarEntry{}, false
+	}
+	if trimmed[0] == ' ' || trimmed[0] == '\t' {
+		return "", scalarEntry{}, false
+	}
+	if trimmed == "-" || strings.HasPrefix(trimmed, "- ") || strings.HasPrefix(trimmed, "#") {
+		return "", scalarEntry{}, false
+	}
+
+	var document yaml.Node
+	if err := yaml.Unmarshal([]byte(trimmed), &document); err != nil {
+		return "", scalarEntry{}, false
+	}
+	if len(document.Content) != 1 {
+		return "", scalarEntry{}, false
+	}
+	mapping := document.Content[0]
+	if mapping.Kind != yaml.MappingNode || len(mapping.Content) != 2 {
+		return "", scalarEntry{}, false
+	}
+
+	keyNode := mapping.Content[0]
+	valueNode := mapping.Content[1]
+	if keyNode.Kind != yaml.ScalarNode || keyNode.Tag != "!!str" ||
+		keyNode.Value == "" || keyNode.Anchor != "" {
+		return "", scalarEntry{}, false
+	}
+	if valueNode.Kind != yaml.ScalarNode || valueNode.Anchor != "" ||
+		valueNode.Style == yaml.LiteralStyle || valueNode.Style == yaml.FoldedStyle {
+		return "", scalarEntry{}, false
+	}
+
+	return keyNode.Value, scalarEntry{line: trimmed, value: valueNode}, true
+}
+
+// scalarKeyEntry pairs a key with its parsed entry on the ours side.
+type scalarKeyEntry struct {
+	key   string
+	entry scalarEntry
+}
+
+// scalarRegion is an eligible conflict region with both sides parsed.
+type scalarRegion struct {
+	conflictRegion
+	ours   []scalarKeyEntry // ours-side order
+	theirs map[string]scalarEntry
+}
+
+// planScalarRegions decides whether the whole file is eligible for the
+// scalar-frontmatter rule. It inspects shape only: no timestamps, no I/O.
+func planScalarRegions(lines []string) ([]scalarRegion, bool) {
+	closeIndex, ok := frontmatterBounds(lines)
+	if !ok {
+		return nil, false
+	}
+	conflicts, ok := enumerateConflictRegions(lines)
+	if !ok {
+		return nil, false
+	}
+
+	regions := make([]scalarRegion, 0, len(conflicts))
+	previousEnd := 0
+	for _, region := range conflicts {
+		if !regionInsideFrontmatter(region, closeIndex, previousEnd) {
+			return nil, false
+		}
+		ours, theirs, parsed := parseScalarSide(region.oursLines, region.theirsLines)
+		if !parsed {
+			return nil, false
+		}
+		regions = append(regions, scalarRegion{
+			conflictRegion: region,
+			ours:           ours,
+			theirs:         theirs,
+		})
+		previousEnd = region.endLine
+	}
+
+	if len(regions) == 0 {
+		return nil, false
+	}
+	return regions, true
+}
+
+// regionInsideFrontmatter reports whether region lies strictly between the
+// opening and closing delimiters and does not overlap the previous region.
+func regionInsideFrontmatter(region conflictRegion, closeIndex, previousEnd int) bool {
+	return region.startLine > 0 &&
+		region.endLine < closeIndex &&
+		region.startLine > previousEnd
+}
+
+// parseScalarSide parses both sides of one region and enforces the key-set
+// guards: at least one key per side, no duplicates, identical key sets.
+func parseScalarSide(
+	oursLines, theirsLines []string,
+) ([]scalarKeyEntry, map[string]scalarEntry, bool) {
+	ours, ok := parseScalarOurs(oursLines)
+	if !ok {
+		return nil, nil, false
+	}
+	theirs, ok := parseScalarTheirs(theirsLines)
+	if !ok {
+		return nil, nil, false
+	}
+	if len(ours) == 0 || len(theirs) == 0 || len(ours) != len(theirs) {
+		return nil, nil, false
+	}
+	for _, oursEntry := range ours {
+		if _, present := theirs[oursEntry.key]; !present {
+			return nil, nil, false
+		}
+	}
+	return ours, theirs, true
+}
+
+func parseScalarOurs(lines []string) ([]scalarKeyEntry, bool) {
+	ours := make([]scalarKeyEntry, 0, len(lines))
+	seen := make(map[string]struct{}, len(lines))
+	for _, line := range lines {
+		key, entry, ok := parseScalarEntry(line)
+		if !ok {
+			return nil, false
+		}
+		if _, duplicate := seen[key]; duplicate {
+			return nil, false
+		}
+		seen[key] = struct{}{}
+		ours = append(ours, scalarKeyEntry{key: key, entry: entry})
+	}
+	return ours, true
+}
+
+func parseScalarTheirs(lines []string) (map[string]scalarEntry, bool) {
+	theirs := make(map[string]scalarEntry, len(lines))
+	for _, line := range lines {
+		key, entry, ok := parseScalarEntry(line)
+		if !ok {
+			return nil, false
+		}
+		if _, duplicate := theirs[key]; duplicate {
+			return nil, false
+		}
+		theirs[key] = entry
+	}
+	return theirs, true
+}
+
+// isCounterKey reports whether key takes the max-of-both-sides rule.
+func isCounterKey(key string) bool {
+	return key == "trigger_count" || key == "retry_count" || strings.HasPrefix(key, "metrics_")
+}
+
+// integerValue returns the integer a parsed scalar node carries, and whether it
+// carries one at all.
+func integerValue(node *yaml.Node) (int64, bool) {
+	if node == nil || node.Tag != "!!int" {
+		return 0, false
+	}
+	value, err := strconv.ParseInt(node.Value, 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	return value, true
+}
+
+// resolveScalarEntry returns the replacement line for one key in one region.
+// ok is false when the rule cannot decide this key, which makes the whole file
+// ineligible.
+func resolveScalarEntry(key string, ours, theirs scalarEntry) (line string, ok bool) {
+	if isCounterKey(key) {
+		oursValue, oursOK := integerValue(ours.value)
+		theirsValue, theirsOK := integerValue(theirs.value)
+		if oursOK && theirsOK {
+			maxValue := oursValue
+			if theirsValue > oursValue {
+				maxValue = theirsValue
+			}
+			return key + ": " + strconv.FormatInt(maxValue, 10), true
+		}
+	}
+	return "", false
+}
+
+// spliceScalarRegions returns the original file with each conflict region
+// replaced by its resolved lines. Every line outside a region is copied
+// verbatim, so the closing "---" and the body are byte-identical.
+func spliceScalarRegions(
+	lines []string,
+	regions []scalarRegion,
+	replacements [][]string,
+) string {
+	out := make([]string, 0, len(lines))
+	cursor := 0
+	for i, region := range regions {
+		out = append(out, lines[cursor:region.startLine]...)
+		out = append(out, replacements[i]...)
+		cursor = region.endLine + 1
+	}
+	out = append(out, lines[cursor:]...)
+	return strings.Join(out, "\n")
+}
+
+// applyScalarFrontmatterRule attempts the scalar-frontmatter rule on the raw
+// conflicted file. applied reports whether the rule took responsibility for the
+// file; when it did, the file has been written and staged and err is the outcome.
+func (r *yamlMergeResolver) applyScalarFrontmatterRule(
+	ctx context.Context, path, abs, raw string,
+) (applied bool, err error) {
+	if !strings.EqualFold(filepath.Ext(path), ".md") {
+		return false, nil
+	}
+
+	lines := strings.Split(raw, "\n")
+	regions, ok := planScalarRegions(lines)
+	if !ok {
+		return false, nil
+	}
+
+	replacements := make([][]string, 0, len(regions))
+	for _, region := range regions {
+		resolved := make([]string, 0, len(region.ours))
+		for _, oursEntry := range region.ours {
+			line, resolvedOK := resolveScalarEntry(
+				oursEntry.key,
+				oursEntry.entry,
+				region.theirs[oursEntry.key],
+			)
+			if !resolvedOK {
+				return false, nil
+			}
+			resolved = append(resolved, line)
+		}
+		replacements = append(replacements, resolved)
+	}
+
+	final := spliceScalarRegions(lines, regions, replacements)
+
+	select {
+	case <-ctx.Done():
+		return true, errors.Wrap(ctx, ctx.Err(), "scalar resolve cancelled")
+	default:
+	}
+
+	// #nosec G703 -- path validated by safePath
+	if writeErr := os.WriteFile(abs, []byte(final), 0o600); writeErr != nil {
+		r.metrics.IncResolverFailure(resolverFailureWrite)
+		glog.Warningf("yaml-merge-resolver: write scalar-resolved %q: %v", path, writeErr)
+		return true, errors.Wrap(ctx, ErrConflictResolutionFailed, "write scalar-resolved file")
+	}
+
+	if err := r.runGitAdd(ctx, path); err != nil {
+		return true, err
+	}
+	return true, nil
 }
