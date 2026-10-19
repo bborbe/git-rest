@@ -1,5 +1,5 @@
 ---
-status: committing
+status: completed
 spec: [016-yaml-scalar-conflict-autoresolve]
 summary: Added scalar-frontmatter conflict detection with per-region counter max resolution, splicing resolved lines in place and wiring the fallback, with full Ginkgo and internal table tests.
 execution_id: git-rest-scalar-autoresolve-exec-063-spec-016-scalar-frontmatter-detect
@@ -7,7 +7,7 @@ dark-factory-version: v0.198.7
 created: "2026-10-19T20:50:37Z"
 queued: "2026-10-19T21:23:08Z"
 started: "2026-10-19T21:33:58Z"
-completed: "2026-10-19T21:37:45Z"
+completed: "2026-10-19T21:39:46Z"
 ---
 
 # Resolve scalar frontmatter conflicts: per-region detection and counter merge
