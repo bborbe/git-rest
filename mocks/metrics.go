@@ -8,6 +8,10 @@ import (
 )
 
 type FakeMetrics struct {
+	IncAutoresolvedStub        func()
+	incAutoresolvedMutex       sync.RWMutex
+	incAutoresolvedArgsForCall []struct {
+	}
 	IncConflictPathsStub        func(int)
 	incConflictPathsMutex       sync.RWMutex
 	incConflictPathsArgsForCall []struct {
@@ -60,6 +64,30 @@ type FakeMetrics struct {
 	}
 	invocations      map[string][][]interface{}
 	invocationsMutex sync.RWMutex
+}
+
+func (fake *FakeMetrics) IncAutoresolved() {
+	fake.incAutoresolvedMutex.Lock()
+	fake.incAutoresolvedArgsForCall = append(fake.incAutoresolvedArgsForCall, struct {
+	}{})
+	stub := fake.IncAutoresolvedStub
+	fake.recordInvocation("IncAutoresolved", []interface{}{})
+	fake.incAutoresolvedMutex.Unlock()
+	if stub != nil {
+		fake.IncAutoresolvedStub()
+	}
+}
+
+func (fake *FakeMetrics) IncAutoresolvedCallCount() int {
+	fake.incAutoresolvedMutex.RLock()
+	defer fake.incAutoresolvedMutex.RUnlock()
+	return len(fake.incAutoresolvedArgsForCall)
+}
+
+func (fake *FakeMetrics) IncAutoresolvedCalls(stub func()) {
+	fake.incAutoresolvedMutex.Lock()
+	defer fake.incAutoresolvedMutex.Unlock()
+	fake.IncAutoresolvedStub = stub
 }
 
 func (fake *FakeMetrics) IncConflictPaths(arg1 int) {

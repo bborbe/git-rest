@@ -1,8 +1,9 @@
 ---
-status: prompted
+status: verifying
 approved: "2026-10-19T20:45:37Z"
 generating: "2026-10-19T21:22:59Z"
 prompted: "2026-10-19T21:22:59Z"
+verifying: "2026-10-19T21:47:01Z"
 branch: dark-factory/yaml-scalar-conflict-autoresolve
 ---
 

@@ -60,6 +60,13 @@ var PullRescuesTotal = prometheus.NewCounter(prometheus.CounterOpts{
 	Help: "Total number of dirty-working-tree rescues performed during pull (working-tree state captured on a rescue/<timestamp> branch and pushed, then the working tree returned to the upstream state).",
 })
 
+// AutoresolvedTotal counts conflicted paths resolved by the scalar-frontmatter
+// rule (a conflict confined to single-line scalar frontmatter keys) during pull.
+var AutoresolvedTotal = prometheus.NewCounter(prometheus.CounterOpts{
+	Name: "git_rest_autoresolved_total",
+	Help: "Total conflicted paths auto-resolved by the scalar-frontmatter rule during pull.",
+})
+
 // ResolverFailuresTotal counts conflict-resolver failures by category.
 // Categories: yaml_parse_failed, no_frontmatter, write_failed, git_add_failed,
 // quarantine_io_failed, unsafe_path, nested_source. The quarantine_io_failed bucket covers
@@ -84,6 +91,7 @@ func init() {
 		QuarantinedFilesTotal,
 		QuarantinedBacklog,
 		PullRescuesTotal,
+		AutoresolvedTotal,
 	)
 	for _, op := range []string{"write_file", "delete_file", "read_file", "list_files", "pull", "fetch", "push", "rebase"} {
 		GitOperationErrors.WithLabelValues(op, "").Add(0)
@@ -118,6 +126,10 @@ func init() {
 	// QuarantinedFilesTotal: the series is registered at init() time so /metrics
 	// exposes it as 0 before the first rescue has ever happened.
 	PullRescuesTotal.Add(0)
+	// Explicit .Add(0) on the unlabeled autoresolved counter, mirroring
+	// QuarantinedFilesTotal: the series is registered at init() time so /metrics
+	// exposes it as 0 before the first auto-resolution has ever happened.
+	AutoresolvedTotal.Add(0)
 	for _, category := range []string{
 		"yaml_parse_failed",
 		"no_frontmatter",
@@ -157,6 +169,10 @@ type Metrics interface {
 	// was captured on a rescue/<timestamp> branch and pushed to the upstream
 	// remote, and the working tree was then returned to the upstream state.
 	IncPullRescue()
+	// IncAutoresolved records one conflicted path auto-resolved by the
+	// scalar-frontmatter rule. Called once per path, after the file is written and
+	// staged.
+	IncAutoresolved()
 }
 
 // NewMetrics returns a Prometheus-backed Metrics implementation.
@@ -204,4 +220,8 @@ func (p *prometheusMetrics) SetQuarantinedBacklog(count int) {
 
 func (p *prometheusMetrics) IncPullRescue() {
 	PullRescuesTotal.Inc()
+}
+
+func (p *prometheusMetrics) IncAutoresolved() {
+	AutoresolvedTotal.Inc()
 }

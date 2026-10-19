@@ -45,12 +45,17 @@ const (
 // counter, emits a Warningf log line naming the path, and returns ErrConflictResolutionFailed.
 // The caller (the puller) runs `git merge --abort` and surfaces the sentinel.
 func NewYAMLMergeResolver(repoPath string, m metrics.Metrics) ConflictResolver {
-	return &yamlMergeResolver{repoPath: repoPath, metrics: m}
+	return &yamlMergeResolver{
+		repoPath:  repoPath,
+		metrics:   m,
+		sideTimes: gitMergeSideTimes(repoPath),
+	}
 }
 
 type yamlMergeResolver struct {
-	repoPath string
-	metrics  metrics.Metrics
+	repoPath  string
+	metrics   metrics.Metrics
+	sideTimes func(ctx context.Context) (ours int64, theirs int64, err error)
 }
 
 // Resolve handles each conflicted path in order. The first path that cannot be resolved
@@ -171,6 +176,131 @@ func (r *yamlMergeResolver) runGitAdd(ctx context.Context, path string) error {
 		return errors.Wrap(ctx, ErrConflictResolutionFailed, "git add merged file")
 	}
 	return nil
+}
+
+// gitMergeSideTimes returns the committer timestamps of the merge's two
+// parents: HEAD (ours) and the merge head (theirs). It reads git objects only.
+func gitMergeSideTimes(repoPath string) func(
+	ctx context.Context,
+) (ours int64, theirs int64, err error) {
+	return func(ctx context.Context) (int64, int64, error) {
+		oursSHA, err := gitRevParseSingle(ctx, repoPath, "HEAD")
+		if err != nil {
+			return 0, 0, err
+		}
+		theirsSHA, err := gitMergeHeadSHA(ctx, repoPath)
+		if err != nil {
+			return 0, 0, err
+		}
+		oursTime, err := gitCommitTimestamp(ctx, repoPath, oursSHA)
+		if err != nil {
+			return 0, 0, err
+		}
+		theirsTime, err := gitCommitTimestamp(ctx, repoPath, theirsSHA)
+		if err != nil {
+			return 0, 0, err
+		}
+		return oursTime, theirsTime, nil
+	}
+}
+
+// gitRevParseSingle runs `git rev-parse <revision>` and requires exactly one
+// non-empty output line.
+func gitRevParseSingle(ctx context.Context, repoPath, revision string) (string, error) {
+	out, err := runGitOutput(ctx, repoPath, "rev-parse", revision)
+	if err != nil {
+		return "", err
+	}
+	trimmed := strings.TrimSpace(out)
+	if trimmed == "" || strings.Contains(trimmed, "\n") {
+		return "", errors.Errorf(
+			ctx,
+			"git rev-parse %s did not return exactly one line",
+			revision,
+		)
+	}
+	return trimmed, nil
+}
+
+// gitMergeHeadSHA locates the merge-head file with `git rev-parse --git-path`
+// and reads it. `git rev-parse` on the merge head itself prints only the first
+// commit id of a multi-valued file, so the file is read and counted instead.
+func gitMergeHeadSHA(ctx context.Context, repoPath string) (string, error) {
+	out, err := runGitOutput(ctx, repoPath, "rev-parse", "--git-path", "MERGE_HEAD")
+	if err != nil {
+		return "", errors.Wrap(ctx, err, "resolve merge-head file path")
+	}
+	mergeHeadPath := strings.TrimSpace(out)
+	if mergeHeadPath == "" {
+		return "", errors.New(ctx, "resolve merge-head file path: empty result")
+	}
+	if !filepath.IsAbs(mergeHeadPath) {
+		mergeHeadPath = filepath.Join(repoPath, mergeHeadPath)
+	}
+
+	// #nosec G304 -- path comes from git rev-parse --git-path, not user input
+	raw, err := os.ReadFile(mergeHeadPath)
+	if err != nil {
+		return "", errors.Wrapf(ctx, err, "read merge-head file %q", mergeHeadPath)
+	}
+	ids := nonEmptyLines(string(raw))
+	if len(ids) != 1 {
+		return "", errors.Errorf(
+			ctx,
+			"merge-head file %q holds %d commit ids, want exactly 1",
+			mergeHeadPath,
+			len(ids),
+		)
+	}
+	return ids[0], nil
+}
+
+// nonEmptyLines splits content into trimmed, non-empty lines.
+func nonEmptyLines(content string) []string {
+	lines := strings.Split(content, "\n")
+	out := make([]string, 0, len(lines))
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		out = append(out, trimmed)
+	}
+	return out
+}
+
+// gitCommitTimestamp returns the committer timestamp of sha as a Unix integer.
+func gitCommitTimestamp(ctx context.Context, repoPath, sha string) (int64, error) {
+	out, err := runGitOutput(ctx, repoPath, "show", "-s", "--format=%ct", sha)
+	if err != nil {
+		return 0, errors.Wrapf(ctx, err, "read committer timestamp of %s", sha)
+	}
+	value, err := strconv.ParseInt(strings.TrimSpace(out), 10, 64)
+	if err != nil {
+		return 0, errors.Wrapf(ctx, err, "parse committer timestamp of %s", sha)
+	}
+	return value, nil
+}
+
+// runGitOutput runs git in repoPath and returns its combined output. It mirrors
+// runGitAdd's subprocess handling.
+func runGitOutput(ctx context.Context, repoPath string, args ...string) (string, error) {
+	// #nosec G204 -- git binary is hardcoded; args are internal
+	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd.Dir = repoPath
+	var buf bytes.Buffer
+	cmd.Stdout = &buf
+	cmd.Stderr = &buf
+	if err := cmd.Run(); err != nil {
+		return "", errors.Wrapf(
+			ctx,
+			err,
+			"git %s failed: %s",
+			strings.Join(args, " "),
+			strings.TrimSpace(buf.String()),
+		)
+	}
+	return buf.String(), nil
 }
 
 // safePath joins the repo root with the conflict-reported path, rejects absolute
@@ -588,9 +718,15 @@ func integerValue(node *yaml.Node) (int64, bool) {
 }
 
 // resolveScalarEntry returns the replacement line for one key in one region.
+// newerTheirs is consulted only when the counter rule does not apply; it reports
+// whether the theirs side is strictly newer and whether that could be decided.
 // ok is false when the rule cannot decide this key, which makes the whole file
 // ineligible.
-func resolveScalarEntry(key string, ours, theirs scalarEntry) (line string, ok bool) {
+func resolveScalarEntry(
+	key string,
+	ours, theirs scalarEntry,
+	newerTheirs func() (theirsNewer bool, ok bool),
+) (line string, ok bool) {
 	if isCounterKey(key) {
 		oursValue, oursOK := integerValue(ours.value)
 		theirsValue, theirsOK := integerValue(theirs.value)
@@ -602,7 +738,15 @@ func resolveScalarEntry(key string, ours, theirs scalarEntry) (line string, ok b
 			return key + ": " + strconv.FormatInt(maxValue, 10), true
 		}
 	}
-	return "", false
+
+	theirsNewer, timesOK := newerTheirs()
+	if !timesOK {
+		return "", false
+	}
+	if theirsNewer {
+		return theirs.line, true
+	}
+	return ours.line, true
 }
 
 // spliceScalarRegions returns the original file with each conflict region
@@ -640,6 +784,30 @@ func (r *yamlMergeResolver) applyScalarFrontmatterRule(
 		return false, nil
 	}
 
+	var (
+		timesLoaded bool
+		timesOK     bool
+		theirsNewer bool
+	)
+	newerTheirs := func() (bool, bool) {
+		if !timesLoaded {
+			timesLoaded = true
+			oursT, theirsT, err := r.sideTimes(ctx)
+			if err != nil {
+				glog.Warningf(
+					"yaml-merge-resolver: %q merge-parent timestamps unavailable: %v",
+					path,
+					err,
+				)
+				timesOK = false
+			} else {
+				timesOK = true
+				theirsNewer = theirsT > oursT
+			}
+		}
+		return theirsNewer, timesOK
+	}
+
 	replacements := make([][]string, 0, len(regions))
 	for _, region := range regions {
 		resolved := make([]string, 0, len(region.ours))
@@ -648,6 +816,7 @@ func (r *yamlMergeResolver) applyScalarFrontmatterRule(
 				oursEntry.key,
 				oursEntry.entry,
 				region.theirs[oursEntry.key],
+				newerTheirs,
 			)
 			if !resolvedOK {
 				return false, nil
@@ -675,5 +844,6 @@ func (r *yamlMergeResolver) applyScalarFrontmatterRule(
 	if err := r.runGitAdd(ctx, path); err != nil {
 		return true, err
 	}
+	r.metrics.IncAutoresolved()
 	return true, nil
 }
