@@ -77,6 +77,101 @@ func setupYAMLConflictRepo(
 	return dir, relPath, cleanup
 }
 
+// setupScalarMergeRepo builds a real repo whose note.md is left in a genuine
+// conflicted merge. base, ours and theirs are full file contents. oursDate and
+// theirsDate set GIT_AUTHOR_DATE and GIT_COMMITTER_DATE (RFC3339) on the
+// respective commits; an empty string leaves the commit date at the current
+// time. Returns workDir, the repo-relative path, and a cleanup func.
+func setupScalarMergeRepo(
+	base, ours, theirs, oursDate, theirsDate string,
+) (workDir, relPath string, cleanup func()) {
+	dir, err := os.MkdirTemp("", "scalar-merge-test-*")
+	Expect(err).NotTo(HaveOccurred())
+
+	runWithDate := func(date, name string, args ...string) {
+		cmd := exec.Command(name, args...)
+		cmd.Dir = dir
+		if date != "" {
+			cmd.Env = append(
+				os.Environ(),
+				"GIT_AUTHOR_DATE="+date,
+				"GIT_COMMITTER_DATE="+date,
+			)
+		}
+		out, runErr := cmd.CombinedOutput()
+		Expect(runErr).NotTo(HaveOccurred(), "%s %v: %s", name, args, string(out))
+	}
+	run := func(name string, args ...string) {
+		runWithDate("", name, args...)
+	}
+
+	run("git", "init", "-q", "-b", "main")
+	run("git", "config", "user.email", "test@example.com")
+	run("git", "config", "user.name", "test")
+
+	relPath = "note.md"
+	abs := filepath.Join(dir, relPath)
+
+	Expect(os.WriteFile(abs, []byte(base), 0o600)).To(Succeed())
+	run("git", "add", "--", relPath)
+	run("git", "commit", "-q", "-m", "base")
+
+	run("git", "checkout", "-q", "-b", "theirs")
+	Expect(os.WriteFile(abs, []byte(theirs), 0o600)).To(Succeed())
+	runWithDate(theirsDate, "git", "add", "--", relPath)
+	runWithDate(theirsDate, "git", "commit", "-q", "-m", "theirs")
+
+	run("git", "checkout", "-q", "main")
+	Expect(os.WriteFile(abs, []byte(ours), 0o600)).To(Succeed())
+	runWithDate(oursDate, "git", "add", "--", relPath)
+	runWithDate(oursDate, "git", "commit", "-q", "-m", "ours")
+
+	cmd := exec.Command("git", "merge", "--no-edit", "theirs")
+	cmd.Dir = dir
+	_ = cmd.Run() // non-zero exit expected
+
+	content, readErr := os.ReadFile(abs)
+	Expect(readErr).NotTo(HaveOccurred())
+	Expect(string(content)).To(ContainSubstring("<<<<<<<"))
+
+	cleanup = func() { _ = os.RemoveAll(dir) }
+	return dir, relPath, cleanup
+}
+
+// setupHandWrittenConflict builds a repo with the given repo-relative path
+// committed as a base file and then overwritten with a hand-written conflicted
+// body (staged, not committed), so the resolver sees exactly the bytes given.
+func setupHandWrittenConflict(
+	path, conflicted string,
+) (workDir, relPath string, cleanup func()) {
+	dir, err := os.MkdirTemp("", "handwritten-conflict-test-*")
+	Expect(err).NotTo(HaveOccurred())
+
+	run := func(name string, args ...string) {
+		cmd := exec.Command(name, args...)
+		cmd.Dir = dir
+		out, runErr := cmd.CombinedOutput()
+		Expect(runErr).NotTo(HaveOccurred(), "%s %v: %s", name, args, string(out))
+	}
+
+	run("git", "init", "-q", "-b", "main")
+	run("git", "config", "user.email", "test@example.com")
+	run("git", "config", "user.name", "test")
+
+	relPath = path
+	abs := filepath.Join(dir, relPath)
+	Expect(os.MkdirAll(filepath.Dir(abs), 0o750)).To(Succeed())
+	Expect(os.WriteFile(abs, []byte("base\n"), 0o600)).To(Succeed())
+	run("git", "add", "--", relPath)
+	run("git", "commit", "-q", "-m", "base")
+
+	Expect(os.WriteFile(abs, []byte(conflicted), 0o600)).To(Succeed())
+	run("git", "add", "--", relPath)
+
+	cleanup = func() { _ = os.RemoveAll(dir) }
+	return dir, relPath, cleanup
+}
+
 // parseFrontmatterOf reads the staged file's frontmatter (the YAML block between the
 // first two "---" delimiters) and returns it as a map.
 func parseFrontmatterOf(path string) map[string]interface{} {
@@ -404,6 +499,261 @@ var _ = Describe("YAMLMergeResolver", func() {
 					"merged file must not contain double `---` opener")
 			},
 		)
+	})
+
+	Describe("Scalar frontmatter rule", func() {
+		scalarFixture := func(ours, theirs string) string {
+			return "---\n<<<<<<< HEAD\n" + ours + "\n=======\n" + theirs +
+				"\n>>>>>>> theirs\ntitle: probe\n---\nbody\n"
+		}
+
+		It("AC1: resolves a counter conflict in place", func() {
+			base := "---\ntrigger_count: 9\ntitle: probe\n---\nbody\n"
+			ours := "---\ntrigger_count: 3\ntitle: probe\n---\nbody\n"
+			theirs := "---\ntrigger_count: 0\ntitle: probe\n---\nbody\n"
+			workDir, rel, cleanup := setupScalarMergeRepo(base, ours, theirs, "", "")
+			defer cleanup()
+
+			r := git.NewYAMLMergeResolver(workDir, fakeMetrics)
+			Expect(r.Resolve(ctx, []string{rel})).To(Succeed())
+
+			written, err := os.ReadFile(filepath.Join(workDir, rel))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(string(written)).To(Equal("---\ntrigger_count: 3\ntitle: probe\n---\nbody\n"))
+
+			cmd := exec.Command("git", "diff", "--name-only", "--diff-filter=U")
+			cmd.Dir = workDir
+			out, err := cmd.CombinedOutput()
+			Expect(err).NotTo(HaveOccurred())
+			Expect(strings.TrimSpace(string(out))).To(BeEmpty())
+			Expect(fakeMetrics.IncResolverFailureCallCount()).To(Equal(0))
+		})
+
+		DescribeTable(
+			"AC2: counter keys take the greater value",
+			func(oursLine, theirsLine, expected string) {
+				workDir, rel, cleanup := setupHandWrittenConflict(
+					"note.md",
+					scalarFixture(oursLine, theirsLine),
+				)
+				defer cleanup()
+
+				r := git.NewYAMLMergeResolver(workDir, fakeMetrics)
+				Expect(r.Resolve(ctx, []string{rel})).To(Succeed())
+
+				written, err := os.ReadFile(filepath.Join(workDir, rel))
+				Expect(err).NotTo(HaveOccurred())
+				lines := strings.Split(string(written), "\n")
+				Expect(lines).To(ContainElement(expected))
+				Expect(string(written)).NotTo(ContainSubstring("<<<<<<<"))
+				Expect(string(written)).NotTo(ContainSubstring(">>>>>>>"))
+			},
+			Entry("retry_count", "retry_count: 1", "retry_count: 5", "retry_count: 5"),
+			Entry(
+				"metrics_ prefix",
+				"metrics_retries: 2",
+				"metrics_retries: 7",
+				"metrics_retries: 7",
+			),
+			Entry("trigger_count", "trigger_count: 3", "trigger_count: 0", "trigger_count: 3"),
+		)
+
+		DescribeTable("AC4: rejection shapes keep quarantining",
+			func(conflicted string) {
+				workDir, rel, cleanup := setupHandWrittenConflict("note.md", conflicted)
+				defer cleanup()
+
+				abs := filepath.Join(workDir, rel)
+				before, err := os.ReadFile(abs)
+				Expect(err).NotTo(HaveOccurred())
+
+				r := git.NewYAMLMergeResolver(workDir, fakeMetrics)
+				err = r.Resolve(ctx, []string{rel})
+				Expect(stderrors.Is(err, git.ErrConflictResolutionFailed)).To(BeTrue())
+				Expect(fakeMetrics.IncResolverFailureCallCount()).To(Equal(1))
+				Expect(fakeMetrics.IncResolverFailureArgsForCall(0)).To(Equal("no_frontmatter"))
+
+				after, err := os.ReadFile(abs)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(after).To(Equal(before))
+			},
+			Entry("list item",
+				"---\n<<<<<<< HEAD\n- a\n=======\n- b\n>>>>>>> theirs\ntitle: probe\n---\nbody\n"),
+			Entry("block scalar",
+				"---\n<<<<<<< HEAD\ndesc: |\n  line one\n=======\n"+
+					"desc: plain\n>>>>>>> theirs\ntitle: probe\n---\nbody\n"),
+			Entry("nested mapping",
+				"---\n<<<<<<< HEAD\nowner:\n  name: a\n=======\n"+
+					"owner:\n  name: b\n>>>>>>> theirs\ntitle: probe\n---\nbody\n"),
+			Entry("flow collection",
+				"---\n<<<<<<< HEAD\ntags: [a, b]\n=======\ntags: [c]\n"+
+					">>>>>>> theirs\ntitle: probe\n---\nbody\n"),
+			Entry("outside frontmatter",
+				"---\ntitle: probe\n---\n<<<<<<< HEAD\nbody a\n=======\nbody b\n>>>>>>> theirs\n"),
+			Entry("one-sided key",
+				"---\n<<<<<<< HEAD\na: 1\nb: 2\n=======\na: 1\n"+
+					">>>>>>> theirs\ntitle: probe\n---\nbody\n"),
+			Entry("duplicate key",
+				"---\n<<<<<<< HEAD\na: 1\na: 2\n=======\na: 3\n"+
+					">>>>>>> theirs\ntitle: probe\n---\nbody\n"),
+		)
+
+		It("AC5: one bad region makes the whole file quarantine", func() {
+			conflicted := "---\n" +
+				"<<<<<<< HEAD\ntrigger_count: 3\n=======\ntrigger_count: 0\n>>>>>>> theirs\n" +
+				"<<<<<<< HEAD\n- a\n=======\n- b\n>>>>>>> theirs\n" +
+				"---\nbody\n"
+			workDir, rel, cleanup := setupHandWrittenConflict("note.md", conflicted)
+			defer cleanup()
+
+			abs := filepath.Join(workDir, rel)
+			before, err := os.ReadFile(abs)
+			Expect(err).NotTo(HaveOccurred())
+
+			r := git.NewYAMLMergeResolver(workDir, fakeMetrics)
+			err = r.Resolve(ctx, []string{rel})
+			Expect(stderrors.Is(err, git.ErrConflictResolutionFailed)).To(BeTrue())
+			Expect(fakeMetrics.IncResolverFailureArgsForCall(0)).To(Equal("no_frontmatter"))
+
+			after, err := os.ReadFile(abs)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(after).To(Equal(before))
+		})
+
+		It("resolves multiple counter regions independently", func() {
+			conflicted := "---\n" +
+				"<<<<<<< HEAD\ntrigger_count: 3\n=======\ntrigger_count: 0\n>>>>>>> theirs\n" +
+				"title: probe\n" +
+				"<<<<<<< HEAD\nretry_count: 1\n=======\nretry_count: 5\n>>>>>>> theirs\n" +
+				"---\nbody\n"
+			workDir, rel, cleanup := setupHandWrittenConflict("note.md", conflicted)
+			defer cleanup()
+
+			r := git.NewYAMLMergeResolver(workDir, fakeMetrics)
+			Expect(r.Resolve(ctx, []string{rel})).To(Succeed())
+
+			written, err := os.ReadFile(filepath.Join(workDir, rel))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(string(written)).To(Equal(
+				"---\ntrigger_count: 3\ntitle: probe\nretry_count: 5\n---\nbody\n",
+			))
+		})
+
+		It("AC6: preserves every line outside the conflict region byte-for-byte", func() {
+			conflicted := "---\n" +
+				"<<<<<<< HEAD\ntrigger_count: 3\n=======\ntrigger_count: 0\n>>>>>>> theirs\n" +
+				"title: probe\ntags:\n  - x\n---\nbody line one\nbody line two\n"
+			workDir, rel, cleanup := setupHandWrittenConflict("note.md", conflicted)
+			defer cleanup()
+
+			r := git.NewYAMLMergeResolver(workDir, fakeMetrics)
+			Expect(r.Resolve(ctx, []string{rel})).To(Succeed())
+
+			written, err := os.ReadFile(filepath.Join(workDir, rel))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(string(written)).To(Equal(
+				"---\ntrigger_count: 3\ntitle: probe\ntags:\n  - x\n---\nbody line one\nbody line two\n",
+			))
+		})
+
+		It("leaves non-markdown files on the pre-existing path", func() {
+			conflicted := scalarFixture("trigger_count: 3", "trigger_count: 0")
+			workDir, rel, cleanup := setupHandWrittenConflict("note.txt", conflicted)
+			defer cleanup()
+
+			abs := filepath.Join(workDir, rel)
+			before, err := os.ReadFile(abs)
+			Expect(err).NotTo(HaveOccurred())
+
+			r := git.NewYAMLMergeResolver(workDir, fakeMetrics)
+			err = r.Resolve(ctx, []string{rel})
+			Expect(stderrors.Is(err, git.ErrConflictResolutionFailed)).To(BeTrue())
+			Expect(fakeMetrics.IncResolverFailureCallCount()).To(Equal(1))
+			Expect(fakeMetrics.IncResolverFailureArgsForCall(0)).To(Equal("no_frontmatter"))
+
+			after, err := os.ReadFile(abs)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(after).To(Equal(before))
+		})
+
+		It("keeps the pre-existing path when an extracted side is empty", func() {
+			conflicted := "---\n" +
+				"<<<<<<< HEAD\n=======\ntrigger_count: 0\n>>>>>>> theirs\n" +
+				"title: probe\n---\nbody\n"
+			workDir, rel, cleanup := setupHandWrittenConflict("note.md", conflicted)
+			defer cleanup()
+
+			abs := filepath.Join(workDir, rel)
+			before, err := os.ReadFile(abs)
+			Expect(err).NotTo(HaveOccurred())
+
+			r := git.NewYAMLMergeResolver(workDir, fakeMetrics)
+			err = r.Resolve(ctx, []string{rel})
+			Expect(stderrors.Is(err, git.ErrConflictResolutionFailed)).To(BeTrue())
+			Expect(fakeMetrics.IncResolverFailureArgsForCall(0)).To(Equal("no_frontmatter"))
+
+			after, err := os.ReadFile(abs)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(after).To(Equal(before))
+		})
+
+		It("rejects a region that crosses the frontmatter/body boundary", func() {
+			conflicted := "---\n<<<<<<< HEAD\ntrigger_count: 3\n---\nbody\n" +
+				"=======\ntrigger_count: 0\n>>>>>>> theirs\n"
+			workDir, rel, cleanup := setupHandWrittenConflict("note.md", conflicted)
+			defer cleanup()
+
+			abs := filepath.Join(workDir, rel)
+			before, err := os.ReadFile(abs)
+			Expect(err).NotTo(HaveOccurred())
+
+			r := git.NewYAMLMergeResolver(workDir, fakeMetrics)
+			err = r.Resolve(ctx, []string{rel})
+			Expect(stderrors.Is(err, git.ErrConflictResolutionFailed)).To(BeTrue())
+			Expect(fakeMetrics.IncResolverFailureArgsForCall(0)).To(Equal("no_frontmatter"))
+
+			after, err := os.ReadFile(abs)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(after).To(Equal(before))
+		})
+
+		It("reports git_add_failed when staging the scalar-resolved file fails", func() {
+			workDir, rel, cleanup := setupHandWrittenConflict(
+				"note.md",
+				scalarFixture("trigger_count: 3", "trigger_count: 0"),
+			)
+			defer cleanup()
+			Expect(os.RemoveAll(filepath.Join(workDir, ".git"))).To(Succeed())
+
+			r := git.NewYAMLMergeResolver(workDir, fakeMetrics)
+			err := r.Resolve(ctx, []string{rel})
+			Expect(stderrors.Is(err, git.ErrConflictResolutionFailed)).To(BeTrue())
+			Expect(fakeMetrics.IncResolverFailureCallCount()).To(Equal(1))
+			Expect(fakeMetrics.IncResolverFailureArgsForCall(0)).To(Equal("git_add_failed"))
+		})
+
+		It("reports write_failed when the scalar-resolved file cannot be written", func() {
+			workDir, rel, cleanup := setupHandWrittenConflict(
+				"note.md",
+				scalarFixture("trigger_count: 3", "trigger_count: 0"),
+			)
+			defer cleanup()
+
+			abs := filepath.Join(workDir, rel)
+			before, err := os.ReadFile(abs)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(os.Chmod(abs, 0o400)).To(Succeed())
+
+			r := git.NewYAMLMergeResolver(workDir, fakeMetrics)
+			err = r.Resolve(ctx, []string{rel})
+			Expect(stderrors.Is(err, git.ErrConflictResolutionFailed)).To(BeTrue())
+			Expect(fakeMetrics.IncResolverFailureCallCount()).To(Equal(1))
+			Expect(fakeMetrics.IncResolverFailureArgsForCall(0)).To(Equal("write_failed"))
+
+			after, err := os.ReadFile(abs)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(after).To(Equal(before))
+		})
 	})
 
 	Describe("Metric pre-initialisation (spec AC: zero-init labels)", func() {
