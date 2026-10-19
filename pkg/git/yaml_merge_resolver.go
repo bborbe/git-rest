@@ -844,5 +844,6 @@ func (r *yamlMergeResolver) applyScalarFrontmatterRule(
 	if err := r.runGitAdd(ctx, path); err != nil {
 		return true, err
 	}
+	r.metrics.IncAutoresolved()
 	return true, nil
 }

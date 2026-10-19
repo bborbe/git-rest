@@ -557,6 +557,7 @@ var _ = Describe("YAMLMergeResolver", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(strings.TrimSpace(string(out))).To(BeEmpty())
 			Expect(fakeMetrics.IncResolverFailureCallCount()).To(Equal(0))
+			Expect(fakeMetrics.IncAutoresolvedCallCount()).To(Equal(1))
 		})
 
 		DescribeTable(
@@ -602,6 +603,7 @@ var _ = Describe("YAMLMergeResolver", func() {
 				Expect(stderrors.Is(err, git.ErrConflictResolutionFailed)).To(BeTrue())
 				Expect(fakeMetrics.IncResolverFailureCallCount()).To(Equal(1))
 				Expect(fakeMetrics.IncResolverFailureArgsForCall(0)).To(Equal("no_frontmatter"))
+				Expect(fakeMetrics.IncAutoresolvedCallCount()).To(Equal(0))
 
 				after, err := os.ReadFile(abs)
 				Expect(err).NotTo(HaveOccurred())
@@ -760,6 +762,7 @@ var _ = Describe("YAMLMergeResolver", func() {
 			Expect(stderrors.Is(err, git.ErrConflictResolutionFailed)).To(BeTrue())
 			Expect(fakeMetrics.IncResolverFailureCallCount()).To(Equal(1))
 			Expect(fakeMetrics.IncResolverFailureArgsForCall(0)).To(Equal("git_add_failed"))
+			Expect(fakeMetrics.IncAutoresolvedCallCount()).To(Equal(0))
 		})
 
 		DescribeTable(
@@ -970,7 +973,25 @@ var _ = Describe("YAMLMergeResolver", func() {
 			)
 		})
 
+		It("increments once per resolved path", func() {
+			conflicted := scalarFixture("trigger_count: 3", "trigger_count: 0")
+			workDir, rel, cleanup := setupHandWrittenConflict("note.md", conflicted)
+			defer cleanup()
+			Expect(os.WriteFile(
+				filepath.Join(workDir, "note2.md"),
+				[]byte(conflicted),
+				0o600,
+			)).To(Succeed())
+
+			r := git.NewYAMLMergeResolver(workDir, fakeMetrics)
+			Expect(r.Resolve(ctx, []string{rel, "note2.md"})).To(Succeed())
+			Expect(fakeMetrics.IncAutoresolvedCallCount()).To(Equal(2))
+		})
+
 		It("reports write_failed when the scalar-resolved file cannot be written", func() {
+			if os.Geteuid() == 0 {
+				Skip("requires a non-root user")
+			}
 			workDir, rel, cleanup := setupHandWrittenConflict(
 				"note.md",
 				scalarFixture("trigger_count: 3", "trigger_count: 0"),
@@ -987,6 +1008,7 @@ var _ = Describe("YAMLMergeResolver", func() {
 			Expect(stderrors.Is(err, git.ErrConflictResolutionFailed)).To(BeTrue())
 			Expect(fakeMetrics.IncResolverFailureCallCount()).To(Equal(1))
 			Expect(fakeMetrics.IncResolverFailureArgsForCall(0)).To(Equal("write_failed"))
+			Expect(fakeMetrics.IncAutoresolvedCallCount()).To(Equal(0))
 
 			after, err := os.ReadFile(abs)
 			Expect(err).NotTo(HaveOccurred())

@@ -8,6 +8,10 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 * MINOR version when you add functionality in a backwards-compatible manner, and
 * PATCH version when you make backwards-compatible bug fixes.
 
+## Unreleased
+
+- feat: Auto-resolve merge conflicts confined to single-line scalar frontmatter keys. A conflict whose hunks lie entirely inside a markdown file's YAML frontmatter and whose lines are all `key: value` scalars now resolves in place instead of quarantining: allowlisted counters (`trigger_count`, `retry_count`, `metrics_*`) take the greater integer, every other scalar takes the newer merge parent's value, and each resolved path increments `git_rest_autoresolved_total`. Non-scalar hunks, hunks outside the frontmatter, one-sided keys and duplicate keys keep quarantining.
+
 ## v0.29.6
 
 - fix: Restore the canonical path after a resolver-failure quarantine instead of deleting it. `quarantineOne` ran `git rm -- <path>` to clear the conflict and never put the path back, so every resolver-failure quarantine removed a live file from the repository while the commit message's `quarantined=[…]` read as "preserved alongside" — the canonical is now restored from `HEAD` after the conflicted bytes are written to `_conflicts/`, and a failed restore still reports rather than failing silently.

@@ -128,6 +128,22 @@ var _ = Describe("PullRescuesTotal", func() {
 	})
 })
 
+var _ = Describe("AutoresolvedTotal", func() {
+	It("is registered with value 0 in the default registry at init() time", func() {
+		value, found := gatherCounterPresent("git_rest_autoresolved_total")
+		Expect(found).To(BeTrue(), "the counter series must exist at init() time")
+		Expect(value).To(Equal(0.0))
+	})
+
+	It("increments when IncAutoresolved is called via the interface", func() {
+		before := gatherCounter("git_rest_autoresolved_total")
+		m := metrics.NewMetrics()
+		m.IncAutoresolved()
+		after := gatherCounter("git_rest_autoresolved_total")
+		Expect(after - before).To(Equal(1.0))
+	})
+})
+
 var _ = Describe("ResolverFailuresTotal quarantine_io_failed label", func() {
 	It("is pre-initialised to 0 alongside the existing five label values", func() {
 		Expect(gatherCounterVecLabelValue(

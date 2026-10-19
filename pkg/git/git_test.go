@@ -59,6 +59,8 @@ func (n *noopMetrics) SetQuarantinedBacklog(_ int) {}
 
 func (n *noopMetrics) IncPullRescue() {}
 
+func (n *noopMetrics) IncAutoresolved() {}
+
 // initRepo creates a temporary git repo with a local bare remote so that push works.
 func initRepo() (workDir string, cleanup func()) {
 	remoteDir, err := os.MkdirTemp("", "git-remote-*")

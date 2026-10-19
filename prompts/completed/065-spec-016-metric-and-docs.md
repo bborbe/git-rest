@@ -1,8 +1,13 @@
 ---
-status: approved
+status: completed
 spec: [016-yaml-scalar-conflict-autoresolve]
+summary: Added pre-initialised git_rest_autoresolved_total counter, incremented it once per scalar-frontmatter auto-resolved path, regenerated the metrics mock, added tests for success/rejection/failure paths, and documented the rule in CHANGELOG and the deployment guide
+execution_id: git-rest-scalar-autoresolve-exec-065-spec-016-metric-and-docs
+dark-factory-version: v0.198.7
 created: "2026-10-19T20:50:37Z"
 queued: "2026-10-19T21:23:09Z"
+started: "2026-10-19T21:45:10Z"
+completed: "2026-10-19T21:47:00Z"
 ---
 
 # Resolve scalar frontmatter conflicts: autoresolve counter, changelog and docs
