@@ -172,6 +172,36 @@ func setupHandWrittenConflict(
 	return dir, relPath, cleanup
 }
 
+// assertScalarQuarantine writes conflicted into a plain repo, optionally mutates
+// the repo (for example to plant a merge-head file), then asserts that the
+// default resolver quarantines the file untouched under no_frontmatter.
+func assertScalarQuarantine(
+	ctx context.Context,
+	fakeMetrics *mocks.FakeMetrics,
+	conflicted string,
+	mutate func(workDir string),
+) {
+	workDir, rel, cleanup := setupHandWrittenConflict("note.md", conflicted)
+	defer cleanup()
+	if mutate != nil {
+		mutate(workDir)
+	}
+
+	abs := filepath.Join(workDir, rel)
+	before, err := os.ReadFile(abs)
+	Expect(err).NotTo(HaveOccurred())
+
+	r := git.NewYAMLMergeResolver(workDir, fakeMetrics)
+	err = r.Resolve(ctx, []string{rel})
+	Expect(stderrors.Is(err, git.ErrConflictResolutionFailed)).To(BeTrue())
+	Expect(fakeMetrics.IncResolverFailureCallCount()).To(Equal(1))
+	Expect(fakeMetrics.IncResolverFailureArgsForCall(0)).To(Equal("no_frontmatter"))
+
+	after, err := os.ReadFile(abs)
+	Expect(err).NotTo(HaveOccurred())
+	Expect(after).To(Equal(before))
+}
+
 // parseFrontmatterOf reads the staged file's frontmatter (the YAML block between the
 // first two "---" delimiters) and returns it as a map.
 func parseFrontmatterOf(path string) map[string]interface{} {
@@ -730,6 +760,214 @@ var _ = Describe("YAMLMergeResolver", func() {
 			Expect(stderrors.Is(err, git.ErrConflictResolutionFailed)).To(BeTrue())
 			Expect(fakeMetrics.IncResolverFailureCallCount()).To(Equal(1))
 			Expect(fakeMetrics.IncResolverFailureArgsForCall(0)).To(Equal("git_add_failed"))
+		})
+
+		DescribeTable(
+			"AC2/AC3: counters take the greater value, other scalars take the newer side",
+			func(oursLine, theirsLine string, oursTime, theirsTime int64, expected string) {
+				workDir, rel, cleanup := setupHandWrittenConflict(
+					"note.md",
+					"---\n<<<<<<< HEAD\n"+oursLine+"\n=======\n"+theirsLine+
+						"\n>>>>>>> theirs\n---\nbody\n",
+				)
+				defer cleanup()
+
+				r := git.NewYAMLMergeResolverWithSideTimes(
+					workDir,
+					fakeMetrics,
+					oursTime,
+					theirsTime,
+				)
+				Expect(r.Resolve(ctx, []string{rel})).To(Succeed())
+
+				written, err := os.ReadFile(filepath.Join(workDir, rel))
+				Expect(err).NotTo(HaveOccurred())
+				lines := strings.Split(string(written), "\n")
+				Expect(lines).To(ContainElement(expected))
+				Expect(string(written)).NotTo(ContainSubstring("<<<<<<<"))
+				Expect(string(written)).NotTo(ContainSubstring(">>>>>>>"))
+			},
+			Entry("counter wins even when ours is newer",
+				"trigger_count: 3", "trigger_count: 0", int64(10), int64(5),
+				"trigger_count: 3"),
+			Entry("counter wins when theirs is newer",
+				"trigger_count: 3", "trigger_count: 0", int64(5), int64(10),
+				"trigger_count: 3"),
+			Entry("retry_count takes the greater value",
+				"retry_count: 1", "retry_count: 5", int64(10), int64(5),
+				"retry_count: 5"),
+			Entry("metrics_ prefix takes the greater value",
+				"metrics_retries: 2", "metrics_retries: 7", int64(5), int64(10),
+				"metrics_retries: 7"),
+			Entry("non-counter takes the newer theirs",
+				"assignee: alice", "assignee: bob", int64(5), int64(10),
+				"assignee: bob"),
+			Entry("non-counter keeps the newer ours",
+				"assignee: alice", "assignee: bob", int64(10), int64(5),
+				"assignee: alice"),
+			Entry("non-counter tie keeps ours",
+				"assignee: alice", "assignee: bob", int64(10), int64(10),
+				"assignee: alice"),
+			Entry("unlisted integer takes the newer side",
+				"attempt_count: 1", "attempt_count: 9", int64(5), int64(10),
+				"attempt_count: 9"),
+			Entry("quoted counter falls back to the newer side",
+				`trigger_count: "3"`, "trigger_count: 0", int64(5), int64(10),
+				"trigger_count: 0"),
+		)
+
+		It("AC3: re-emits the newer non-counter line verbatim", func() {
+			workDir, rel, cleanup := setupHandWrittenConflict(
+				"note.md",
+				"---\n<<<<<<< HEAD\nassignee: \"alice\"\n=======\n"+
+					"assignee: \"bob\" # newer\n>>>>>>> theirs\n---\nbody\n",
+			)
+			defer cleanup()
+
+			r := git.NewYAMLMergeResolverWithSideTimes(workDir, fakeMetrics, 5, 10)
+			Expect(r.Resolve(ctx, []string{rel})).To(Succeed())
+
+			written, err := os.ReadFile(filepath.Join(workDir, rel))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(string(written)).To(ContainSubstring(`assignee: "bob" # newer`))
+			Expect(string(written)).NotTo(ContainSubstring(`assignee: "alice"`))
+		})
+
+		It("AC3: git-backed getter picks the newer merge parent", func() {
+			base := "---\nassignee: base\n---\nbody\n"
+			ours := "---\nassignee: alice\n---\nbody\n"
+			theirs := "---\nassignee: bob\n---\nbody\n"
+			workDir, rel, cleanup := setupScalarMergeRepo(
+				base,
+				ours,
+				theirs,
+				"2026-01-01T00:00:00Z",
+				"2026-01-02T00:00:00Z",
+			)
+			defer cleanup()
+
+			r := git.NewYAMLMergeResolver(workDir, fakeMetrics)
+			Expect(r.Resolve(ctx, []string{rel})).To(Succeed())
+
+			written, err := os.ReadFile(filepath.Join(workDir, rel))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(string(written)).To(ContainSubstring("assignee: bob"))
+			Expect(fakeMetrics.IncResolverFailureCallCount()).To(Equal(0))
+		})
+
+		It("AC3: git-backed getter works in a linked worktree", func() {
+			base := "---\nassignee: base\n---\nbody\n"
+			ours := "---\nassignee: alice\n---\nbody\n"
+			theirs := "---\nassignee: bob\n---\nbody\n"
+			workDir, _, cleanup := setupScalarMergeRepo(
+				base,
+				ours,
+				theirs,
+				"2026-01-01T00:00:00Z",
+				"2026-01-02T00:00:00Z",
+			)
+			defer cleanup()
+
+			// Abort the main-worktree merge so the linked worktree can merge cleanly.
+			runGit := func(dir string, args ...string) string {
+				cmd := exec.Command("git", args...)
+				cmd.Dir = dir
+				out, err := cmd.CombinedOutput()
+				Expect(err).NotTo(HaveOccurred(), "git %v: %s", args, string(out))
+				return strings.TrimSpace(string(out))
+			}
+			runGit(workDir, "merge", "--abort")
+
+			wtDir := workDir + "-wt"
+			defer func() { _ = os.RemoveAll(wtDir) }()
+			runGit(workDir, "worktree", "add", wtDir, "-b", "wt")
+
+			cmd := exec.Command("git", "merge", "--no-edit", "theirs")
+			cmd.Dir = wtDir
+			_ = cmd.Run() // non-zero exit expected
+
+			r := git.NewYAMLMergeResolver(wtDir, fakeMetrics)
+			Expect(r.Resolve(ctx, []string{"note.md"})).To(Succeed())
+
+			written, err := os.ReadFile(filepath.Join(wtDir, "note.md"))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(string(written)).To(ContainSubstring("assignee: bob"))
+		})
+
+		It("AC4: missing merge head quarantines with the file untouched", func() {
+			assertScalarQuarantine(
+				ctx,
+				fakeMetrics,
+				"---\n<<<<<<< HEAD\nassignee: alice\n=======\n"+
+					"assignee: bob\n>>>>>>> theirs\n---\nbody\n",
+				nil,
+			)
+		})
+
+		It("AC4: multi-valued merge head quarantines with the file untouched", func() {
+			writeMergeHead := func(workDir string) {
+				cmd := exec.Command("git", "rev-parse", "HEAD")
+				cmd.Dir = workDir
+				out, err := cmd.CombinedOutput()
+				Expect(err).NotTo(HaveOccurred(), "git rev-parse HEAD: %s", string(out))
+				sha := strings.TrimSpace(string(out))
+				Expect(os.WriteFile(
+					filepath.Join(workDir, ".git", "MERGE_HEAD"),
+					[]byte(sha+"\n"+sha+"\n"),
+					0o600,
+				)).To(Succeed())
+			}
+			assertScalarQuarantine(
+				ctx,
+				fakeMetrics,
+				"---\n<<<<<<< HEAD\nassignee: alice\n=======\n"+
+					"assignee: bob\n>>>>>>> theirs\n---\nbody\n",
+				writeMergeHead,
+			)
+		})
+
+		It("AC4: unreadable merge head timestamp quarantines", func() {
+			writeMergeHead := func(workDir string) {
+				Expect(os.WriteFile(
+					filepath.Join(workDir, ".git", "MERGE_HEAD"),
+					[]byte(strings.Repeat("0", 40)+"\n"),
+					0o600,
+				)).To(Succeed())
+			}
+			assertScalarQuarantine(
+				ctx,
+				fakeMetrics,
+				"---\n<<<<<<< HEAD\nassignee: alice\n=======\n"+
+					"assignee: bob\n>>>>>>> theirs\n---\nbody\n",
+				writeMergeHead,
+			)
+		})
+
+		It("counter-only file resolves without a merge parent", func() {
+			workDir, rel, cleanup := setupHandWrittenConflict(
+				"note.md",
+				"---\n<<<<<<< HEAD\ntrigger_count: 3\n=======\n"+
+					"trigger_count: 0\n>>>>>>> theirs\n---\nbody\n",
+			)
+			defer cleanup()
+
+			r := git.NewYAMLMergeResolver(workDir, fakeMetrics)
+			Expect(r.Resolve(ctx, []string{rel})).To(Succeed())
+
+			written, err := os.ReadFile(filepath.Join(workDir, rel))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(string(written)).To(Equal("---\ntrigger_count: 3\n---\nbody\n"))
+		})
+
+		It("AC5: an undecidable timestamp quarantines the whole file", func() {
+			assertScalarQuarantine(
+				ctx,
+				fakeMetrics,
+				"---\n<<<<<<< HEAD\ntrigger_count: 3\n=======\ntrigger_count: 0\n"+
+					">>>>>>> theirs\n<<<<<<< HEAD\nassignee: alice\n=======\n"+
+					"assignee: bob\n>>>>>>> theirs\n---\nbody\n",
+				nil,
+			)
 		})
 
 		It("reports write_failed when the scalar-resolved file cannot be written", func() {

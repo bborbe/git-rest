@@ -1,8 +1,13 @@
 ---
-status: approved
+status: completed
 spec: [016-yaml-scalar-conflict-autoresolve]
+summary: Added a git-backed merge-parent timestamp getter and extended the scalar frontmatter rule so counters take the max while every other scalar takes the newer parent's raw line, with stubbed-constructor tests, a real-git end-to-end test, a linked-worktree variant, and quarantine coverage for missing/multi-valued/unreadable merge heads.
+execution_id: git-rest-scalar-autoresolve-exec-064-spec-016-newer-side-rule
+dark-factory-version: v0.198.7
 created: "2026-10-19T20:50:37Z"
 queued: "2026-10-19T21:23:08Z"
+started: "2026-10-19T21:43:20Z"
+completed: "2026-10-19T21:45:08Z"
 ---
 
 # Resolve scalar frontmatter conflicts: newer-side rule and timestamp getter
