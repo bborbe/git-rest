@@ -154,6 +154,8 @@ func init() {
 			RefRequestsTotal.WithLabelValues(op, result).Add(0)
 		}
 	}
+	// Only PUT carries a body, so 413 (body too large) is a put-only result.
+	RefRequestsTotal.WithLabelValues("put", "413").Add(0)
 }
 
 // Metrics records git operation instrumentation.

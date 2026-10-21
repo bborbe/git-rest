@@ -156,8 +156,11 @@ type Git interface {
 	ConfigurePackMemory(ctx context.Context) error
 	Init(ctx context.Context) error
 	// ListClaimRefs returns the claim refs under refs/<prefix>, read live from the
-	// origin. A fetch that fails because the ref moved or was deleted between
-	// listing and fetching drops that entry and logs one WARN.
+	// origin. All listed commits are fetched in one batched git invocation; when
+	// that fetch fails, each commit is fetched on its own. An entry is dropped
+	// with one WARN only when a re-list shows its ref vanished or moved; a fetch
+	// failure for a ref that still points at the listed sha is returned as an
+	// error.
 	ListClaimRefs(ctx context.Context, prefix string) ([]ClaimRef, error)
 	// PutClaimRef creates or renews refs/<key> with the origin's compare-and-swap.
 	// It returns the new commit sha. A lease mismatch returns ErrRefConflict.
@@ -193,7 +196,7 @@ type git struct {
 	currentDateTimeGetter libtime.CurrentDateTimeGetter
 	sshKeyPath            SSHKeyPath
 	resolver              ConflictResolver
-	origin                claimOrigin
+	origin                ClaimOrigin
 }
 
 // validatePath rejects empty, absolute, path-traversal, and .git paths.

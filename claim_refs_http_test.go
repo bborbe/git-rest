@@ -167,7 +167,7 @@ func claimInvalidPutBodies() []claimInvalidPutBody {
 }
 
 func refCounterSnapshot() map[string]float64 {
-	snapshot := make(map[string]float64, 12)
+	snapshot := make(map[string]float64, 13)
 	for _, op := range []string{"get", "put", "delete"} {
 		for _, result := range []string{"200", "400", "409", "500"} {
 			snapshot[op+"/"+result] = testutil.ToFloat64(
@@ -175,6 +175,9 @@ func refCounterSnapshot() map[string]float64 {
 			)
 		}
 	}
+	snapshot["put/413"] = testutil.ToFloat64(
+		metrics.RefRequestsTotal.WithLabelValues("put", "413"),
+	)
 	return snapshot
 }
 

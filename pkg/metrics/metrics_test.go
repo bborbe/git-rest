@@ -161,7 +161,7 @@ var _ = Describe("ResolverFailuresTotal nested_source label", func() {
 })
 
 var _ = Describe("RefRequestsTotal", func() {
-	It("exposes all twelve op/result series at 0 before any ref request", func() {
+	It("exposes all thirteen op/result series at 0 before any ref request", func() {
 		mfs, err := prometheus.DefaultGatherer.Gather()
 		Expect(err).NotTo(HaveOccurred())
 
@@ -182,11 +182,12 @@ var _ = Describe("RefRequestsTotal", func() {
 				Expect(metric.GetCounter().GetValue()).To(Equal(0.0), key)
 			}
 		}
-		Expect(count).To(Equal(12))
+		Expect(count).To(Equal(13))
 		for _, op := range []string{"get", "put", "delete"} {
 			for _, result := range []string{"200", "400", "409", "500"} {
 				Expect(seen[op+"/"+result]).To(BeTrue(), op+"/"+result)
 			}
 		}
+		Expect(seen["put/413"]).To(BeTrue(), "put/413")
 	})
 })

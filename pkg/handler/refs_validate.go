@@ -9,7 +9,6 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
-	"regexp"
 	"strings"
 	"time"
 
@@ -21,9 +20,6 @@ import (
 
 // refBodyLimit is the maximum accepted request body for a claim-ref write.
 const refBodyLimit = 64 * 1024
-
-// refExpectedSHAPattern matches a full-length lowercase hex object id.
-var refExpectedSHAPattern = regexp.MustCompile(`^([0-9a-f]{40}|[0-9a-f]{64})$`)
 
 // validateRefPrefix rejects a prefix that is empty, outside claims/, or that
 // could be interpreted as a glob or a traversal by the origin.
@@ -55,7 +51,7 @@ func validateRefRequest(ctx context.Context, request git.ClaimRefRequest) error 
 	if _, err := time.Parse(time.RFC3339, request.LeaseUntil); err != nil {
 		return errors.Wrap(ctx, err, "lease_until must be RFC3339")
 	}
-	if request.ExpectedSHA != "" && !refExpectedSHAPattern.MatchString(request.ExpectedSHA) {
+	if request.ExpectedSHA != "" && !git.IsObjectID(request.ExpectedSHA) {
 		return errors.Errorf(ctx, "expected_sha must be 40 or 64 lowercase hex characters")
 	}
 	return nil
@@ -67,7 +63,7 @@ func validateRefExpectedSHA(ctx context.Context, sha string) error {
 	if sha == "" {
 		return errors.Errorf(ctx, "expected_sha must not be empty")
 	}
-	if !refExpectedSHAPattern.MatchString(sha) {
+	if !git.IsObjectID(sha) {
 		return errors.Errorf(ctx, "expected_sha must be 40 or 64 lowercase hex characters")
 	}
 	return nil

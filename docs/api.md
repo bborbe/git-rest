@@ -153,11 +153,16 @@ matches everything below it.
 `nonce` is never returned. A commit whose message is not JSON is still listed,
 with empty `cluster`, `task_id` and `lease_until`, and a warning in the log.
 
+A claim whose ref is deleted or moved between listing and fetching is dropped
+from the result, and a warning is logged. If a claim commit cannot be fetched
+while its ref still points at it, or the origin cannot be re-listed, the request
+answers `500`.
+
 | Status | Meaning |
 |--------|---------|
 | `200` | Claim refs listed (possibly empty) |
 | `400` | Missing or invalid `prefix` |
-| `500` | Origin unreachable or no origin configured |
+| `500` | Origin unreachable, no origin configured, or a listed claim commit could not be fetched |
 
 ### Create or Renew a Claim Ref
 
