@@ -445,45 +445,66 @@ func (a *application) createGitRefresher(gitClient git.Git) run.Func {
 	}
 }
 
+// newRouter builds the HTTP handler tree: the authenticated /api/v1 subrouter
+// (file routes and claim-ref routes) plus the always-unauthenticated probes.
+func newRouter(
+	ctx context.Context,
+	gitClient git.Git,
+	m metrics.Metrics,
+	repoPath string,
+	gatewaySecret string,
+) http.Handler {
+	getH := factory.CreateFilesGetHandler(gitClient)
+	postH := factory.CreateFilesPostHandler(gitClient)
+	deleteH := factory.CreateFilesDeleteHandler(gitClient)
+	listH := factory.CreateFilesListHandler(gitClient)
+	healthzH := factory.CreateHealthzHandler()
+	readinessH := factory.CreateReadinessHandler(repoPath)
+
+	router := gorillamux.NewRouter().SkipClean(true)
+
+	// API subrouter — optionally wrapped with gateway secret auth.
+	// Probes are NOT registered here so they are never wrapped by auth.
+	apiRouter := router.PathPrefix("/api/v1").Subrouter()
+	if gatewaySecret != "" {
+		apiRouter.Use(factory.CreateGatewaySecretMiddleware(gatewaySecret))
+	}
+	apiRouter.Handle("/files/{path:.*}", factory.CreateFilesDispatchHandler(getH, listH)).
+		Methods(http.MethodGet)
+	apiRouter.Handle("/files/{path:.*}", postH).Methods(http.MethodPost)
+	apiRouter.Handle("/files/{path:.*}", deleteH).Methods(http.MethodDelete)
+	apiRouter.Handle("/refs", factory.CreateRefsGetHandler(gitClient, m)).
+		Methods(http.MethodGet)
+	apiRouter.Handle("/refs/{key:.*}", factory.CreateRefsPutHandler(gitClient, m)).
+		Methods(http.MethodPut)
+	apiRouter.Handle("/refs/{key:.*}", factory.CreateRefsDeleteHandler(gitClient, m)).
+		Methods(http.MethodDelete)
+
+	// Probe routes — always unauthenticated (kubelet + Prometheus have no secret).
+	router.Handle("/healthz", healthzH)
+	router.Handle("/readiness", readinessH)
+	router.Handle("/metrics", promhttp.Handler())
+	router.Handle("/gc", libhttp.NewGarbageCollectorHandler())
+	router.Handle(
+		"/setloglevel/{level}",
+		liblog.NewSetLoglevelHandler(ctx, liblog.NewLogLevelSetter(2, 5*time.Minute)),
+	)
+
+	return router
+}
+
 func (a *application) createHTTPServer(
 	gitClient git.Git,
 	m metrics.Metrics,
 	repoPath string,
 ) run.Func {
 	return func(ctx context.Context) error {
-		getH := factory.CreateFilesGetHandler(gitClient)
-		postH := factory.CreateFilesPostHandler(gitClient)
-		deleteH := factory.CreateFilesDeleteHandler(gitClient)
-		listH := factory.CreateFilesListHandler(gitClient)
-		healthzH := factory.CreateHealthzHandler()
-		readinessH := factory.CreateReadinessHandler(repoPath)
-
-		router := gorillamux.NewRouter().SkipClean(true)
-
-		// API subrouter — optionally wrapped with gateway secret auth.
-		// Probes are NOT registered here so they are never wrapped by auth.
-		apiRouter := router.PathPrefix("/api/v1").Subrouter()
-		if a.GatewaySecret != "" {
-			apiRouter.Use(factory.CreateGatewaySecretMiddleware(a.GatewaySecret))
-		}
-		apiRouter.Handle("/files/{path:.*}", factory.CreateFilesDispatchHandler(getH, listH)).
-			Methods(http.MethodGet)
-		apiRouter.Handle("/files/{path:.*}", postH).Methods(http.MethodPost)
-		apiRouter.Handle("/files/{path:.*}", deleteH).Methods(http.MethodDelete)
-
-		// Probe routes — always unauthenticated (kubelet + Prometheus have no secret).
-		router.Handle("/healthz", healthzH)
-		router.Handle("/readiness", readinessH)
-		router.Handle("/metrics", promhttp.Handler())
-		router.Handle("/gc", libhttp.NewGarbageCollectorHandler())
-		router.Handle(
-			"/setloglevel/{level}",
-			liblog.NewSetLoglevelHandler(ctx, liblog.NewLogLevelSetter(2, 5*time.Minute)),
-		)
-
 		return libhttp.NewServer(
 			a.Listen,
-			factory.CreateMetricsMiddleware(m, router),
+			factory.CreateMetricsMiddleware(
+				m,
+				newRouter(ctx, gitClient, m, repoPath, a.GatewaySecret),
+			),
 			func(o *libhttp.ServerOptions) {
 				o.ReadTimeout = 60 * time.Second
 				o.WriteTimeout = 60 * time.Second

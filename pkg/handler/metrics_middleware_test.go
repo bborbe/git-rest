@@ -69,4 +69,22 @@ var _ = Describe("MetricsMiddleware", func() {
 		_, path, _ := fakeMetrics.IncHTTPRequestArgsForCall(0)
 		Expect(path).To(Equal("/api/v1/files/{path}"))
 	})
+
+	It("uses a fixed template for the refs collection", func() {
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/refs", nil)
+		h.ServeHTTP(rec, req)
+		_, path, _ := fakeMetrics.IncHTTPRequestArgsForCall(0)
+		Expect(path).To(Equal("/api/v1/refs"))
+	})
+
+	It("uses a fixed template for ref keys", func() {
+		req := httptest.NewRequest(
+			http.MethodPut,
+			"/api/v1/refs/claims/task/secret-key",
+			nil,
+		)
+		h.ServeHTTP(rec, req)
+		_, path, _ := fakeMetrics.IncHTTPRequestArgsForCall(0)
+		Expect(path).To(Equal("/api/v1/refs/{key}"))
+	})
 })

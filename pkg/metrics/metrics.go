@@ -67,6 +67,13 @@ var AutoresolvedTotal = prometheus.NewCounter(prometheus.CounterOpts{
 	Help: "Total conflicted paths auto-resolved by the scalar-frontmatter rule during pull.",
 })
 
+// RefRequestsTotal counts claim-ref requests by operation and HTTP status code.
+// op is "get", "put" or "delete"; result is the status code returned as a string.
+var RefRequestsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+	Name: "git_rest_ref_requests_total",
+	Help: "Total claim-ref requests by operation and HTTP status code.",
+}, []string{"op", "result"})
+
 // PushRetriesTotal counts push retries performed after a non-fast-forward
 // rejection. One increment per retry: the first push attempt is not counted.
 var PushRetriesTotal = prometheus.NewCounter(prometheus.CounterOpts{
@@ -99,6 +106,7 @@ func init() {
 		QuarantinedBacklog,
 		PullRescuesTotal,
 		AutoresolvedTotal,
+		RefRequestsTotal,
 		PushRetriesTotal,
 	)
 	for _, op := range []string{"write_file", "delete_file", "read_file", "list_files", "pull", "fetch", "push", "rebase"} {
@@ -153,6 +161,13 @@ func init() {
 	} {
 		ResolverFailuresTotal.WithLabelValues(category).Add(0)
 	}
+	for _, op := range []string{"get", "put", "delete"} {
+		for _, result := range []string{"200", "400", "409", "500"} {
+			RefRequestsTotal.WithLabelValues(op, result).Add(0)
+		}
+	}
+	// Only PUT carries a body, so 413 (body too large) is a put-only result.
+	RefRequestsTotal.WithLabelValues("put", "413").Add(0)
 }
 
 // Metrics records git operation instrumentation.
@@ -185,6 +200,9 @@ type Metrics interface {
 	// scalar-frontmatter rule. Called once per path, after the file is written and
 	// staged.
 	IncAutoresolved()
+	// IncRefRequest records one claim-ref request by operation ("get", "put",
+	// "delete") and the HTTP status code returned as a string.
+	IncRefRequest(op, result string)
 	// IncPushRetry records one push retry performed after a non-fast-forward
 	// rejection. The first push attempt is never counted.
 	IncPushRetry()
@@ -239,6 +257,10 @@ func (p *prometheusMetrics) IncPullRescue() {
 
 func (p *prometheusMetrics) IncAutoresolved() {
 	AutoresolvedTotal.Inc()
+}
+
+func (p *prometheusMetrics) IncRefRequest(op, result string) {
+	RefRequestsTotal.WithLabelValues(op, result).Inc()
 }
 
 func (p *prometheusMetrics) IncPushRetry() {

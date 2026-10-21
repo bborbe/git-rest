@@ -10,6 +10,12 @@ import (
 	"github.com/bborbe/git-rest/pkg/metrics"
 )
 
+// NewGitWithClaimOrigin returns a Git whose claim-ref listing talks to origin
+// instead of the git binary. Test builds only.
+func NewGitWithClaimOrigin(origin ClaimOrigin) Git {
+	return &git{origin: origin}
+}
+
 // NewYAMLMergeResolverWithSideTimes exposes a resolver whose merge-parent
 // committer timestamps are stubbed, so external tests can choose the newer side
 // deterministically. Test builds only.

@@ -63,6 +63,8 @@ func (n *noopMetrics) IncPullRescue() {}
 
 func (n *noopMetrics) IncAutoresolved() {}
 
+func (n *noopMetrics) IncRefRequest(_, _ string) {}
+
 func (n *noopMetrics) IncPushRetry() {}
 
 // initRepo creates a temporary git repo with a local bare remote so that push works.

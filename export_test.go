@@ -30,6 +30,9 @@ var SyncOnStartup = syncOnStartup
 // ResolveGitSSHCommand is exported for testing via the main_test package.
 var ResolveGitSSHCommand = resolveGitSSHCommand
 
+// NewRouter is exported for testing via the main_test package.
+var NewRouter = newRouter
+
 // CreateServerHandler returns an http.Handler wrapping the probe routes router,
 // enabling integration tests to exercise the real server construction path.
 func CreateServerHandler(

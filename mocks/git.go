@@ -45,6 +45,19 @@ type FakeGit struct {
 	configureUserReturnsOnCall map[int]struct {
 		result1 error
 	}
+	DeleteClaimRefStub        func(context.Context, string, string) error
+	deleteClaimRefMutex       sync.RWMutex
+	deleteClaimRefArgsForCall []struct {
+		arg1 context.Context
+		arg2 string
+		arg3 string
+	}
+	deleteClaimRefReturns struct {
+		result1 error
+	}
+	deleteClaimRefReturnsOnCall map[int]struct {
+		result1 error
+	}
 	DeleteFileStub        func(context.Context, string) error
 	deleteFileMutex       sync.RWMutex
 	deleteFileArgsForCall []struct {
@@ -67,6 +80,20 @@ type FakeGit struct {
 	}
 	initReturnsOnCall map[int]struct {
 		result1 error
+	}
+	ListClaimRefsStub        func(context.Context, string) ([]git.ClaimRef, error)
+	listClaimRefsMutex       sync.RWMutex
+	listClaimRefsArgsForCall []struct {
+		arg1 context.Context
+		arg2 string
+	}
+	listClaimRefsReturns struct {
+		result1 []git.ClaimRef
+		result2 error
+	}
+	listClaimRefsReturnsOnCall map[int]struct {
+		result1 []git.ClaimRef
+		result2 error
 	}
 	ListFilesStub        func(context.Context, string) ([]string, error)
 	listFilesMutex       sync.RWMutex
@@ -92,6 +119,21 @@ type FakeGit struct {
 	}
 	pullReturnsOnCall map[int]struct {
 		result1 error
+	}
+	PutClaimRefStub        func(context.Context, string, git.ClaimRefRequest) (string, error)
+	putClaimRefMutex       sync.RWMutex
+	putClaimRefArgsForCall []struct {
+		arg1 context.Context
+		arg2 string
+		arg3 git.ClaimRefRequest
+	}
+	putClaimRefReturns struct {
+		result1 string
+		result2 error
+	}
+	putClaimRefReturnsOnCall map[int]struct {
+		result1 string
+		result2 error
 	}
 	ReadFileStub        func(context.Context, string) ([]byte, error)
 	readFileMutex       sync.RWMutex
@@ -336,6 +378,69 @@ func (fake *FakeGit) ConfigureUserReturnsOnCall(i int, result1 error) {
 	}{result1}
 }
 
+func (fake *FakeGit) DeleteClaimRef(arg1 context.Context, arg2 string, arg3 string) error {
+	fake.deleteClaimRefMutex.Lock()
+	ret, specificReturn := fake.deleteClaimRefReturnsOnCall[len(fake.deleteClaimRefArgsForCall)]
+	fake.deleteClaimRefArgsForCall = append(fake.deleteClaimRefArgsForCall, struct {
+		arg1 context.Context
+		arg2 string
+		arg3 string
+	}{arg1, arg2, arg3})
+	stub := fake.DeleteClaimRefStub
+	fakeReturns := fake.deleteClaimRefReturns
+	fake.recordInvocation("DeleteClaimRef", []interface{}{arg1, arg2, arg3})
+	fake.deleteClaimRefMutex.Unlock()
+	if stub != nil {
+		return stub(arg1, arg2, arg3)
+	}
+	if specificReturn {
+		return ret.result1
+	}
+	return fakeReturns.result1
+}
+
+func (fake *FakeGit) DeleteClaimRefCallCount() int {
+	fake.deleteClaimRefMutex.RLock()
+	defer fake.deleteClaimRefMutex.RUnlock()
+	return len(fake.deleteClaimRefArgsForCall)
+}
+
+func (fake *FakeGit) DeleteClaimRefCalls(stub func(context.Context, string, string) error) {
+	fake.deleteClaimRefMutex.Lock()
+	defer fake.deleteClaimRefMutex.Unlock()
+	fake.DeleteClaimRefStub = stub
+}
+
+func (fake *FakeGit) DeleteClaimRefArgsForCall(i int) (context.Context, string, string) {
+	fake.deleteClaimRefMutex.RLock()
+	defer fake.deleteClaimRefMutex.RUnlock()
+	argsForCall := fake.deleteClaimRefArgsForCall[i]
+	return argsForCall.arg1, argsForCall.arg2, argsForCall.arg3
+}
+
+func (fake *FakeGit) DeleteClaimRefReturns(result1 error) {
+	fake.deleteClaimRefMutex.Lock()
+	defer fake.deleteClaimRefMutex.Unlock()
+	fake.DeleteClaimRefStub = nil
+	fake.deleteClaimRefReturns = struct {
+		result1 error
+	}{result1}
+}
+
+func (fake *FakeGit) DeleteClaimRefReturnsOnCall(i int, result1 error) {
+	fake.deleteClaimRefMutex.Lock()
+	defer fake.deleteClaimRefMutex.Unlock()
+	fake.DeleteClaimRefStub = nil
+	if fake.deleteClaimRefReturnsOnCall == nil {
+		fake.deleteClaimRefReturnsOnCall = make(map[int]struct {
+			result1 error
+		})
+	}
+	fake.deleteClaimRefReturnsOnCall[i] = struct {
+		result1 error
+	}{result1}
+}
+
 func (fake *FakeGit) DeleteFile(arg1 context.Context, arg2 string) error {
 	fake.deleteFileMutex.Lock()
 	ret, specificReturn := fake.deleteFileReturnsOnCall[len(fake.deleteFileArgsForCall)]
@@ -457,6 +562,71 @@ func (fake *FakeGit) InitReturnsOnCall(i int, result1 error) {
 	fake.initReturnsOnCall[i] = struct {
 		result1 error
 	}{result1}
+}
+
+func (fake *FakeGit) ListClaimRefs(arg1 context.Context, arg2 string) ([]git.ClaimRef, error) {
+	fake.listClaimRefsMutex.Lock()
+	ret, specificReturn := fake.listClaimRefsReturnsOnCall[len(fake.listClaimRefsArgsForCall)]
+	fake.listClaimRefsArgsForCall = append(fake.listClaimRefsArgsForCall, struct {
+		arg1 context.Context
+		arg2 string
+	}{arg1, arg2})
+	stub := fake.ListClaimRefsStub
+	fakeReturns := fake.listClaimRefsReturns
+	fake.recordInvocation("ListClaimRefs", []interface{}{arg1, arg2})
+	fake.listClaimRefsMutex.Unlock()
+	if stub != nil {
+		return stub(arg1, arg2)
+	}
+	if specificReturn {
+		return ret.result1, ret.result2
+	}
+	return fakeReturns.result1, fakeReturns.result2
+}
+
+func (fake *FakeGit) ListClaimRefsCallCount() int {
+	fake.listClaimRefsMutex.RLock()
+	defer fake.listClaimRefsMutex.RUnlock()
+	return len(fake.listClaimRefsArgsForCall)
+}
+
+func (fake *FakeGit) ListClaimRefsCalls(stub func(context.Context, string) ([]git.ClaimRef, error)) {
+	fake.listClaimRefsMutex.Lock()
+	defer fake.listClaimRefsMutex.Unlock()
+	fake.ListClaimRefsStub = stub
+}
+
+func (fake *FakeGit) ListClaimRefsArgsForCall(i int) (context.Context, string) {
+	fake.listClaimRefsMutex.RLock()
+	defer fake.listClaimRefsMutex.RUnlock()
+	argsForCall := fake.listClaimRefsArgsForCall[i]
+	return argsForCall.arg1, argsForCall.arg2
+}
+
+func (fake *FakeGit) ListClaimRefsReturns(result1 []git.ClaimRef, result2 error) {
+	fake.listClaimRefsMutex.Lock()
+	defer fake.listClaimRefsMutex.Unlock()
+	fake.ListClaimRefsStub = nil
+	fake.listClaimRefsReturns = struct {
+		result1 []git.ClaimRef
+		result2 error
+	}{result1, result2}
+}
+
+func (fake *FakeGit) ListClaimRefsReturnsOnCall(i int, result1 []git.ClaimRef, result2 error) {
+	fake.listClaimRefsMutex.Lock()
+	defer fake.listClaimRefsMutex.Unlock()
+	fake.ListClaimRefsStub = nil
+	if fake.listClaimRefsReturnsOnCall == nil {
+		fake.listClaimRefsReturnsOnCall = make(map[int]struct {
+			result1 []git.ClaimRef
+			result2 error
+		})
+	}
+	fake.listClaimRefsReturnsOnCall[i] = struct {
+		result1 []git.ClaimRef
+		result2 error
+	}{result1, result2}
 }
 
 func (fake *FakeGit) ListFiles(arg1 context.Context, arg2 string) ([]string, error) {
@@ -583,6 +753,72 @@ func (fake *FakeGit) PullReturnsOnCall(i int, result1 error) {
 	fake.pullReturnsOnCall[i] = struct {
 		result1 error
 	}{result1}
+}
+
+func (fake *FakeGit) PutClaimRef(arg1 context.Context, arg2 string, arg3 git.ClaimRefRequest) (string, error) {
+	fake.putClaimRefMutex.Lock()
+	ret, specificReturn := fake.putClaimRefReturnsOnCall[len(fake.putClaimRefArgsForCall)]
+	fake.putClaimRefArgsForCall = append(fake.putClaimRefArgsForCall, struct {
+		arg1 context.Context
+		arg2 string
+		arg3 git.ClaimRefRequest
+	}{arg1, arg2, arg3})
+	stub := fake.PutClaimRefStub
+	fakeReturns := fake.putClaimRefReturns
+	fake.recordInvocation("PutClaimRef", []interface{}{arg1, arg2, arg3})
+	fake.putClaimRefMutex.Unlock()
+	if stub != nil {
+		return stub(arg1, arg2, arg3)
+	}
+	if specificReturn {
+		return ret.result1, ret.result2
+	}
+	return fakeReturns.result1, fakeReturns.result2
+}
+
+func (fake *FakeGit) PutClaimRefCallCount() int {
+	fake.putClaimRefMutex.RLock()
+	defer fake.putClaimRefMutex.RUnlock()
+	return len(fake.putClaimRefArgsForCall)
+}
+
+func (fake *FakeGit) PutClaimRefCalls(stub func(context.Context, string, git.ClaimRefRequest) (string, error)) {
+	fake.putClaimRefMutex.Lock()
+	defer fake.putClaimRefMutex.Unlock()
+	fake.PutClaimRefStub = stub
+}
+
+func (fake *FakeGit) PutClaimRefArgsForCall(i int) (context.Context, string, git.ClaimRefRequest) {
+	fake.putClaimRefMutex.RLock()
+	defer fake.putClaimRefMutex.RUnlock()
+	argsForCall := fake.putClaimRefArgsForCall[i]
+	return argsForCall.arg1, argsForCall.arg2, argsForCall.arg3
+}
+
+func (fake *FakeGit) PutClaimRefReturns(result1 string, result2 error) {
+	fake.putClaimRefMutex.Lock()
+	defer fake.putClaimRefMutex.Unlock()
+	fake.PutClaimRefStub = nil
+	fake.putClaimRefReturns = struct {
+		result1 string
+		result2 error
+	}{result1, result2}
+}
+
+func (fake *FakeGit) PutClaimRefReturnsOnCall(i int, result1 string, result2 error) {
+	fake.putClaimRefMutex.Lock()
+	defer fake.putClaimRefMutex.Unlock()
+	fake.PutClaimRefStub = nil
+	if fake.putClaimRefReturnsOnCall == nil {
+		fake.putClaimRefReturnsOnCall = make(map[int]struct {
+			result1 string
+			result2 error
+		})
+	}
+	fake.putClaimRefReturnsOnCall[i] = struct {
+		result1 string
+		result2 error
+	}{result1, result2}
 }
 
 func (fake *FakeGit) ReadFile(arg1 context.Context, arg2 string) ([]byte, error) {
