@@ -1,8 +1,13 @@
 ---
-status: approved
+status: completed
 spec: [018-leased-claim-ref-operations]
+summary: 'Documented the claim-ref endpoints in README and docs/api.md, added the deployment metric row, and added the feat changelog bullet under a new ## Unreleased section.'
+execution_id: git-rest-claim-refs-exec-071-spec-018-ref-docs-changelog
+dark-factory-version: v0.198.7
 created: "2026-10-21T18:06:52Z"
 queued: "2026-10-21T18:17:00Z"
+started: "2026-10-21T18:33:43Z"
+completed: "2026-10-21T18:35:55Z"
 branch: dark-factory/leased-claim-ref-operations
 ---
 

@@ -24,6 +24,7 @@ Full system map: [recurring-task-creator/docs/system-map.md](https://github.com/
 ## Features
 
 - File CRUD over HTTP — `GET`, `POST`, `DELETE` on `/api/v1/files/{path}`
+- Claim refs under `refs/claims/` over HTTP — `GET /api/v1/refs`, `PUT` and `DELETE` on `/api/v1/refs/claims/{key}` with an origin-enforced compare-and-swap lease (a lost race is `409` and must not be retried)
 - Glob-based file listing
 - Auto-clone on startup if `--git-remote-url` is set and `--repo` is empty
 - Auto-init local-only repos when no remote URL is configured

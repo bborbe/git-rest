@@ -165,6 +165,14 @@ annotations:
 
 Key metrics: request count + latency histogram, git operation durations, quarantine backlog, build info.
 
+### Claim refs
+
+Claim refs are documented in the [API reference](api.md#claim-refs). One counter covers them:
+
+| Series | Meaning |
+|--------|---------|
+| `git_rest_ref_requests_total` | Counter over claim-ref requests, labelled `op` (`get`, `put`, `delete`) and `result` (the HTTP status code). The common op/result pairs are pre-initialised to zero at process start. |
+
 ### Quarantine backlog
 
 Quarantined files accumulate under `_conflicts/` in the served repo until an operator drains them. Two series make that visible:

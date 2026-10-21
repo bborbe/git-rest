@@ -8,6 +8,10 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 * MINOR version when you add functionality in a backwards-compatible manner, and
 * PATCH version when you make backwards-compatible bug fixes.
 
+## Unreleased
+
+- feat: Expose claim refs under `refs/claims/` over HTTP. `GET /api/v1/refs` lists claim refs live from the origin; `PUT` and `DELETE` on `/api/v1/refs/claims/{key}` create, renew and delete them with an origin-enforced compare-and-swap lease. A lost race returns `409` and is never retried; every request is counted in `git_rest_ref_requests_total{op,result}`.
+
 ## v0.31.0
 
 - refactor: Wire `/readiness` to the repo-path serving verdict and delete `PullStateCache`/`PullStateWriter`. Readiness now reports 200 whenever the served repository path is readable and 503 with `repo path unreadable` when it is not, regardless of the last pull outcome; the puller still logs `git pull failed` on every failed attempt but no longer records pull state.

@@ -16,6 +16,9 @@ Default port: `9090` (set via `--listen`).
 | `GET` | `/api/v1/files/{path}?glob=<pattern>` | List files matching glob |
 | `POST` | `/api/v1/files/{path}` | Create or overwrite a file (auto-commits + pushes) |
 | `DELETE` | `/api/v1/files/{path}` | Delete a file (auto-commits + pushes) |
+| `GET` | `/api/v1/refs?prefix=claims/` | List claim refs live from the origin |
+| `PUT` | `/api/v1/refs/claims/{key}` | Create or renew a claim ref (compare-and-swap) |
+| `DELETE` | `/api/v1/refs/claims/{key}?expected_sha=<sha>` | Delete a claim ref (compare-and-swap) |
 | `GET` | `/healthz` | Liveness probe |
 | `GET` | `/readiness` | Readiness probe (serves while the repository path is readable) |
 | `GET` | `/metrics` | Prometheus metrics |
@@ -95,6 +98,119 @@ Response: `{"ok":true}` on success.
 
 Commit message format: `git-rest: delete <path>`.
 
+## Claim Refs
+
+Claim refs are lightweight, content-free refs under `refs/claims/` that record
+which cluster and task hold a claim until when. They are read live from the
+origin and written with an origin-enforced compare-and-swap, so two callers can
+never both believe they won.
+
+Only refs under `refs/claims/` are reachable through these endpoints. The
+`{key}` is the full path below `refs/`, e.g. `claims/task/t-42`. Any key that
+does not start with `claims/`, contains `.` or `..` components, an empty
+component, a refspec metacharacter or an invalid ref name is rejected with
+`400` before any origin operation. The served branch is never touched.
+
+A 409 must not be retried: another caller won the race or the claim already moved.
+On a `500` the caller may retry on its own schedule, but must first list the ref
+to learn the true state. git-rest itself never retries a push.
+
+Every claim-ref request is counted in
+`git_rest_ref_requests_total{op,result}`, with `op` in `get`, `put`, `delete`
+and `result` equal to the HTTP status code.
+
+### List Claim Refs
+
+Request: `GET /api/v1/refs?prefix=claims/<sub-prefix>`. `prefix` is required
+and must start with `claims/`.
+
+```bash
+curl 'http://localhost:9090/api/v1/refs?prefix=claims/task'
+```
+
+Response: a JSON array, sorted by `ref`, of objects with exactly `ref`, `sha`,
+`cluster`, `task_id` and `lease_until`:
+
+```json
+[
+  {
+    "ref": "refs/claims/task/t-42",
+    "sha": "4b825dc642cb6eb9a060e54bf8d69288fbee4904",
+    "cluster": "cluster-a",
+    "task_id": "t-42",
+    "lease_until": "2026-10-21T12:00:00Z"
+  }
+]
+```
+
+An empty result is `[]`, never `null`.
+
+Prefix matching is by whole path components: `prefix=claims/task/1` returns only
+`refs/claims/task/1`; `prefix=claims/task` returns `refs/claims/task/1` and
+`refs/claims/task/10` but never `refs/claims/tasks/1`. A prefix ending in `/`
+matches everything below it.
+
+`nonce` is never returned. A commit whose message is not JSON is still listed,
+with empty `cluster`, `task_id` and `lease_until`, and a warning in the log.
+
+| Status | Meaning |
+|--------|---------|
+| `200` | Claim refs listed (possibly empty) |
+| `400` | Missing or invalid `prefix` |
+| `500` | Origin unreachable or no origin configured |
+
+### Create or Renew a Claim Ref
+
+```bash
+curl -X PUT \
+  -H 'Content-Type: application/json' \
+  -d '{"expected_sha":"","cluster":"cluster-a","task_id":"t-42","lease_until":"2026-10-21T12:00:00Z"}' \
+  http://localhost:9090/api/v1/refs/claims/task/t-42
+```
+
+Request body:
+
+- `cluster` and `task_id` are required and must be non-empty.
+- `lease_until` is RFC3339 and stored verbatim; it is never compared to a
+  clock, so expiry is the caller's concern.
+- `expected_sha` is empty (the ref must not exist) or a full-length lowercase
+  hex object id (40 or 64 characters).
+- A `nonce` supplied in the body is ignored; the server generates its own.
+
+Each successful call writes a new parentless commit on the empty tree whose
+message carries the metadata and a server-generated nonce, so a repeated
+identical request does not reproduce the same sha.
+
+Response: `{"ref":"refs/claims/<key>","sha":"<new sha>"}`.
+
+Body limit: 64 KiB.
+
+| Status | Meaning |
+|--------|---------|
+| `200` | Claim ref created or renewed |
+| `400` | Invalid key, body or field |
+| `409` | The ref did not match `expected_sha` |
+| `413` | Request body exceeds 64 KiB |
+| `500` | No origin remote, transport/auth failure, hook decline or timeout |
+
+### Delete a Claim Ref
+
+Request: `DELETE /api/v1/refs/claims/{key}?expected_sha=<sha>`. `expected_sha`
+is required and must be a full-length lowercase hex object id.
+
+```bash
+curl -X DELETE 'http://localhost:9090/api/v1/refs/claims/task/t-42?expected_sha=4b825dc642cb6eb9a060e54bf8d69288fbee4904'
+```
+
+Response: `{"ok":true}`.
+
+| Status | Meaning |
+|--------|---------|
+| `200` | Claim ref deleted |
+| `400` | Invalid key or missing/invalid `expected_sha` |
+| `409` | The ref did not match `expected_sha` or was already absent |
+| `500` | Origin unreachable or no origin configured |
+
 ## Healthz
 
 ```bash
@@ -132,6 +248,7 @@ Prometheus text format. Includes:
 - Build info (version, commit)
 - HTTP request metrics (count, duration, status)
 - Git operation metrics (clone, pull, push, commit durations)
+- Claim-ref request counter `git_rest_ref_requests_total{op,result}`
 
 ## Path Handling
 
