@@ -85,6 +85,8 @@ func (u *unsafeTestMetrics) IncAutoresolved() {}
 
 func (u *unsafeTestMetrics) IncRefRequest(_, _ string) {}
 
+func (u *unsafeTestMetrics) IncPushRetry() {}
+
 func (u *unsafeTestMetrics) unsafePathCount() int {
 	u.mu.Lock()
 	defer u.mu.Unlock()
@@ -167,7 +169,7 @@ func TestResolveConflictPathsUnsafePath(t *testing.T) {
 		t.Fatal("New did not return *git")
 	}
 
-	err = repo.resolveConflictPaths(ctx, []string{"../escape.md"})
+	err = repo.resolveConflictPaths(ctx, "other", []string{"../escape.md"})
 	if err == nil {
 		t.Fatal("expected an error, got nil")
 	}
@@ -562,7 +564,7 @@ func TestResolveConflictPathsAllFailAbort(t *testing.T) {
 		t.Fatal("New did not return *git")
 	}
 
-	err = repo.resolveConflictPaths(ctx, []string{"missing-a.md", "missing-b.md"})
+	err = repo.resolveConflictPaths(ctx, "other", []string{"missing-a.md", "missing-b.md"})
 	if err == nil {
 		t.Fatal("expected an error, got nil")
 	}
@@ -740,5 +742,52 @@ func TestResolveModifyDeleteTheirsDeleted(t *testing.T) {
 	// reports false and the caller keeps the ordinary fallback.
 	if repo.resolveModifyDelete(ctx, "_conflicts/ghost.md", conflictKindTheirsDeleted) {
 		t.Error("a failing git rm must fall through, not report resolution")
+	}
+}
+
+// TestIsRetryablePushRejection pins the push-rejection classifier against the
+// git output shapes it must tell apart: a lost push race is retryable, while an
+// auth failure, a remote hook refusal, or a success is terminal.
+func TestIsRetryablePushRejection(t *testing.T) {
+	cases := []struct {
+		name   string
+		output string
+		want   bool
+	}{
+		{
+			name:   "fetch first",
+			output: "To /tmp/remote.git\n ! [rejected]        main -> main (fetch first)\nerror: failed to push some refs\n",
+			want:   true,
+		},
+		{
+			name:   "non-fast-forward",
+			output: "To /tmp/remote.git\n ! [rejected]        main -> main (non-fast-forward)\n",
+			want:   true,
+		},
+		{
+			name:   "protected branch hook declined",
+			output: "remote: error: GH006: Protected branch update failed\n ! [remote rejected] main -> main (protected branch hook declined)\n",
+			want:   false,
+		},
+		{
+			name:   "auth failure",
+			output: "fatal: Authentication failed for 'https://example.com/repo.git/'\n",
+			want:   false,
+		},
+		{
+			name:   "success",
+			output: "Everything up-to-date\n",
+			want:   false,
+		},
+		{
+			name:   "rejected without a race reason",
+			output: " ! [rejected]        main -> main (stale info)\n",
+			want:   false,
+		},
+	}
+	for _, tc := range cases {
+		if got := isRetryablePushRejection(tc.output); got != tc.want {
+			t.Errorf("%s: isRetryablePushRejection() = %v, want %v", tc.name, got, tc.want)
+		}
 	}
 }

@@ -191,3 +191,19 @@ var _ = Describe("RefRequestsTotal", func() {
 		Expect(seen["put/413"]).To(BeTrue(), "put/413")
 	})
 })
+
+var _ = Describe("PushRetriesTotal", func() {
+	It("is registered with value 0 in the default registry at init() time", func() {
+		value, found := gatherCounterPresent("git_rest_push_retries_total")
+		Expect(found).To(BeTrue(), "the counter series must exist at init() time")
+		Expect(value).To(Equal(0.0))
+	})
+
+	It("increments when IncPushRetry is called via the interface", func() {
+		before := gatherCounter("git_rest_push_retries_total")
+		m := metrics.NewMetrics()
+		m.IncPushRetry()
+		after := gatherCounter("git_rest_push_retries_total")
+		Expect(after - before).To(Equal(1.0))
+	})
+})

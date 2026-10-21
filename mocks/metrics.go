@@ -38,6 +38,10 @@ type FakeMetrics struct {
 	incPullRescueMutex       sync.RWMutex
 	incPullRescueArgsForCall []struct {
 	}
+	IncPushRetryStub        func()
+	incPushRetryMutex       sync.RWMutex
+	incPushRetryArgsForCall []struct {
+	}
 	IncQuarantinedFilesStub        func()
 	incQuarantinedFilesMutex       sync.RWMutex
 	incQuarantinedFilesArgsForCall []struct {
@@ -248,6 +252,30 @@ func (fake *FakeMetrics) IncPullRescueCalls(stub func()) {
 	fake.incPullRescueMutex.Lock()
 	defer fake.incPullRescueMutex.Unlock()
 	fake.IncPullRescueStub = stub
+}
+
+func (fake *FakeMetrics) IncPushRetry() {
+	fake.incPushRetryMutex.Lock()
+	fake.incPushRetryArgsForCall = append(fake.incPushRetryArgsForCall, struct {
+	}{})
+	stub := fake.IncPushRetryStub
+	fake.recordInvocation("IncPushRetry", []interface{}{})
+	fake.incPushRetryMutex.Unlock()
+	if stub != nil {
+		fake.IncPushRetryStub()
+	}
+}
+
+func (fake *FakeMetrics) IncPushRetryCallCount() int {
+	fake.incPushRetryMutex.RLock()
+	defer fake.incPushRetryMutex.RUnlock()
+	return len(fake.incPushRetryArgsForCall)
+}
+
+func (fake *FakeMetrics) IncPushRetryCalls(stub func()) {
+	fake.incPushRetryMutex.Lock()
+	defer fake.incPushRetryMutex.Unlock()
+	fake.IncPushRetryStub = stub
 }
 
 func (fake *FakeMetrics) IncQuarantinedFiles() {

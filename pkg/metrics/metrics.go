@@ -74,6 +74,13 @@ var RefRequestsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
 	Help: "Total claim-ref requests by operation and HTTP status code.",
 }, []string{"op", "result"})
 
+// PushRetriesTotal counts push retries performed after a non-fast-forward
+// rejection. One increment per retry: the first push attempt is not counted.
+var PushRetriesTotal = prometheus.NewCounter(prometheus.CounterOpts{
+	Name: "git_rest_push_retries_total",
+	Help: "Total push retries after a non-fast-forward rejection.",
+})
+
 // ResolverFailuresTotal counts conflict-resolver failures by category.
 // Categories: yaml_parse_failed, no_frontmatter, write_failed, git_add_failed,
 // quarantine_io_failed, unsafe_path, nested_source. The quarantine_io_failed bucket covers
@@ -100,6 +107,7 @@ func init() {
 		PullRescuesTotal,
 		AutoresolvedTotal,
 		RefRequestsTotal,
+		PushRetriesTotal,
 	)
 	for _, op := range []string{"write_file", "delete_file", "read_file", "list_files", "pull", "fetch", "push", "rebase"} {
 		GitOperationErrors.WithLabelValues(op, "").Add(0)
@@ -138,6 +146,10 @@ func init() {
 	// QuarantinedFilesTotal: the series is registered at init() time so /metrics
 	// exposes it as 0 before the first auto-resolution has ever happened.
 	AutoresolvedTotal.Add(0)
+	// Explicit .Add(0) on the unlabeled push-retry counter, mirroring
+	// PullRescuesTotal: the series is registered at init() time so /metrics
+	// exposes it as 0 before the first retry has ever happened.
+	PushRetriesTotal.Add(0)
 	for _, category := range []string{
 		"yaml_parse_failed",
 		"no_frontmatter",
@@ -191,6 +203,9 @@ type Metrics interface {
 	// IncRefRequest records one claim-ref request by operation ("get", "put",
 	// "delete") and the HTTP status code returned as a string.
 	IncRefRequest(op, result string)
+	// IncPushRetry records one push retry performed after a non-fast-forward
+	// rejection. The first push attempt is never counted.
+	IncPushRetry()
 }
 
 // NewMetrics returns a Prometheus-backed Metrics implementation.
@@ -246,4 +261,8 @@ func (p *prometheusMetrics) IncAutoresolved() {
 
 func (p *prometheusMetrics) IncRefRequest(op, result string) {
 	RefRequestsTotal.WithLabelValues(op, result).Inc()
+}
+
+func (p *prometheusMetrics) IncPushRetry() {
+	PushRetriesTotal.Inc()
 }

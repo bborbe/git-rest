@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"math/rand/v2"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -297,6 +298,117 @@ func (g *git) runCmdRaw(ctx context.Context, dir string, args ...string) ([]byte
 	cmd.Stderr = &buf
 	err := cmd.Run()
 	return buf.Bytes(), err
+}
+
+// pushMaxAttempts bounds a push plus its in-attempt retries. It is core
+// behaviour, not a tunable: a lost push race converges within a few hundred
+// milliseconds, and a longer loop would only hold g.mu longer.
+const pushMaxAttempts = 3
+
+// isRetryablePushRejection reports whether git push's combined output is a lost
+// push race — the remote moved after our fetch, so the push was rejected as
+// non-fast-forward — rather than a terminal refusal (auth failure, ruleset,
+// network error, missing remote). Pure so the classifier can be table-tested.
+func isRetryablePushRejection(output string) bool {
+	if !strings.Contains(output, "[rejected]") {
+		return false
+	}
+	return strings.Contains(output, "(fetch first)") ||
+		strings.Contains(output, "(non-fast-forward)")
+}
+
+// pushWithRetry pushes the current branch and retries in-attempt when git
+// rejects the push because the remote moved after our fetch. A first-attempt
+// success behaves exactly like a plain `git push`: no extra commands, no log
+// line, no counter increment.
+//
+// upstream may be empty; it is resolved from @{u} only on the retry path, so a
+// branch without an upstream still surfaces the plain push error unchanged.
+func (g *git) pushWithRetry(ctx context.Context, upstream string) error {
+	args := []string{"push"}
+	for attempt := 1; attempt <= pushMaxAttempts; attempt++ {
+		select {
+		case <-ctx.Done():
+			return errors.Wrap(ctx, ctx.Err(), "push retry cancelled")
+		default:
+		}
+		out, err := g.runCmdRaw(ctx, g.repoPath, args...)
+		if err == nil {
+			if attempt > 1 {
+				g.logPushSucceededAfterRetry(ctx, attempt)
+			}
+			return nil
+		}
+		if !isRetryablePushRejection(string(out)) || attempt == pushMaxAttempts {
+			return errors.Wrapf(ctx, err, "git %v: %s", args, out)
+		}
+		if retryErr := g.retryPush(ctx, upstream, attempt+1); retryErr != nil {
+			return retryErr
+		}
+	}
+	return nil
+}
+
+// retryPush performs the work between two push attempts: jitter, upstream
+// resolution (only when the caller did not know it), fetch and merge. A merge
+// failure aborts the half-finished merge so the pull path's conflict machinery
+// is never entered from here.
+func (g *git) retryPush(ctx context.Context, upstream string, nextAttempt int) error {
+	slog.InfoContext(ctx, "git-rest: push retry", "attempt", nextAttempt, "max", pushMaxAttempts)
+	if err := sleepPushJitter(ctx); err != nil {
+		return errors.Wrap(ctx, err, "push retry cancelled")
+	}
+	g.metrics.IncPushRetry()
+	if upstream == "" {
+		out, err := g.runCmdOutput(
+			ctx, g.repoPath, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}",
+		)
+		if err != nil {
+			return errors.Wrap(ctx, err, "resolve upstream for push retry")
+		}
+		upstream = strings.TrimSpace(string(out))
+	}
+	if err := g.runCmd(ctx, g.repoPath, "fetch"); err != nil {
+		return errors.Wrap(ctx, err, "fetch before push retry")
+	}
+	mergeOut, mergeErr := g.runCmdRaw(ctx, g.repoPath, "merge", "--no-edit", upstream)
+	if mergeErr != nil {
+		_, _ = g.runCmdRaw(ctx, g.repoPath, "merge", "--abort")
+		return errors.Wrapf(ctx, mergeErr, "merge %s: %s", upstream, mergeOut)
+	}
+	return nil
+}
+
+// sleepPushJitter waits 100–500 ms before the next push attempt. The jitter
+// spreads retries of concurrent writers; it is not a security primitive.
+func sleepPushJitter(ctx context.Context) error {
+	//nolint:gosec // jitter, not security-sensitive
+	delay := 100*time.Millisecond + time.Duration(rand.IntN(401))*time.Millisecond
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+// logPushSucceededAfterRetry records the attempt number and the pushed commit
+// once a retry has converged.
+func (g *git) logPushSucceededAfterRetry(ctx context.Context, attempt int) {
+	sha := ""
+	if out, err := g.runCmdOutput(ctx, g.repoPath, "rev-parse", "HEAD"); err == nil {
+		sha = strings.TrimSpace(string(out))
+	}
+	slog.InfoContext(
+		ctx,
+		"git-rest: push succeeded after retry",
+		"attempt",
+		attempt,
+		"sha",
+		sha,
+	)
 }
 
 // childEnv returns the child-process environment for git: the inherited
@@ -634,7 +746,7 @@ func (g *git) writeFileLocked(
 	}
 
 	if g.hasRemote(ctx) {
-		if err := g.runCmd(ctx, g.repoPath, "push"); err != nil {
+		if err := g.pushWithRetry(ctx, ""); err != nil {
 			g.metrics.IncGitOperationError("write_file")
 			return errors.Wrap(ctx, err, "git push")
 		}
@@ -681,7 +793,7 @@ func (g *git) DeleteFile(ctx context.Context, path string) error {
 	}
 
 	if g.hasRemote(ctx) {
-		if err := g.runCmd(ctx, g.repoPath, "push"); err != nil {
+		if err := g.pushWithRetry(ctx, ""); err != nil {
 			g.metrics.IncGitOperationError("delete_file")
 			return errors.Wrap(ctx, err, "git push")
 		}
@@ -822,7 +934,7 @@ func (g *git) pullMergeAndPush(ctx context.Context, upstream string) error {
 		// Clean merge: git auto-produced a merge commit.
 		g.metrics.IncMergeOutcome("clean")
 		slog.InfoContext(ctx, "git-rest: merged diverged history", "upstream", upstream)
-		if pushErr := g.runCmd(ctx, g.repoPath, "push"); pushErr != nil {
+		if pushErr := g.pushWithRetry(ctx, upstream); pushErr != nil {
 			g.metrics.IncGitOperationError("push")
 			return errors.Wrap(ctx, pushErr, "push after clean merge failed")
 		}
@@ -1033,7 +1145,7 @@ func (g *git) resolveConflictMerge(
 			strings.TrimSpace(string(mergeOut)),
 		)
 	}
-	return g.resolveConflictPaths(ctx, conflictPaths)
+	return g.resolveConflictPaths(ctx, upstream, conflictPaths)
 }
 
 // resolveConflictPaths runs the per-file retry loop on a pre-parsed conflict path list.
@@ -1048,6 +1160,7 @@ func (g *git) resolveConflictMerge(
 // path-traversal test's negative-evidence check.
 func (g *git) resolveConflictPaths(
 	ctx context.Context,
+	upstream string,
 	conflictPaths []string,
 ) error {
 	// Pre-flight: validate ALL paths are safe BEFORE any disk I/O.
@@ -1085,7 +1198,7 @@ func (g *git) resolveConflictPaths(
 		)
 	}
 
-	return g.commitAndPushMerge(ctx, conflictPaths, resolved, quarantined)
+	return g.commitAndPushMerge(ctx, upstream, conflictPaths, resolved, quarantined)
 }
 
 // validateConflictPathsSafe pre-flights the conflict path list before any disk
@@ -1172,6 +1285,7 @@ func (g *git) resolveEachPath(
 // required by the spec (IncMergeOutcome, IncConflictPaths).
 func (g *git) commitAndPushMerge(
 	ctx context.Context,
+	upstream string,
 	conflictPaths, resolved, quarantined []string,
 ) error {
 	sort.Strings(resolved)
@@ -1198,7 +1312,7 @@ func (g *git) commitAndPushMerge(
 		"quarantined",
 		quarantined,
 	)
-	if pushErr := g.runCmd(ctx, g.repoPath, "push"); pushErr != nil {
+	if pushErr := g.pushWithRetry(ctx, upstream); pushErr != nil {
 		g.metrics.IncGitOperationError("push")
 		return errors.Wrap(ctx, pushErr, "push after resolved merge failed")
 	}
@@ -1559,7 +1673,7 @@ func (g *git) syncWithUpstream(ctx context.Context, upstream string) error {
 		}
 		return nil
 	case remoteSHA == baseSHA:
-		if err := g.runCmd(ctx, g.repoPath, "push"); err != nil {
+		if err := g.pushWithRetry(ctx, upstream); err != nil {
 			g.metrics.IncGitOperationError("push")
 			return errors.Wrap(ctx, err, "push failed")
 		}

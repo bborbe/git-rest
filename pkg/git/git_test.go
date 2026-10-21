@@ -15,6 +15,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
+	"time"
 
 	libtime "github.com/bborbe/time"
 	. "github.com/onsi/ginkgo/v2"
@@ -62,6 +64,8 @@ func (n *noopMetrics) IncPullRescue() {}
 func (n *noopMetrics) IncAutoresolved() {}
 
 func (n *noopMetrics) IncRefRequest(_, _ string) {}
+
+func (n *noopMetrics) IncPushRetry() {}
 
 // initRepo creates a temporary git repo with a local bare remote so that push works.
 func initRepo() (workDir string, cleanup func()) {
@@ -2959,4 +2963,292 @@ var _ = Describe("Spec 015 regression lock-in", func() {
 			expectSpec015LockIn(workDir, quarantinedBefore)
 		},
 	)
+})
+
+// syncBuffer is a goroutine-safe log sink. The push-retry cancellation spec
+// polls it from a second goroutine while slog writes, so a bare bytes.Buffer
+// would race.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (s *syncBuffer) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.buf.Write(p)
+}
+
+func (s *syncBuffer) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.buf.String()
+}
+
+// shellQuote wraps path in single quotes for a POSIX shell script.
+func shellQuote(path string) string {
+	return "'" + strings.ReplaceAll(path, "'", `'\''`) + "'"
+}
+
+// pushAttempts returns the number of pre-push/pre-receive hook invocations
+// recorded in countFile.
+func pushAttempts(countFile string) int {
+	data, err := os.ReadFile(countFile)
+	if os.IsNotExist(err) {
+		return 0
+	}
+	Expect(err).NotTo(HaveOccurred())
+	trimmed := strings.TrimSpace(string(data))
+	if trimmed == "" {
+		return 0
+	}
+	return len(strings.Split(trimmed, "\n"))
+}
+
+// installPushCountingHook installs a pre-push hook on the working repo that
+// records one line per push attempt and allows the push. Returns the count file.
+func installPushCountingHook(workDir string) string {
+	countFile := filepath.Join(workDir, "push-attempts.log")
+	hooksDir := filepath.Join(workDir, "hooks")
+	Expect(os.MkdirAll(hooksDir, 0o750)).To(Succeed())
+	hook := "#!/bin/sh\n" +
+		"echo attempt >> " + shellQuote(countFile) + "\n" +
+		"exit 0\n"
+	Expect(os.WriteFile(filepath.Join(hooksDir, "pre-push"), []byte(hook), 0o755)).
+		To(Succeed())
+	runGit(workDir, "config", "core.hooksPath", "hooks")
+	return countFile
+}
+
+// installPreReceiveRejection installs a pre-receive hook on the bare remote
+// that records the attempt and rejects it. A pre-receive rejection surfaces as
+// `! [remote rejected] ... (pre-receive hook declined)` — the terminal shape.
+func installPreReceiveRejection(remoteDir string) string {
+	countFile := filepath.Join(remoteDir, "rejected-attempts.log")
+	hooksDir := filepath.Join(remoteDir, "hooks")
+	Expect(os.MkdirAll(hooksDir, 0o750)).To(Succeed())
+	hook := "#!/bin/sh\n" +
+		"echo attempt >> " + shellQuote(countFile) + "\n" +
+		"exit 1\n"
+	Expect(os.WriteFile(filepath.Join(hooksDir, "pre-receive"), []byte(hook), 0o755)).
+		To(Succeed())
+	runGit(remoteDir, "config", "core.hooksPath", "hooks")
+	return countFile
+}
+
+// advanceFileLines returns the shell lines that write the competing commit's
+// file. An empty conflictPath writes a fresh external-<n>.txt; a non-empty one
+// overwrites that path so the retry merge conflicts.
+func advanceFileLines(conflictPath string) string {
+	if conflictPath == "" {
+		return "echo \"external $n\" > \"external-$n.txt\"\n" +
+			"git add \"external-$n.txt\"\n"
+	}
+	return "echo \"remote $n\" > " + shellQuote(conflictPath) + "\n" +
+		"git add " + shellQuote(conflictPath) + "\n"
+}
+
+// installRemoteAdvanceOnFetch configures the working repo's origin so that each
+// `git fetch` first serves the current remote state and then advances the bare
+// remote with a competing commit pushed from a second clone. With once=true
+// only the first fetch advances the remote.
+//
+// A pre-push hook cannot produce a client-side `(fetch first)` rejection: git
+// reads the remote refs before running that hook, so an advance from inside it
+// is rejected server-side as `(failed to update ref)`. The upload-pack wrapper
+// advances the remote after the fetch response, which is exactly the window a
+// lost push race lives in.
+func installRemoteAdvanceOnFetch(workDir string, once bool, conflictPath string) string {
+	remoteDir := strings.TrimSpace(gitOutputStr(workDir, "remote", "get-url", "origin"))
+	branch := strings.TrimSpace(gitOutputStr(workDir, "rev-parse", "--abbrev-ref", "HEAD"))
+	base, err := os.MkdirTemp("", "git-advance-*")
+	Expect(err).NotTo(HaveOccurred())
+	DeferCleanup(func() { _ = os.RemoveAll(base) })
+
+	countFile := filepath.Join(base, "count")
+	script := filepath.Join(base, "advance.sh")
+	guard := ""
+	if once {
+		marker := filepath.Join(base, "once")
+		guard = "[ -f " + shellQuote(marker) + " ] && exit 0\n" +
+			": > " + shellQuote(marker) + "\n"
+	}
+	body := "#!/bin/sh\n" + guard +
+		"COUNT=" + shellQuote(countFile) + "\n" +
+		"n=0\n" +
+		"[ -f \"$COUNT\" ] && n=$(cat \"$COUNT\")\n" +
+		"n=$((n+1))\n" +
+		"echo \"$n\" > \"$COUNT\"\n" +
+		"REPO=\"$1\"\n" +
+		"TMP=$(mktemp -d)\n" +
+		"git clone -q \"$REPO\" \"$TMP\" || exit 0\n" +
+		"cd \"$TMP\" || exit 0\n" +
+		"git config user.email ext@example.com\n" +
+		"git config user.name External\n" +
+		"git checkout -q -B " + branch + " origin/" + branch + " 2>/dev/null || true\n" +
+		advanceFileLines(conflictPath) +
+		"git commit -q -m \"external-$n\"\n" +
+		"git push -q origin " + branch + " || exit 0\n" +
+		"cd /\n" +
+		"rm -rf \"$TMP\"\n"
+	Expect(os.WriteFile(script, []byte(body), 0o755)).To(Succeed())
+	runGit(
+		workDir,
+		"config",
+		"remote.origin.uploadpack",
+		"sh -c 'git-upload-pack \"$1\"; "+script+" \"$1\"' --",
+	)
+	return remoteDir
+}
+
+var _ = Describe("Push retry", func() {
+	var (
+		ctx          context.Context
+		workDir      string
+		externalPush func(file, content string)
+		cleanup      func()
+		fakeMetrics  *mocks.FakeMetrics
+		pg           git.Git
+	)
+
+	BeforeEach(func() {
+		ctx = context.Background()
+		workDir, externalPush, cleanup = setupPullFixture()
+		fakeMetrics = &mocks.FakeMetrics{}
+		pg = git.New(
+			workDir,
+			fakeMetrics,
+			libtime.NewCurrentDateTime(),
+			"",
+			git.NewMarkerResolver(workDir),
+		)
+	})
+
+	AfterEach(func() {
+		cleanup()
+	})
+
+	It("retries a fetch-first rejection in-attempt and succeeds", func() {
+		writeLocalCommit(workDir, "local.txt", "local\n")
+		remoteDir := installRemoteAdvanceOnFetch(workDir, true, "")
+		branch := strings.TrimSpace(gitOutputStr(workDir, "rev-parse", "--abbrev-ref", "HEAD"))
+
+		logs, restore := captureSlogLogs()
+		defer restore()
+
+		Expect(pg.Pull(ctx)).To(Succeed())
+
+		Expect(fakeMetrics.IncPushRetryCallCount()).To(Equal(1))
+		logStr := logs.String()
+		Expect(logStr).To(ContainSubstring("push retry"))
+		Expect(logStr).To(ContainSubstring("push succeeded after retry"))
+		Expect(gitOutputStr(remoteDir, "show", branch+":local.txt")).To(Equal("local\n"))
+	})
+
+	It("does not retry a plain successful push", func() {
+		countFile := installPushCountingHook(workDir)
+		writeLocalCommit(workDir, "local.txt", "local\n")
+
+		logs, restore := captureSlogLogs()
+		defer restore()
+
+		Expect(pg.Pull(ctx)).To(Succeed())
+
+		Expect(pushAttempts(countFile)).To(Equal(1))
+		Expect(fakeMetrics.IncPushRetryCallCount()).To(Equal(0))
+		Expect(logs.String()).NotTo(ContainSubstring("push retry"))
+	})
+
+	It("retries a fetch-first rejection from WriteFile via the lazy @{u} lookup", func() {
+		// The remote is ahead before WriteFile runs, so its push is rejected
+		// (fetch first) without any fetch having happened in this operation.
+		externalPush("remote.txt", "remote\n")
+		remoteDir := strings.TrimSpace(gitOutputStr(workDir, "remote", "get-url", "origin"))
+		branch := strings.TrimSpace(gitOutputStr(workDir, "rev-parse", "--abbrev-ref", "HEAD"))
+
+		Expect(pg.WriteFile(ctx, "written.txt", []byte("hello"))).To(Succeed())
+
+		Expect(fakeMetrics.IncPushRetryCallCount()).To(Equal(1))
+		Expect(gitOutputStr(remoteDir, "show", branch+":written.txt")).To(Equal("hello"))
+	})
+
+	It("does not retry a terminal remote rejection", func() {
+		remoteDir := strings.TrimSpace(gitOutputStr(workDir, "remote", "get-url", "origin"))
+		countFile := installPreReceiveRejection(remoteDir)
+		writeLocalCommit(workDir, "local.txt", "local\n")
+
+		logs, restore := captureSlogLogs()
+		defer restore()
+
+		err := pg.Pull(ctx)
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("git [push]"))
+		Expect(err.Error()).To(ContainSubstring("remote rejected"))
+		Expect(pushAttempts(countFile)).To(Equal(1))
+		Expect(fakeMetrics.IncPushRetryCallCount()).To(Equal(0))
+		Expect(logs.String()).NotTo(ContainSubstring("push retry"))
+	})
+
+	It("bounds retries at three push attempts", func() {
+		writeLocalCommit(workDir, "local.txt", "local\n")
+		installRemoteAdvanceOnFetch(workDir, false, "")
+		countFile := installPushCountingHook(workDir)
+
+		err := pg.Pull(ctx)
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("fetch first"))
+		Expect(pushAttempts(countFile)).To(Equal(3))
+		Expect(fakeMetrics.IncPushRetryCallCount()).To(Equal(2))
+	})
+
+	It("stops before the retry when the context is cancelled", func() {
+		writeLocalCommit(workDir, "local.txt", "local\n")
+		installRemoteAdvanceOnFetch(workDir, true, "")
+		countFile := installPushCountingHook(workDir)
+
+		logs := &syncBuffer{}
+		prev := slog.Default()
+		slog.SetDefault(slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{
+			Level: slog.LevelInfo,
+		})))
+		defer slog.SetDefault(prev)
+
+		cancelCtx, cancel := context.WithCancel(ctx)
+		defer cancel()
+		watcherDone := make(chan struct{})
+		go func() {
+			defer close(watcherDone)
+			deadline := time.Now().Add(10 * time.Second)
+			for time.Now().Before(deadline) {
+				if strings.Contains(logs.String(), "push retry") {
+					cancel()
+					return
+				}
+				time.Sleep(time.Millisecond)
+			}
+		}()
+
+		err := pg.Pull(cancelCtx)
+		<-watcherDone
+
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("push retry cancelled"))
+		Expect(pushAttempts(countFile)).To(Equal(1))
+		Expect(fakeMetrics.IncPushRetryCallCount()).To(Equal(0))
+	})
+
+	It("aborts the merge and surfaces the error when the retry merge conflicts", func() {
+		writeLocalCommit(workDir, "conflict.txt", "local\n")
+		installRemoteAdvanceOnFetch(workDir, true, "conflict.txt")
+
+		err := pg.Pull(ctx)
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("merge origin/"))
+		Expect(fakeMetrics.IncPushRetryCallCount()).To(Equal(1))
+
+		// The half-finished merge must not be left in the tree.
+		_, statErr := os.Stat(filepath.Join(workDir, ".git", "MERGE_HEAD"))
+		Expect(os.IsNotExist(statErr)).To(BeTrue())
+		Expect(strings.TrimSpace(gitOutputStr(workDir, "status", "--porcelain"))).To(BeEmpty())
+	})
 })
