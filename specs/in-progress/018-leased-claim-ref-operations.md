@@ -1,8 +1,9 @@
 ---
-status: prompted
+status: verifying
 approved: "2026-10-21T18:03:32Z"
 generating: "2026-10-21T18:03:33Z"
 prompted: "2026-10-21T18:16:37Z"
+verifying: "2026-10-21T18:35:55Z"
 branch: dark-factory/leased-claim-ref-operations
 ---
 
