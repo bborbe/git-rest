@@ -67,6 +67,13 @@ var AutoresolvedTotal = prometheus.NewCounter(prometheus.CounterOpts{
 	Help: "Total conflicted paths auto-resolved by the scalar-frontmatter rule during pull.",
 })
 
+// RefRequestsTotal counts claim-ref requests by operation and HTTP status code.
+// op is "get", "put" or "delete"; result is the status code returned as a string.
+var RefRequestsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+	Name: "git_rest_ref_requests_total",
+	Help: "Total claim-ref requests by operation and HTTP status code.",
+}, []string{"op", "result"})
+
 // ResolverFailuresTotal counts conflict-resolver failures by category.
 // Categories: yaml_parse_failed, no_frontmatter, write_failed, git_add_failed,
 // quarantine_io_failed, unsafe_path, nested_source. The quarantine_io_failed bucket covers
@@ -92,6 +99,7 @@ func init() {
 		QuarantinedBacklog,
 		PullRescuesTotal,
 		AutoresolvedTotal,
+		RefRequestsTotal,
 	)
 	for _, op := range []string{"write_file", "delete_file", "read_file", "list_files", "pull", "fetch", "push", "rebase"} {
 		GitOperationErrors.WithLabelValues(op, "").Add(0)
@@ -141,6 +149,11 @@ func init() {
 	} {
 		ResolverFailuresTotal.WithLabelValues(category).Add(0)
 	}
+	for _, op := range []string{"get", "put", "delete"} {
+		for _, result := range []string{"200", "400", "409", "500"} {
+			RefRequestsTotal.WithLabelValues(op, result).Add(0)
+		}
+	}
 }
 
 // Metrics records git operation instrumentation.
@@ -173,6 +186,9 @@ type Metrics interface {
 	// scalar-frontmatter rule. Called once per path, after the file is written and
 	// staged.
 	IncAutoresolved()
+	// IncRefRequest records one claim-ref request by operation ("get", "put",
+	// "delete") and the HTTP status code returned as a string.
+	IncRefRequest(op, result string)
 }
 
 // NewMetrics returns a Prometheus-backed Metrics implementation.
@@ -224,4 +240,8 @@ func (p *prometheusMetrics) IncPullRescue() {
 
 func (p *prometheusMetrics) IncAutoresolved() {
 	AutoresolvedTotal.Inc()
+}
+
+func (p *prometheusMetrics) IncRefRequest(op, result string) {
+	RefRequestsTotal.WithLabelValues(op, result).Inc()
 }

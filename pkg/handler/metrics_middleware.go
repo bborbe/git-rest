@@ -16,6 +16,12 @@ import (
 
 // routeLabel normalizes URL paths to prevent unbounded cardinality in metrics.
 func routeLabel(path string) string {
+	if path == "/api/v1/refs" {
+		return "/api/v1/refs"
+	}
+	if strings.HasPrefix(path, "/api/v1/refs/") {
+		return "/api/v1/refs/{key}"
+	}
 	if strings.HasPrefix(path, "/api/v1/files/") {
 		return "/api/v1/files/{path}"
 	}

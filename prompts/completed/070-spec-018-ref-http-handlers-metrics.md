@@ -1,8 +1,13 @@
 ---
-status: approved
+status: completed
 spec: [018-leased-claim-ref-operations]
+summary: Added validated claim-ref HTTP handlers, route wiring, fixed ref path metric labels, and the pre-initialised git_rest_ref_requests_total counter with handler-level and real-origin integration tests.
+execution_id: git-rest-claim-refs-exec-070-spec-018-ref-http-handlers-metrics
+dark-factory-version: v0.198.7
 created: "2026-10-21T18:06:52Z"
 queued: "2026-10-21T18:17:00Z"
+started: "2026-10-21T18:26:23Z"
+completed: "2026-10-21T18:33:42Z"
 branch: dark-factory/leased-claim-ref-operations
 ---
 

@@ -46,6 +46,12 @@ type FakeMetrics struct {
 	incRebaseConflictMutex       sync.RWMutex
 	incRebaseConflictArgsForCall []struct {
 	}
+	IncRefRequestStub        func(string, string)
+	incRefRequestMutex       sync.RWMutex
+	incRefRequestArgsForCall []struct {
+		arg1 string
+		arg2 string
+	}
 	IncResolverFailureStub        func(string)
 	incResolverFailureMutex       sync.RWMutex
 	incResolverFailureArgsForCall []struct {
@@ -290,6 +296,39 @@ func (fake *FakeMetrics) IncRebaseConflictCalls(stub func()) {
 	fake.incRebaseConflictMutex.Lock()
 	defer fake.incRebaseConflictMutex.Unlock()
 	fake.IncRebaseConflictStub = stub
+}
+
+func (fake *FakeMetrics) IncRefRequest(arg1 string, arg2 string) {
+	fake.incRefRequestMutex.Lock()
+	fake.incRefRequestArgsForCall = append(fake.incRefRequestArgsForCall, struct {
+		arg1 string
+		arg2 string
+	}{arg1, arg2})
+	stub := fake.IncRefRequestStub
+	fake.recordInvocation("IncRefRequest", []interface{}{arg1, arg2})
+	fake.incRefRequestMutex.Unlock()
+	if stub != nil {
+		fake.IncRefRequestStub(arg1, arg2)
+	}
+}
+
+func (fake *FakeMetrics) IncRefRequestCallCount() int {
+	fake.incRefRequestMutex.RLock()
+	defer fake.incRefRequestMutex.RUnlock()
+	return len(fake.incRefRequestArgsForCall)
+}
+
+func (fake *FakeMetrics) IncRefRequestCalls(stub func(string, string)) {
+	fake.incRefRequestMutex.Lock()
+	defer fake.incRefRequestMutex.Unlock()
+	fake.IncRefRequestStub = stub
+}
+
+func (fake *FakeMetrics) IncRefRequestArgsForCall(i int) (string, string) {
+	fake.incRefRequestMutex.RLock()
+	defer fake.incRefRequestMutex.RUnlock()
+	argsForCall := fake.incRefRequestArgsForCall[i]
+	return argsForCall.arg1, argsForCall.arg2
 }
 
 func (fake *FakeMetrics) IncResolverFailure(arg1 string) {

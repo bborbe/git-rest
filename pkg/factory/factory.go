@@ -46,6 +46,33 @@ func CreateFilesListHandler(g git.Git) http.Handler {
 	return libhttp.NewJSONErrorHandler(handler.NewFilesListHandler(g))
 }
 
+// CreateRefsGetHandler returns an http.Handler for GET /api/v1/refs.
+func CreateRefsGetHandler(g git.Git, m metrics.Metrics) http.Handler {
+	return handler.NewRefMetricsMiddleware(
+		m,
+		"get",
+		libhttp.NewJSONErrorHandler(handler.NewRefsGetHandler(g)),
+	)
+}
+
+// CreateRefsPutHandler returns an http.Handler for PUT /api/v1/refs/{key}.
+func CreateRefsPutHandler(g git.Git, m metrics.Metrics) http.Handler {
+	return handler.NewRefMetricsMiddleware(
+		m,
+		"put",
+		libhttp.NewJSONErrorHandler(handler.NewRefsPutHandler(g)),
+	)
+}
+
+// CreateRefsDeleteHandler returns an http.Handler for DELETE /api/v1/refs/{key}.
+func CreateRefsDeleteHandler(g git.Git, m metrics.Metrics) http.Handler {
+	return handler.NewRefMetricsMiddleware(
+		m,
+		"delete",
+		libhttp.NewJSONErrorHandler(handler.NewRefsDeleteHandler(g)),
+	)
+}
+
 // CreateHealthzHandler returns an http.Handler for GET /healthz.
 func CreateHealthzHandler() http.Handler {
 	return libhttp.NewPrintHandler("OK")

@@ -159,3 +159,34 @@ var _ = Describe("ResolverFailuresTotal nested_source label", func() {
 		)).To(Equal(0.0))
 	})
 })
+
+var _ = Describe("RefRequestsTotal", func() {
+	It("exposes all twelve op/result series at 0 before any ref request", func() {
+		mfs, err := prometheus.DefaultGatherer.Gather()
+		Expect(err).NotTo(HaveOccurred())
+
+		seen := make(map[string]bool)
+		count := 0
+		for _, mf := range mfs {
+			if mf.GetName() != "git_rest_ref_requests_total" {
+				continue
+			}
+			for _, metric := range mf.GetMetric() {
+				count++
+				labels := make(map[string]string)
+				for _, label := range metric.GetLabel() {
+					labels[label.GetName()] = label.GetValue()
+				}
+				key := labels["op"] + "/" + labels["result"]
+				seen[key] = true
+				Expect(metric.GetCounter().GetValue()).To(Equal(0.0), key)
+			}
+		}
+		Expect(count).To(Equal(12))
+		for _, op := range []string{"get", "put", "delete"} {
+			for _, result := range []string{"200", "400", "409", "500"} {
+				Expect(seen[op+"/"+result]).To(BeTrue(), op+"/"+result)
+			}
+		}
+	})
+})
