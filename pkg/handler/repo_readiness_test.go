@@ -15,14 +15,10 @@ import (
 )
 
 var _ = Describe("RepoReadiness", func() {
-	It("reports ready for a readable repository path", func() {
-		repoDir := GinkgoT().TempDir()
-		ready, reason := handler.NewRepoReadiness(repoDir).ReadinessStatus()
-		Expect(ready).To(BeTrue())
-		Expect(reason).To(Equal("ok"))
-	})
-
-	It("reports ready before any pull has run (cold start)", func() {
+	// Cold start and the ordinary readable path are the same assertion here: the
+	// verdict consults no pull state, so a repo that has never been pulled is
+	// indistinguishable from one that has. One spec carries both claims.
+	It("reports ready for a readable repository path before any pull has run (cold start)", func() {
 		repoDir := GinkgoT().TempDir()
 		ready, reason := handler.NewRepoReadiness(repoDir).ReadinessStatus()
 		Expect(ready).To(BeTrue())
