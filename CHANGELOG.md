@@ -8,9 +8,12 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 * MINOR version when you add functionality in a backwards-compatible manner, and
 * PATCH version when you make backwards-compatible bug fixes.
 
-## v0.32.0
+## Unreleased
 
 - feat: Expose claim refs under `refs/claims/` over HTTP. `GET /api/v1/refs` lists claim refs live from the origin; `PUT` and `DELETE` on `/api/v1/refs/claims/{key}` create, renew and delete them with an origin-enforced compare-and-swap lease. A lost race returns `409` and is never retried; every request is counted in `git_rest_ref_requests_total{op,result}`.
+
+## v0.32.0
+
 - feat: Retry a rejected push in-attempt. When git rejects a push with `[rejected] … (fetch first)` or `(non-fast-forward)`, the operation now jitters 100–500 ms, fetches, merges the upstream, and pushes again — up to 3 total attempts — instead of returning the error and waiting for the next pull interval. Terminal rejections (auth, ruleset, network) are unchanged. Adds the `git_rest_push_retries_total` counter, incremented once per retry, and the `git-rest: push retry` / `git-rest: push succeeded after retry` log lines.
 
 ## v0.31.0
