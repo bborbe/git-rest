@@ -155,6 +155,16 @@ type Git interface {
 	ConfigureUser(ctx context.Context, name string, email string) error
 	ConfigurePackMemory(ctx context.Context) error
 	Init(ctx context.Context) error
+	// ListClaimRefs returns the claim refs under refs/<prefix>, read live from the
+	// origin. A fetch that fails because the ref moved or was deleted between
+	// listing and fetching drops that entry and logs one WARN.
+	ListClaimRefs(ctx context.Context, prefix string) ([]ClaimRef, error)
+	// PutClaimRef creates or renews refs/<key> with the origin's compare-and-swap.
+	// It returns the new commit sha. A lease mismatch returns ErrRefConflict.
+	PutClaimRef(ctx context.Context, key string, request ClaimRefRequest) (string, error)
+	// DeleteClaimRef deletes refs/<key> with the origin's compare-and-swap.
+	// A lease mismatch or an absent ref returns ErrRefConflict.
+	DeleteClaimRef(ctx context.Context, key string, expectedSHA string) error
 }
 
 // New returns a Git implementation backed by the system git binary for the given repository path.
@@ -165,13 +175,15 @@ func New(
 	sshKeyPath SSHKeyPath,
 	resolver ConflictResolver,
 ) Git {
-	return &git{
+	g := &git{
 		repoPath:              repoPath,
 		metrics:               m,
 		currentDateTimeGetter: currentDateTimeGetter,
 		sshKeyPath:            sshKeyPath,
 		resolver:              resolver,
 	}
+	g.origin = &gitOrigin{g: g}
+	return g
 }
 
 type git struct {
@@ -181,6 +193,7 @@ type git struct {
 	currentDateTimeGetter libtime.CurrentDateTimeGetter
 	sshKeyPath            SSHKeyPath
 	resolver              ConflictResolver
+	origin                claimOrigin
 }
 
 // validatePath rejects empty, absolute, path-traversal, and .git paths.
