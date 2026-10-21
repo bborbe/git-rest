@@ -8,6 +8,10 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 * MINOR version when you add functionality in a backwards-compatible manner, and
 * PATCH version when you make backwards-compatible bug fixes.
 
+## Unreleased
+
+- feat: Retry a rejected push in-attempt. When git rejects a push with `[rejected] … (fetch first)` or `(non-fast-forward)`, the operation now jitters 100–500 ms, fetches, merges the upstream, and pushes again — up to 3 total attempts — instead of returning the error and waiting for the next pull interval. Terminal rejections (auth, ruleset, network) are unchanged. Adds the `git_rest_push_retries_total` counter, incremented once per retry, and the `git-rest: push retry` / `git-rest: push succeeded after retry` log lines.
+
 ## v0.31.0
 
 - refactor: Wire `/readiness` to the repo-path serving verdict and delete `PullStateCache`/`PullStateWriter`. Readiness now reports 200 whenever the served repository path is readable and 503 with `repo path unreadable` when it is not, regardless of the last pull outcome; the puller still logs `git pull failed` on every failed attempt but no longer records pull state.
