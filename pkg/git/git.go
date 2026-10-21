@@ -374,7 +374,17 @@ func (g *git) retryPush(ctx context.Context, upstream string, nextAttempt int) e
 	mergeOut, mergeErr := g.runCmdRaw(ctx, g.repoPath, "merge", "--no-edit", upstream)
 	if mergeErr != nil {
 		_, _ = g.runCmdRaw(ctx, g.repoPath, "merge", "--abort")
-		return errors.Wrapf(ctx, mergeErr, "merge %s: %s", upstream, mergeOut)
+		slog.WarnContext(
+			ctx,
+			"git-rest: retry merge failed",
+			"upstream",
+			upstream,
+			"err",
+			mergeErr.Error(),
+			"output",
+			strings.TrimSpace(string(mergeOut)),
+		)
+		return errors.Wrapf(ctx, mergeErr, "merge %s failed", upstream)
 	}
 	return nil
 }

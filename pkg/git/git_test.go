@@ -3251,4 +3251,21 @@ var _ = Describe("Push retry", func() {
 		Expect(os.IsNotExist(statErr)).To(BeTrue())
 		Expect(strings.TrimSpace(gitOutputStr(workDir, "status", "--porcelain"))).To(BeEmpty())
 	})
+
+	It("reports the retry merge cause without echoing the merge output", func() {
+		writeLocalCommit(workDir, "conflict.txt", "local\n")
+		installRemoteAdvanceOnFetch(workDir, true, "conflict.txt")
+
+		logs, restore := captureSlogLogs()
+		defer restore()
+
+		err := pg.Pull(ctx)
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).NotTo(ContainSubstring("Merge conflict in conflict.txt"))
+		Expect(err.Error()).To(HaveSuffix("exit status 1"))
+
+		logStr := logs.String()
+		Expect(logStr).To(ContainSubstring("git-rest: retry merge failed"))
+		Expect(logStr).To(ContainSubstring("Merge conflict in conflict.txt"))
+	})
 })

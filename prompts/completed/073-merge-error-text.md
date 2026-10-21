@@ -1,5 +1,12 @@
 ---
-status: draft
+status: completed
+summary: Retry-merge failures now log git's trimmed output as a structured warning and return an error leading with the underlying cause instead of git's stdout; added a real-repo regression test and a CHANGELOG entry.
+execution_id: git-rest-merge-err-exec-073-merge-error-text
+dark-factory-version: v0.198.7
+created: "2026-10-21T21:11:35Z"
+queued: "2026-10-21T21:11:35Z"
+started: "2026-10-21T21:16:37Z"
+completed: "2026-10-21T21:18:08Z"
 ---
 
 # Report a failed retry-merge by its cause, not by git's stdout
