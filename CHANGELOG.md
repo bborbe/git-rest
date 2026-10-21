@@ -11,10 +11,10 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 ## Unreleased
 
 - fix: Report a failed retry merge by its cause. The push-retry merge error now reads `merge <upstream> failed: <cause>` instead of prefixing the cause with git's combined output, which could show merge success text for a killed process; the output is logged at warn level as `git-rest: retry merge failed`.
+- feat: Expose claim refs under `refs/claims/` over HTTP. `GET /api/v1/refs` lists claim refs live from the origin; `PUT` and `DELETE` on `/api/v1/refs/claims/{key}` create, renew and delete them with an origin-enforced compare-and-swap lease. A lost race returns `409` and is never retried; every request is counted in `git_rest_ref_requests_total{op,result}`.
 
 ## v0.32.0
 
-- feat: Expose claim refs under `refs/claims/` over HTTP. `GET /api/v1/refs` lists claim refs live from the origin; `PUT` and `DELETE` on `/api/v1/refs/claims/{key}` create, renew and delete them with an origin-enforced compare-and-swap lease. A lost race returns `409` and is never retried; every request is counted in `git_rest_ref_requests_total{op,result}`.
 - feat: Retry a rejected push in-attempt. When git rejects a push with `[rejected] … (fetch first)` or `(non-fast-forward)`, the operation now jitters 100–500 ms, fetches, merges the upstream, and pushes again — up to 3 total attempts — instead of returning the error and waiting for the next pull interval. Terminal rejections (auth, ruleset, network) are unchanged. Adds the `git_rest_push_retries_total` counter, incremented once per retry, and the `git-rest: push retry` / `git-rest: push succeeded after retry` log lines.
 
 ## v0.31.0
