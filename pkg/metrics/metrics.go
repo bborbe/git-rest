@@ -67,6 +67,13 @@ var AutoresolvedTotal = prometheus.NewCounter(prometheus.CounterOpts{
 	Help: "Total conflicted paths auto-resolved by the scalar-frontmatter rule during pull.",
 })
 
+// PushRetriesTotal counts push retries performed after a non-fast-forward
+// rejection. One increment per retry: the first push attempt is not counted.
+var PushRetriesTotal = prometheus.NewCounter(prometheus.CounterOpts{
+	Name: "git_rest_push_retries_total",
+	Help: "Total push retries after a non-fast-forward rejection.",
+})
+
 // ResolverFailuresTotal counts conflict-resolver failures by category.
 // Categories: yaml_parse_failed, no_frontmatter, write_failed, git_add_failed,
 // quarantine_io_failed, unsafe_path, nested_source. The quarantine_io_failed bucket covers
@@ -92,6 +99,7 @@ func init() {
 		QuarantinedBacklog,
 		PullRescuesTotal,
 		AutoresolvedTotal,
+		PushRetriesTotal,
 	)
 	for _, op := range []string{"write_file", "delete_file", "read_file", "list_files", "pull", "fetch", "push", "rebase"} {
 		GitOperationErrors.WithLabelValues(op, "").Add(0)
@@ -130,6 +138,10 @@ func init() {
 	// QuarantinedFilesTotal: the series is registered at init() time so /metrics
 	// exposes it as 0 before the first auto-resolution has ever happened.
 	AutoresolvedTotal.Add(0)
+	// Explicit .Add(0) on the unlabeled push-retry counter, mirroring
+	// PullRescuesTotal: the series is registered at init() time so /metrics
+	// exposes it as 0 before the first retry has ever happened.
+	PushRetriesTotal.Add(0)
 	for _, category := range []string{
 		"yaml_parse_failed",
 		"no_frontmatter",
@@ -173,6 +185,9 @@ type Metrics interface {
 	// scalar-frontmatter rule. Called once per path, after the file is written and
 	// staged.
 	IncAutoresolved()
+	// IncPushRetry records one push retry performed after a non-fast-forward
+	// rejection. The first push attempt is never counted.
+	IncPushRetry()
 }
 
 // NewMetrics returns a Prometheus-backed Metrics implementation.
@@ -224,4 +239,8 @@ func (p *prometheusMetrics) IncPullRescue() {
 
 func (p *prometheusMetrics) IncAutoresolved() {
 	AutoresolvedTotal.Inc()
+}
+
+func (p *prometheusMetrics) IncPushRetry() {
+	PushRetriesTotal.Inc()
 }
