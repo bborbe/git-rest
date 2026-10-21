@@ -8,6 +8,10 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 * MINOR version when you add functionality in a backwards-compatible manner, and
 * PATCH version when you make backwards-compatible bug fixes.
 
+## Unreleased
+
+- chore: update Go to 1.27.3 and github.com/bborbe/http to v1.26.30, github.com/bborbe/sentry to v1.10.5, github.com/bborbe/service to v1.11.0, github.com/bborbe/time to v1.27.17
+
 ## v0.30.0
 
 - feat: Auto-resolve merge conflicts confined to single-line scalar frontmatter keys. A conflict whose hunks lie entirely inside a markdown file's YAML frontmatter and whose lines are all `key: value` scalars now resolves in place instead of quarantining: allowlisted counters (`trigger_count`, `retry_count`, `metrics_*`) take the greater integer, every other scalar takes the newer merge parent's value, and each resolved path increments `git_rest_autoresolved_total`. Non-scalar hunks, hunks outside the frontmatter, one-sided keys and duplicate keys keep quarantining.
