@@ -1,7 +1,9 @@
 ---
-status: draft
-kind: bug
-created: "2026-10-21T15:21:18Z"
+status: prompted
+approved: "2026-10-21T15:40:05Z"
+generating: "2026-10-21T15:43:34Z"
+prompted: "2026-10-21T15:51:56Z"
+branch: dark-factory/bug-readiness-decoupled-from-sync-outcome
 ---
 
 ## Summary
