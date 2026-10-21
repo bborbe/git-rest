@@ -11,6 +11,7 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 ## Unreleased
 
 - refactor: Wire `/readiness` to the repo-path serving verdict and delete `PullStateCache`/`PullStateWriter`. Readiness now reports 200 whenever the served repository path is readable and 503 with `repo path unreadable` when it is not, regardless of the last pull outcome; the puller still logs `git pull failed` on every failed attempt but no longer records pull state.
+- fix: `/readiness` now reports whether the pod can serve — the HTTP server is listening and the served repository path is readable — instead of whether the most recent sync succeeded. A rejected push, a failed fetch or a merge conflict no longer removes the pod from its Service; those failures remain visible in the pod log and in `git_rest_git_operation_errors_total`.
 
 ## v0.30.1
 

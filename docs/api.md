@@ -17,7 +17,7 @@ Default port: `9090` (set via `--listen`).
 | `POST` | `/api/v1/files/{path}` | Create or overwrite a file (auto-commits + pushes) |
 | `DELETE` | `/api/v1/files/{path}` | Delete a file (auto-commits + pushes) |
 | `GET` | `/healthz` | Liveness probe |
-| `GET` | `/readiness` | Readiness probe (checks git status + pending pushes) |
+| `GET` | `/readiness` | Readiness probe (serves while the repository path is readable) |
 | `GET` | `/metrics` | Prometheus metrics |
 
 `{path}` is a relative path within the repo. Leading `/api/v1/files/` is stripped and the remainder is used as-is.
@@ -109,13 +109,17 @@ Always returns `200 OK` with body `ok` if the process is alive. Used for Kuberne
 curl http://localhost:9090/readiness
 ```
 
-Returns `200 OK` with body `ok` if:
+Returns `200 OK` with body `ok` when the process can serve its API: the HTTP
+server is listening and the served repository path is readable.
 
-- `git status` succeeds
-- Working tree is clean (no uncommitted changes)
-- No local commits pending push
+Returns `503 Service Unavailable` with body `repo path unreadable` when the
+served repository path is missing or unreadable. Used for Kubernetes readiness
+probes.
 
-Returns `503 Service Unavailable` otherwise. Used for Kubernetes readiness probes — a pod flips unready while a write is in-flight or if a push is stuck.
+Readiness does not depend on the outcome of the most recent sync. A rejected
+push, a failed fetch, or a merge conflict leaves the probe at `200`; those
+failures are reported through the pod log (`git pull failed`) and through
+`git_rest_git_operation_errors_total{operation=...}`.
 
 ## Metrics
 

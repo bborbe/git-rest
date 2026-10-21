@@ -1,8 +1,13 @@
 ---
-status: approved
+status: completed
 spec: [017-bug-readiness-decoupled-from-sync-outcome]
+summary: Rewrote the readiness contract across docs/api.md, README.md, docs/deployment.md, the rebase-conflict alert and CHANGELOG.md to describe repo-path readability instead of sync outcome.
+execution_id: git-rest-readiness-decouple-exec-068-spec-017-docs-correction
+dark-factory-version: v0.198.7
 created: "2026-10-21T15:45:28Z"
 queued: "2026-10-21T15:52:46Z"
+started: "2026-10-21T15:56:13Z"
+completed: "2026-10-21T15:58:40Z"
 branch: dark-factory/bug-readiness-decoupled-from-sync-outcome
 ---
 

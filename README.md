@@ -30,7 +30,7 @@ Full system map: [recurring-task-creator/docs/system-map.md](https://github.com/
 - Periodic `git pull` to stay in sync with the remote
 - Auto `git add + commit + push` on every write/delete
 - Optional SSH key + git author config
-- Health and readiness endpoints (readiness reflects git status)
+- Health and readiness endpoints (readiness reflects whether the served repository path is readable)
 - Prometheus metrics on `/metrics`
 
 ## Quick Start
