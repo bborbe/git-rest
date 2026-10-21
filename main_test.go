@@ -6,6 +6,7 @@ package main_test
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -609,13 +610,8 @@ var _ = Describe("AdminRoutes", func() {
 			"",
 			git.NewMarkerResolver(repoDir),
 		)
-		pullState := puller.NewPullStateCache(
-			libtime.NewCurrentDateTime(),
-			3*30*time.Second,
-		)
-
 		// CreateServerHandler returns the http.Handler for the probe routes
-		handler = main.CreateServerHandler(gitClient, &mocks.FakeMetrics{}, pullState)
+		handler = main.CreateServerHandler(gitClient, &mocks.FakeMetrics{}, repoDir)
 	})
 
 	Context("GET /gc", func() {
@@ -632,6 +628,85 @@ var _ = Describe("AdminRoutes", func() {
 			handler.ServeHTTP(rec, req)
 			Expect(rec.Code).To(Equal(http.StatusOK))
 		})
+	})
+})
+
+var _ = Describe("Readiness integration", func() {
+	var (
+		handler http.Handler
+		rec     *httptest.ResponseRecorder
+		repoDir string
+	)
+
+	BeforeEach(func() {
+		repoDir = GinkgoT().TempDir()
+		rec = httptest.NewRecorder()
+		gitClient := factory.CreateGitClient(
+			repoDir,
+			&mocks.FakeMetrics{},
+			libtime.NewCurrentDateTime(),
+			"",
+			git.NewMarkerResolver(repoDir),
+		)
+		handler = main.CreateServerHandler(gitClient, &mocks.FakeMetrics{}, repoDir)
+	})
+
+	It("returns 200 'ok' on a readable repository path", func() {
+		req := httptest.NewRequest(http.MethodGet, "/readiness", nil)
+		handler.ServeHTTP(rec, req)
+		Expect(rec.Code).To(Equal(http.StatusOK))
+		Expect(rec.Body.String()).To(Equal("ok"))
+	})
+
+	It("returns 200 on a cold start before any pull", func() {
+		// No puller is ever started: readiness depends only on the path.
+		req := httptest.NewRequest(http.MethodGet, "/readiness", nil)
+		handler.ServeHTTP(rec, req)
+		Expect(rec.Code).To(Equal(http.StatusOK))
+		Expect(rec.Body.String()).To(Equal("ok"))
+	})
+
+	It("returns 503 'repo path unreadable' when the repository path is missing", func() {
+		Expect(os.RemoveAll(repoDir)).To(Succeed())
+		req := httptest.NewRequest(http.MethodGet, "/readiness", nil)
+		handler.ServeHTTP(rec, req)
+		Expect(rec.Code).To(Equal(http.StatusServiceUnavailable))
+		Expect(rec.Body.String()).To(Equal("repo path unreadable"))
+		Expect(rec.Body.String()).NotTo(MatchRegexp(`(?i)push|pull|sync|conflict|/tmp/`))
+	})
+
+	It("returns 200 while the puller records a push rejection", func() {
+		fakeGit := &mocks.FakeGit{}
+		fakeGit.PullStub = func(ctx context.Context) error {
+			return errors.New("push failed")
+		}
+		p := puller.New(fakeGit, libtime.Duration(10*time.Millisecond), 0)
+		ctx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
+		defer cancel()
+		_ = p.Run(ctx)
+		Expect(fakeGit.PullCallCount()).To(BeNumerically(">=", 1))
+
+		req := httptest.NewRequest(http.MethodGet, "/readiness", nil)
+		handler.ServeHTTP(rec, req)
+		Expect(rec.Code).To(Equal(http.StatusOK))
+		Expect(rec.Body.String()).To(Equal("ok"))
+	})
+
+	It("returns 200 while the puller returns a rebase conflict", func() {
+		fakeGit := &mocks.FakeGit{}
+		fakeGit.PullStub = func(ctx context.Context) error {
+			return &git.RebaseConflictError{Path: "tasks/foo.md"}
+		}
+		p := puller.New(fakeGit, libtime.Duration(10*time.Millisecond), 0)
+		ctx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
+		defer cancel()
+		_ = p.Run(ctx)
+		Expect(fakeGit.PullCallCount()).To(BeNumerically(">=", 1))
+
+		req := httptest.NewRequest(http.MethodGet, "/readiness", nil)
+		handler.ServeHTTP(rec, req)
+		Expect(rec.Code).To(Equal(http.StatusOK))
+		Expect(rec.Body.String()).To(Equal("ok"))
 	})
 })
 

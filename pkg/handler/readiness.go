@@ -14,13 +14,14 @@ import (
 //counterfeiter:generate -o ../../mocks/readiness_state_reader.go --fake-name FakeReadinessStateReader . ReadinessStateReader
 
 // ReadinessStateReader is the interface the readiness handler reads from.
-// Implemented by *puller.PullStateCache.
+// Implemented by the repo-path verdict returned by NewRepoReadiness.
 type ReadinessStateReader interface {
 	ReadinessStatus() (bool, string)
 }
 
-// NewReadinessHandler returns a handler that reports readiness based on cached pull state.
-// It never invokes a git subprocess and never blocks on the pull mutex.
+// NewReadinessHandler returns a handler that reports readiness from the given
+// serving-state reader. It never invokes a git subprocess and never blocks on
+// a mutex.
 func NewReadinessHandler(s ReadinessStateReader) libhttp.WithError {
 	return libhttp.WithErrorFunc(
 		func(ctx context.Context, resp http.ResponseWriter, req *http.Request) error {

@@ -75,14 +75,9 @@ func (a *application) Run(ctx context.Context, sentryClient libsentry.Client) er
 		return errors.Wrap(ctx, err, "create git client failed")
 	}
 
-	pullState := puller.NewPullStateCache(
-		libtime.NewCurrentDateTime(),
-		3*time.Duration(a.PullInterval),
-	)
-
 	return service.Run(ctx,
-		a.createGitRefresher(gitClient, pullState),
-		a.createHTTPServer(gitClient, metrics.NewMetrics(), pullState),
+		a.createGitRefresher(gitClient),
+		a.createHTTPServer(gitClient, metrics.NewMetrics(), a.Repo),
 		a.createMemoryReporter(),
 	)
 }
@@ -154,8 +149,8 @@ func cleanupStaleLocks(ctx context.Context, repoDir string) error {
 // push already handle remote sync; doing it here would duplicate retry logic.
 //
 // Best-effort: errors are logged and do NOT abort startup. A failure here
-// just means readiness will fall back to the existing 503 wait until manual
-// intervention; that's no worse than today.
+// just means the untracked files stay uncommitted; readiness is unaffected
+// because it tracks whether the served repository path is readable.
 //
 // No-op when:
 //   - .git/ does not exist (pre-init / pre-clone)
@@ -444,16 +439,16 @@ func (a *application) createMemoryReporter() run.Func {
 	}
 }
 
-func (a *application) createGitRefresher(gitClient git.Git, state puller.PullStateWriter) run.Func {
+func (a *application) createGitRefresher(gitClient git.Git) run.Func {
 	return func(ctx context.Context) error {
-		return puller.New(gitClient, a.PullInterval, time.Duration(a.PullTimeout), state).Run(ctx)
+		return puller.New(gitClient, a.PullInterval, time.Duration(a.PullTimeout)).Run(ctx)
 	}
 }
 
 func (a *application) createHTTPServer(
 	gitClient git.Git,
 	m metrics.Metrics,
-	pullState *puller.PullStateCache,
+	repoPath string,
 ) run.Func {
 	return func(ctx context.Context) error {
 		getH := factory.CreateFilesGetHandler(gitClient)
@@ -461,7 +456,7 @@ func (a *application) createHTTPServer(
 		deleteH := factory.CreateFilesDeleteHandler(gitClient)
 		listH := factory.CreateFilesListHandler(gitClient)
 		healthzH := factory.CreateHealthzHandler()
-		readinessH := factory.CreateReadinessHandler(pullState)
+		readinessH := factory.CreateReadinessHandler(repoPath)
 
 		router := gorillamux.NewRouter().SkipClean(true)
 

@@ -16,7 +16,6 @@ import (
 	"github.com/bborbe/git-rest/pkg/factory"
 	"github.com/bborbe/git-rest/pkg/git"
 	"github.com/bborbe/git-rest/pkg/metrics"
-	"github.com/bborbe/git-rest/pkg/puller"
 )
 
 // CleanupStaleLocks is exported for testing via the main_test package.
@@ -36,13 +35,13 @@ var ResolveGitSSHCommand = resolveGitSSHCommand
 func CreateServerHandler(
 	gitClient git.Git,
 	m metrics.Metrics,
-	pullState *puller.PullStateCache,
+	repoPath string,
 ) http.Handler {
 	router := gorillamux.NewRouter().SkipClean(true)
 
 	// Probe routes — always unauthenticated (kubelet + Prometheus have no secret).
 	router.Handle("/healthz", factory.CreateHealthzHandler())
-	router.Handle("/readiness", factory.CreateReadinessHandler(pullState))
+	router.Handle("/readiness", factory.CreateReadinessHandler(repoPath))
 	router.Handle("/gc", libhttp.NewGarbageCollectorHandler())
 	router.Handle(
 		"/setloglevel/{level}",

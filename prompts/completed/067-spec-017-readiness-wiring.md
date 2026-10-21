@@ -1,8 +1,13 @@
 ---
-status: approved
+status: completed
 spec: [017-bug-readiness-decoupled-from-sync-outcome]
+summary: Wired /readiness to the repo-path serving verdict, deleted PullStateCache/PullStateWriter and its mock, and added integration coverage for 200-while-failing and 503-when-unreadable.
+execution_id: git-rest-readiness-decouple-exec-067-spec-017-readiness-wiring
+dark-factory-version: v0.198.7
 created: "2026-10-21T15:45:28Z"
 queued: "2026-10-21T15:52:46Z"
+started: "2026-10-21T15:54:38Z"
+completed: "2026-10-21T15:56:12Z"
 branch: dark-factory/bug-readiness-decoupled-from-sync-outcome
 ---
 
