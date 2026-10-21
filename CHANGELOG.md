@@ -8,7 +8,7 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 * MINOR version when you add functionality in a backwards-compatible manner, and
 * PATCH version when you make backwards-compatible bug fixes.
 
-## Unreleased
+## v0.33.0
 
 - feat: Expose claim refs under `refs/claims/` over HTTP. `GET /api/v1/refs` lists claim refs live from the origin; `PUT` and `DELETE` on `/api/v1/refs/claims/{key}` create, renew and delete them with an origin-enforced compare-and-swap lease. A lost race returns `409` and is never retried; every request is counted in `git_rest_ref_requests_total{op,result}`.
 
