@@ -1,8 +1,9 @@
 ---
-status: prompted
+status: verifying
 approved: "2026-10-21T15:40:05Z"
 generating: "2026-10-21T15:43:34Z"
 prompted: "2026-10-21T15:51:56Z"
+verifying: "2026-10-21T15:58:41Z"
 branch: dark-factory/bug-readiness-decoupled-from-sync-outcome
 ---
 
