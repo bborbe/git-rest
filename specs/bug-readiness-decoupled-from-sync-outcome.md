@@ -14,11 +14,18 @@ created: "2026-10-21T15:21:18Z"
 
 ## Problem
 
-git-rest exists to serve a vault over HTTP and to keep that vault's clone in sync with its remote. Those are two capabilities with independent failure modes, but `/readiness` reports only the second. When two git-rest instances push to the same branch — which is the standing topology for the OpenClaw vault, one pod per cluster — one of them loses every race, its `git push` is rejected, the puller records that rejection as a pull failure, and within 90 seconds the pod is removed from its Service. Reads, which never touch the remote, worked the entire time. The outage is therefore self-inflicted: a pod that could serve traffic is deliberately taken out of rotation because it could not write.
+git-rest exists to serve a vault over HTTP and to keep that vault's clone in sync with its remote. Those are two capabilities with independent failure modes, but `/readiness` reports only the second. When two git-rest instances push to the same branch — the standing topology for the OpenClaw vault, one pod per cluster — one of them loses every race, its `git push` is rejected, the puller records that rejection as a pull failure, and within 90 seconds the pod is removed from its Service. Reads, which never touch the remote, worked the entire time. The outage is therefore self-inflicted: a pod that could serve traffic is deliberately taken out of rotation because it could not write.
 
 ## Goal
 
-`/readiness` answers 200 whenever the process can serve its API — the HTTP server is listening, the puller loop is running, and the served repository path is readable — regardless of whether the most recent sync attempt succeeded. A rejected push, a failed fetch, or a merge conflict no longer removes the pod from its Service. Sync failures remain visible through the puller's warning logs and through `git_rest_git_operation_errors_total{operation=...}`, which `helm/templates/alerts.yaml:16` already alerts on.
+`/readiness` answers 200 whenever the process can serve its API — the HTTP server is listening and the served repository path is readable — regardless of whether the most recent sync attempt succeeded. A rejected push, a failed fetch, or a merge conflict no longer removes the pod from its Service. Sync failures remain visible through the puller's warning logs and through `git_rest_git_operation_errors_total{operation=...}`, which `helm/templates/alerts.yaml:16` already alerts on.
+
+## Assumptions
+
+- Bootstrap aborts startup on failure (`main.go:65`), so a process that is serving HTTP has a cloned or initialised repo on disk.
+- Only the kubelet consumes `/readiness` (`helm/templates/statefulset.yaml:99-114`); no alert expression reads it.
+- `/readiness` is unauthenticated by design (`main.go:479`), so its body must not disclose host paths.
+- The repo is served from a single replica per vault; multi-writer behaviour at `replicas > 1` stays undefined, as spec 006 established.
 
 ## Reproduction
 
@@ -26,6 +33,9 @@ Deterministic, rung 1: a locally built binary against a temp repo whose remote r
 
 ```bash
 set -e
+# Build the tree that holds the fix — never the main checkout, which replays
+# the unfixed binary and fails every assertion falsely.
+REPO_UNDER_TEST="${REPO_UNDER_TEST:-$(git rev-parse --show-toplevel)}"
 BASE=/tmp/git-rest-pushfail-repro && rm -rf "$BASE" && mkdir -p "$BASE" && cd "$BASE"
 
 # Bare remote built by clone, so no push is needed to seed it.
@@ -48,15 +58,17 @@ git config user.email repro@local && git config user.name repro
 
 # Boot against the clean, level clone, then make the served clone locally ahead
 # so the puller attempts a push on its next tick.
-cd ~/Documents/workspaces/git-rest && go build -o /tmp/git-rest-pushfail-bin .
-/tmp/git-rest-pushfail-bin -listen=:18447 -repo="$BASE/work" -pull-interval=3s -v=1 > "$BASE/run.log" 2>&1 &
+cd "${REPO_UNDER_TEST}" && go build -o /tmp/git-rest-pushfail-bin .
+/tmp/git-rest-pushfail-bin -listen=:18449 -repo="$BASE/work" -pull-interval=3s -v=1 > "$BASE/run.log" 2>&1 &
 sleep 3
 cd "$BASE/work" && git commit -q --allow-empty -m "local ahead of remote"
 sleep 15
 
-curl -s -w '\nHTTP %{http_code}\n' http://localhost:18447/readiness
-curl -s -o /dev/null -w 'GET note.md HTTP %{http_code}\n' http://localhost:18447/api/v1/files/note.md
+curl -s -w '\nHTTP %{http_code}\n' http://localhost:18449/readiness
+curl -s -o /dev/null -w 'GET note.md HTTP %{http_code}\n' http://localhost:18449/api/v1/files/note.md
 
+# Step 7 — teardown. AC2 runs BETWEEN the reads above and this line: delete the
+# served repo while the process is still alive, then read /readiness once more.
 kill "$(pgrep -f /tmp/git-rest-pushfail-bin)" 2>/dev/null || true
 ```
 
@@ -112,66 +124,86 @@ Net: a push rejection is indistinguishable from a pull failure at every layer ab
 
 ## Desired Behavior
 
-1. `/readiness` returns **200** when the process is serving, the puller loop is running, and the served repo path is readable — independent of the last sync outcome.
-2. `/readiness` returns **503** only when the service cannot serve at all: the puller loop has not started, the repo path is missing or unreadable, or the process is shutting down.
+1. `/readiness` returns **200** when the process is serving and the served repo path is readable — independent of the last sync outcome.
+2. `/readiness` returns **503** only when the repo path is missing or unreadable.
 3. A push rejection, a failed fetch, or a merge conflict leaves `/readiness` at 200 and leaves `GET /api/v1/files/...` working.
-4. A 503 body names the concrete serving failure (`repo path unreadable: <path>`, `puller not started`) and never a sync error such as `push failed` or `no successful pull yet`.
-5. The sync outcome stays observable: `RecordPull` continues to record every attempt, `pkg/git` continues to increment `git_rest_git_operation_errors_total{operation="push"|"pull"|"fetch"|"rebase"}`, and the puller continues to log `git pull failed`.
-6. Cold start is ready: a process whose HTTP server is listening and whose repo path is readable answers 200 even before its first pull tick completes. Bootstrap clones or initialises the repo before the server starts, so a serving process has a repo.
+4. The 503 body is a short reason that names the failure without disclosing a host path (`repo path unreadable`) and never a sync error such as `push failed` or `no successful pull yet`.
+5. The sync outcome stays observable: `pkg/git` continues to increment `git_rest_git_operation_errors_total{operation="push"|"pull"|"fetch"|"rebase"}` and the puller continues to log `git pull failed`.
+6. Cold start is ready: a process whose HTTP server is listening and whose repo path is readable answers 200 even before its first pull tick completes.
 7. `/healthz` behaviour is unchanged: 200 while the process is alive.
 
 ## Constraints
 
-- MUST NOT change the `/readiness` URL or its 200/503 status-code contract (`docs/api.md:20,118` are frozen in shape, not in meaning — the prose must be corrected).
+- MUST NOT change the `/readiness` URL or its 200/503 status-code contract (`docs/api.md:20,118` keep their shape; their prose must be corrected).
 - MUST preserve spec 005's latency guarantee: the handler never invokes a git subprocess and never blocks on the pull mutex. A repo-path readability check is a `stat`, not a git call.
-- MUST NOT weaken liveness. `/healthz` keeps its current semantics and its current implementation.
+- MUST NOT weaken liveness. `/healthz` keeps its current semantics and implementation.
 - MUST NOT change write-path semantics: a failed push still returns an error to the API caller. This spec changes what readiness *reports*, not what a write *does*.
-- MUST keep the sync signal intact: the existing metric series and log lines are unchanged, so `helm/templates/alerts.yaml:16` continues to fire on sync failures. No new alert is introduced here.
-- MUST NOT delete the `PullStateCache` write path. The recorded state keeps its consumers (metric, logs, and a future `/sync-status`); only its use as the readiness verdict is removed.
-- MUST update `docs/api.md:20` ("checks git status + pending pushes") and `docs/api.md:118` ("a pod flips unready … if a push is stuck") to describe the new semantics.
+- MUST keep the sync signal intact: the existing metric series and log lines are unchanged, so `helm/templates/alerts.yaml:16` (`VaultObsidian*PullFailing`) and `:33` (`VaultObsidian*RebaseConflict`) continue to fire. No new alert and no new metric are introduced here.
+- **Pull-state retention is a judgement call for the implementation, bounded by the signal constraint.** If `PullStateCache` retains no consumer once readiness stops reading it, removing it is acceptable provided DB5's metric and log signal is untouched. It MUST NOT be kept on the promise of a future endpoint.
+- **Supersedes spec 005's readiness contract, not only its cold-start clause.** `005-bug-readiness-blocks-on-pull-mutex.md` defines readiness as a function of pull success. Superseded there: **DB2** ("200 iff a successful pull occurred within the freshness threshold"), **DB3** (503 body names the last pull error or `no successful pull yet`), **DB5** (the freshness threshold as a readiness input), **AC2** and **AC4(c)** (the cached last-pull error surfaced in the 503 body), and **AC4(d)** (cold-start 503 with `no successful pull yet`, which DB6 replaces with 200). An implementer preserving 005's freshness behaviour would build the wrong handler, so this list is the constraint, not just AC4(d).
+- **Existing assertions the change invalidates.** Rewrite them; do not delete them while `PullStateCache` survives:
+  - `pkg/puller/pull_state_test.go` — `Describe("cold start (no pull yet)")` (~line 34) **and** `Describe("after a failed pull (first ever)")` (~line 53). The file carries 17 `ReadinessStatus` assertions in total; if the cache is removed under the retention clause below, the file goes with it and that is not a deletion of coverage — the behaviour it asserted no longer exists.
+  - `pkg/handler/readiness_test.go:66` — `It("body contains 'no successful pull yet'")`, and the whole `Context("when ReadinessStatus returns not ready: stale cache")` block at ~lines 79-105, which asserts the old 503 body contract.
+  - `export_test.go:45` and `main.go:464` — both call `factory.CreateReadinessHandler(pullState)`; the signature changes with the dependency, so both call sites move together.
 - MUST NOT regress spec 006's conflict handling: a rebase or merge conflict still leaves the repo in its conflicted state and still returns an error from `Pull`; only its effect on readiness changes.
+- **Doc scope is four files, not one.** Each asserts the old semantics and survives the change unless corrected:
+  - `docs/api.md:20` — "checks git status + pending pushes"
+  - `docs/api.md:118` — "a pod flips unready … if a push is stuck"
+  - `docs/api.md:112-116` — the positive contract block: "Returns `200 OK` … if: `git status` succeeds / Working tree is clean (no uncommitted changes) / No local commits pending push". This is the largest stale claim and is not covered by the two line citations above; the whole block is rewritten to the DB1/DB2/DB4 contract.
+  - `README.md:33` — "readiness reflects git status"
+  - `docs/deployment.md:134` — "removes the pod from the Service while git operations are in-flight or pushes are pending"
+  - `helm/templates/alerts.yaml:31` — the rebase-conflict alert description tells an operator to "check `/readiness` for conflict path", which DB4 forbids the body from carrying. Point it at the pod logs instead.
 
 ## Failure Modes
 
-| Trigger | Expected behavior | Recovery |
-|---------|-------------------|----------|
-| Push rejected by the remote (writer race) | `/readiness` stays 200; reads served; `git_rest_git_operation_errors_total{operation="push"}` increments; `git pull failed` logged | Next tick retries; alert fires on sustained rejection |
-| Fetch fails (remote unreachable, auth broken) | `/readiness` stays 200; reads served from the local clone; `operation="fetch"` increments | Next tick retries; alert fires |
-| Merge/rebase conflict | Repo left conflicted; `Pull` returns `RebaseConflictError`; `/readiness` stays 200; reads of non-conflicted paths still work | Operator resolves; alert fires on `conflict="true"` |
-| Repo path deleted or unreadable at runtime | `/readiness` returns 503 with a body naming the path | Operator restores the volume; pod restarts into bootstrap |
-| Puller goroutine died before serving | `/readiness` returns 503 with `puller not started` | Pod restart |
-| Process shutting down | `/readiness` returns 503 | Kubernetes removes the endpoint; restart proceeds |
+| Trigger | Expected behavior | Recovery | Concurrency |
+|---------|-------------------|----------|-------------|
+| Push rejected by the remote (two writers, one branch) | `/readiness` stays 200; reads served; `git_rest_git_operation_errors_total{operation="push"}` increments; `git pull failed` logged | Next tick retries; `VaultObsidian*PullFailing` (alerts.yaml:16) fires on sustained rejection | Two pods, one branch: the loser retries every tick and never succeeds until the race clears |
+| Fetch fails (remote unreachable, auth broken) | `/readiness` stays 200; reads served from the local clone; `operation="fetch"` increments | Next tick retries; `VaultObsidian*PullFailing` fires | n/a |
+| Merge/rebase conflict | Repo left conflicted; `Pull` returns `RebaseConflictError`; `/readiness` stays 200; reads of non-conflicted paths still work | Operator resolves; `VaultObsidian*RebaseConflict` (alerts.yaml:33) fires | n/a |
+| Repo path deleted or unreadable at runtime | `/readiness` returns 503 with `repo path unreadable` | Operator restores the volume; pod restarts into bootstrap | n/a |
+| Process shutting down | `/readiness` keeps answering 200 until the listener closes; Kubernetes removes the endpoint when the container exits | Restart proceeds; no readiness behaviour depends on shutdown | n/a |
+
+## Suggested Decomposition
+
+| # | Prompt focus | Covers DBs | Covers ACs | Depends on |
+|---|---|---|---|---|
+| 1 | Serving verdict: repo-path readability replaces the pull-outcome verdict, with the cold-start and sync-error unit specs rewritten | 1, 2, 4, 6 | 2, 4 | — |
+| 2 | Handler, `ReadinessStateReader` interface, factory and `main.go` wiring; integration coverage of the 200-while-pushing and 503-while-unreadable cases | 1, 3, 5, 7 | 1, 3, 7 | prompt 1 |
+| 3 | Prose correction across `docs/api.md`, `README.md`, `docs/deployment.md`, `helm/templates/alerts.yaml` | — | 6 | — |
+
+Prompts 1 and 3 are independent and may be approved together; prompt 2 needs 1. Verification (rungs 1–3) is the operator ladder, not a prompt.
 
 ## Acceptance Criteria
 
-- [ ] **AC1:** With the Reproduction fixture (every push rejected), `/readiness` returns `200` while `GET /api/v1/files/note.md` returns `200`. Evidence: `curl -s -o /dev/null -w '%{http_code}' http://localhost:18447/readiness` prints `200`, and the same for the file URL prints `200`, both after ≥3 pull ticks (≥10s at `-pull-interval=3s`).
-- [ ] **AC2:** With the served repo path removed at runtime, `/readiness` returns `503` and the body contains the substring `repo path`. Evidence: `rm -rf "$BASE/work"` while the process runs, then `curl -s -w '\n%{http_code}' http://localhost:18447/readiness` prints a body containing `repo path` and status `503`. This is the discriminator that rules out a hardcoded `200`.
-- [ ] **AC3:** The `/readiness` body never contains a sync-failure substring. Evidence: in the AC1 run, `curl -s http://localhost:18447/readiness | grep -Eic 'push|pull|sync|conflict'` prints `0`.
-- [ ] **AC4:** Unit tests cover the new verdict: (a) a fresh cache with no recorded pull reports ready, (b) a cache with a recorded push error still reports ready, (c) an unreadable repo path reports not-ready naming the path. Evidence: `go test ./pkg/puller/... ./pkg/handler/...` exits 0 and the three cases appear as named specs in the output.
+- [ ] **AC1:** After running the `## Reproduction` recipe (which defines `$BASE` and port 18449), `/readiness` returns `200` while `GET /api/v1/files/note.md` returns `200`, and `/healthz` still returns `200` (DB7). Evidence: `curl -s -o /dev/null -w '%{http_code}' http://localhost:18449/readiness` prints `200`, the same for the file URL prints `200`, and `curl -s -o /dev/null -w '%{http_code}' http://localhost:18449/healthz` prints `200` — all read after ≥3 pull ticks.
+- [ ] **AC2:** After the `## Reproduction` recipe, removing the served repo path at runtime makes `/readiness` return `503` with a body containing `repo path`. Evidence: `rm -rf "$BASE/work"` while the process runs, then `curl -s -w '\n%{http_code}' http://localhost:18449/readiness` prints a body containing `repo path` and status `503`. This is the discriminator that rules out a hardcoded `200`.
+- [ ] **AC3:** No `/readiness` body, in either state, contains a sync-failure substring or a host path. Evidence: in the AC1 run, `curl -s http://localhost:18449/readiness | grep -Eic 'push|pull|sync|conflict|/tmp/'` prints `0`; in the AC2 run, the same grep against the 503 body prints `0`.
+- [ ] **AC4:** Unit tests cover the verdict: (a) a repo whose path is readable reports ready even when a sync error was recorded, (b) an unreadable repo path reports not-ready, (c) a recorded `RebaseConflictError` still reports ready (DB3, and the case a hybrid implementation that keeps the conflict branch would fail), (d) the superseded cold-start and stale-cache specs are rewritten to assert the new contract. Evidence: `go test -v ./pkg/puller/... ./pkg/handler/...` exits 0 and its output names those four specs.
 - [ ] **AC5:** `make precommit` exits 0.
-- [ ] **AC6:** `docs/api.md` no longer claims readiness depends on git status, pending pushes, or a stuck push. Evidence: `grep -Eic 'pending pushes|push is stuck' docs/api.md` prints `0`, and `grep -c 'readiness' docs/api.md` still prints ≥2 (the endpoint is still documented).
-- [ ] **AC7:** The sync signal is unchanged. Evidence: in the AC1 run, `curl -s http://localhost:18447/metrics | grep -E '^git_rest_git_operation_errors_total\{operation="push"'` prints a value `> 0`, and `$BASE/run.log` contains ≥1 line matching `git pull failed`.
-- [ ] **AC8 (Post-Deploy Rung-2):** on dev, a pod serving a repo whose pushes are rejected stays `1/1` and Ready, while its logs keep logging the rejection. Evidence: after `BRANCH=dev make buca` and a rollout, `kubectlnukedev -n dev get pod vault-obsidian-openclaw-0` prints `1/1` with `Ready=True` continuously across ≥2 pull intervals, and `kubectlnukedev -n dev logs vault-obsidian-openclaw-0 --since=10m | grep -c 'git pull failed'` prints ≥1.
-  - `deploy_check:` `kubectlnukedev -n dev get --raw "/api/v1/namespaces/dev/pods/vault-obsidian-openclaw-0:9090/proxy/metrics" | grep -m1 '^git_rest_build_info' | sed -E 's/.*commit="([^"]+)".*/\1/'`
-  - `deploy_target:` `$(git rev-parse --short HEAD)`
-- [ ] **AC9 (Post-Deploy Rung-3):** on nuke prod, `vault-obsidian-openclaw-0` reads `1/1` with a ready Service endpoint, read twice ≥10 minutes apart, while push rejections continue in the logs. Evidence: `kubectlnukeprod -n prod get pod vault-obsidian-openclaw-0` prints `1/1` on both reads, and `kubectlnukeprod -n prod get endpoints vault-obsidian-openclaw` lists a non-empty `ENDPOINTS` column on both.
-  - `deploy_check:` `kubectlnukeprod -n prod get statefulset vault-obsidian-openclaw -o jsonpath='{.spec.template.spec.containers[0].image}'`
-  - `deploy_target:` `docker.prod.nuke.benjamin-borbe.de:443/bborbe/git-rest:<released-tag>`
+- [ ] **AC6:** No artifact still claims readiness depends on sync state. Evidence: `grep -Eic 'pending pushes|push is stuck|readiness reflects git status|pushes are pending|check /readiness for conflict path|git status succeeds|Working tree is clean|local commits pending push' docs/api.md README.md docs/deployment.md helm/templates/alerts.yaml` prints `0` for every file.
+- [ ] **AC7:** The sync signal is unchanged. Evidence: in the AC1 run, `curl -s http://localhost:18449/metrics | grep -E '^git_rest_git_operation_errors_total\{[^}]*operation="push"'` prints a value `> 0`, and `$BASE/run.log` contains ≥1 line matching `git pull failed`.
+- [ ] **Post-Deploy (Rung-2):** (AC8) on dev, a pod serving a repo whose pushes are rejected stays `1/1` and Ready, while its logs keep logging the rejection. Evidence: `kubectlnukedev -n dev get pod vault-obsidian-openclaw-0` prints `1/1` with `Ready=True` continuously across ≥2 pull intervals, and `kubectlnukedev -n dev logs vault-obsidian-openclaw-0 --since=10m | grep -c 'git pull failed'` prints ≥1.
+  - `deploy_check:` `kubectlnukedev -n dev get --raw "/api/v1/namespaces/dev/pods/vault-obsidian-openclaw-0:9090/proxy/metrics" | grep -m1 '^git_rest_build_info' | sed -E 's/.*commit="([^"]+)".*/\1/' | grep -E '^[0-9a-f]{7,40}$'`
+  - `deploy_target:` `$(git rev-parse --short "$(git describe --tags --abbrev=0 origin/master)")`
+- [ ] **Post-Deploy (Rung-3):** (AC9) on nuke prod, `vault-obsidian-openclaw-0` reads `1/1` with a ready Service endpoint, read twice ≥10 minutes apart, while push rejections continue in the logs. Evidence: `kubectlnukeprod -n prod get pod vault-obsidian-openclaw-0` prints `1/1` on both reads, and `kubectlnukeprod -n prod get endpoints vault-obsidian-openclaw` lists a non-empty `ENDPOINTS` column on both.
+  - `deploy_check:` `kubectlnukeprod -n prod get --raw "/api/v1/namespaces/prod/pods/vault-obsidian-openclaw-0:9090/proxy/metrics" | grep -m1 '^git_rest_build_info' | sed -E 's/.*commit="([^"]+)".*/\1/' | grep -E '^[0-9a-f]{7,40}$'`
+  - `deploy_target:` `$(git rev-parse --short "$(git describe --tags --abbrev=0 origin/master)")`
 
 ## Verification
 
 ### Container-executable (YOLO container at prompt time)
 
 - `make precommit` — format, generate, test, lint
-- `make test` — unit + integration suite
-- `grep -Eic 'pending pushes|push is stuck' docs/api.md` — prints `0`
+- `go test -v ./pkg/puller/... ./pkg/handler/...` — the rewritten verdict specs
+- `grep -Eic 'pending pushes|push is stuck|readiness reflects git status|pushes are pending|check /readiness for conflict path|git status succeeds|Working tree is clean|local commits pending push' docs/api.md README.md docs/deployment.md helm/templates/alerts.yaml` — prints `0`
 
 ### Operator-executable (host, after PR merge)
 
-- Rung 1: the `## Reproduction` recipe against a freshly built binary — `/readiness` `200`, read path `200`, and the AC2 negative (`rm -rf` the repo → `503`).
-- Rung 2: `BRANCH=dev make buca` + rollout on dev, then AC8.
-- Rung 3: prod promotion, then AC9.
+- Rung 1: the `## Reproduction` recipe against a binary built from the worktree — `/readiness` `200`, read path `200`, plus the AC2 negative (`rm -rf` the repo → `503 repo path unreadable`).
+- Rung 2: git-rest's cluster manifests live in the nuke repo, and `make buca` in this repo only builds and uploads — its `apply` target iterates subdirectory Makefiles and git-rest has none. So the dev deploy is: bump the `VERSION` pin in `~/Documents/workspaces/nuke/git-rest/Makefile`, then `cd ~/Documents/workspaces/nuke && git pull && cd git-rest && BRANCH=dev make apply`, then `kubectlnukedev -n dev rollout restart statefulset/vault-obsidian-openclaw`. Then AC8.
+- Rung 3: the same apply with `BRANCH=master` for prod, then AC9.
 
 ## Open Questions
 
-None — the readiness verdict, its negative controls, and the observability contract are all fixed above.
+None — the readiness verdict, its negative control, the observability contract, and the superseded spec-005 behaviour are all fixed above.
