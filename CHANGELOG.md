@@ -8,6 +8,11 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 * MINOR version when you add functionality in a backwards-compatible manner, and
 * PATCH version when you make backwards-compatible bug fixes.
 
+## Unreleased
+
+- refactor: Wire `/readiness` to the repo-path serving verdict and delete `PullStateCache`/`PullStateWriter`. Readiness now reports 200 whenever the served repository path is readable and 503 with `repo path unreadable` when it is not, regardless of the last pull outcome; the puller still logs `git pull failed` on every failed attempt but no longer records pull state.
+- fix: `/readiness` now reports whether the pod can serve — the HTTP server is listening and the served repository path is readable — instead of whether the most recent sync succeeded. A rejected push, a failed fetch or a merge conflict no longer removes the pod from its Service; those failures remain visible in the pod log and in `git_rest_git_operation_errors_total`.
+
 ## v0.30.1
 
 - chore: update Go to 1.27.3 and github.com/bborbe/http to v1.26.30, github.com/bborbe/sentry to v1.10.5, github.com/bborbe/service to v1.11.0, github.com/bborbe/time to v1.27.17
