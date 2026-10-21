@@ -8,7 +8,7 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 * MINOR version when you add functionality in a backwards-compatible manner, and
 * PATCH version when you make backwards-compatible bug fixes.
 
-## Unreleased
+## v0.32.0
 
 - feat: Retry a rejected push in-attempt. When git rejects a push with `[rejected] … (fetch first)` or `(non-fast-forward)`, the operation now jitters 100–500 ms, fetches, merges the upstream, and pushes again — up to 3 total attempts — instead of returning the error and waiting for the next pull interval. Terminal rejections (auth, ruleset, network) are unchanged. Adds the `git_rest_push_retries_total` counter, incremented once per retry, and the `git-rest: push retry` / `git-rest: push succeeded after retry` log lines.
 
