@@ -8,6 +8,10 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 * MINOR version when you add functionality in a backwards-compatible manner, and
 * PATCH version when you make backwards-compatible bug fixes.
 
+## Unreleased
+
+- feat: Coalesce file writes into one commit and one push per window. A POST now writes and stages its content and returns without a commit or push; a background flusher commits and pushes when the pending set has been quiet for `--write-coalesce-delay` (default 30s) or when the oldest pending write reaches `--write-coalesce-max-delay` (default 120s). Unchanged content still stages nothing, a pull flushes pending writes before merging, SIGTERM flushes with a 10 s deadline, and boot recovery commits paths left staged by a crash. Adds `git_rest_write_flushes_total{outcome}`, `git_rest_write_coalesced_total` and `git_rest_write_pending`; `--write-coalesce=false` restores the synchronous write-commit-push path.
+
 ## v0.33.2
 
 - fix: Rescue a dirty working tree on every pull path, not only fast-forward. A dirty tree that blocks the diverged merge, the push-retry merge or the startup sync is now captured on a `rescue/<timestamp>` branch and pushed before the merge is retried, exactly as on the fast-forward path. The reset target is path-dependent: the upstream tracking ref on fast-forward, `HEAD` on the other three paths, so the local commits those paths are about to merge survive.

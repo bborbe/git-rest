@@ -1,8 +1,13 @@
 ---
-status: approved
+status: completed
 spec: [020-commit-coalescing]
+summary: Updated api.md, deployment.md, README.md and CHANGELOG.md to document the write-coalescing contract, flags, metrics, baseline and boot/shutdown behaviour
+execution_id: git-rest-coalesce-exec-079-spec-020-docs-and-changelog
+dark-factory-version: v0.198.7
 created: "2026-10-22T10:38:09Z"
 queued: "2026-10-22T10:56:37Z"
+started: "2026-10-22T11:08:02Z"
+completed: "2026-10-22T11:09:44Z"
 ---
 
 <summary>

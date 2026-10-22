@@ -14,7 +14,7 @@ Default port: `9090` (set via `--listen`).
 |--------|------|---------|
 | `GET` | `/api/v1/files/{path}` | Read file contents |
 | `GET` | `/api/v1/files/{path}?glob=<pattern>` | List files matching glob |
-| `POST` | `/api/v1/files/{path}` | Create or overwrite a file (auto-commits + pushes) |
+| `POST` | `/api/v1/files/{path}` | Create or overwrite a file (written and staged; coalesced commit + push) |
 | `DELETE` | `/api/v1/files/{path}` | Delete a file (auto-commits + pushes) |
 | `GET` | `/api/v1/refs?prefix=claims/` | List claim refs live from the origin |
 | `PUT` | `/api/v1/refs/claims/{key}` | Create or renew a claim ref (compare-and-swap) |
@@ -59,7 +59,7 @@ Glob semantics: Go's `filepath.Match` — single-level wildcard only. `**` (doub
 
 ## Write File
 
-Create or overwrite a file. On success git-rest stages the change, commits, and pushes (if `--git-remote-url` is set).
+Create or overwrite a file. On success git-rest writes the content and stages it; a background flusher commits and pushes the accumulated writes within the coalescing window (`--write-coalesce-delay`, default `30s`, or `--write-coalesce-max-delay`, default `120s`). Set `--write-coalesce=false` to restore the previous synchronous write-commit-push behaviour. In local-only mode (no `--git-remote-url`) the commit stays on disk and no push is attempted. A write whose bytes match the file already on disk stages nothing and produces no commit.
 
 ```bash
 curl -X POST \
@@ -72,17 +72,17 @@ Response: `{"ok":true}` on success.
 
 | Status | Meaning |
 |--------|---------|
-| `200` | File written + committed |
+| `200` | File written and staged |
 | `400` | Invalid path (e.g. path traversal) |
 | `413` | Request body exceeds 10 MB limit |
 
 Body limit: `10 * 1024 * 1024` bytes (10 MiB).
 
-Commit message format: `git-rest: create <path>` or `git-rest: update <path>`.
+Commit message format: `git-rest: create <path>` or `git-rest: update <path>`. A coalesced batch spanning more than one path uses `git-rest: update <n> files`.
 
 ## Delete File
 
-Remove a file. Auto-commits + pushes.
+Remove a file synchronously: pending coalesced writes are flushed first, then the deletion is committed and pushed.
 
 ```bash
 curl -X DELETE http://localhost:9090/api/v1/files/30%20Analysis/my-note.md
