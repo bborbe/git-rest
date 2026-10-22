@@ -1,8 +1,9 @@
 ---
-status: prompted
+status: verifying
 approved: "2026-10-22T14:28:37Z"
 generating: "2026-10-22T14:29:24Z"
 prompted: "2026-10-22T14:37:42Z"
+verifying: "2026-10-22T14:55:11Z"
 branch: dark-factory/flush-timeout-isolation
 ---
 
