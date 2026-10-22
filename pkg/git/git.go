@@ -371,7 +371,10 @@ func (g *git) retryPush(ctx context.Context, upstream string, nextAttempt int) e
 	if err := g.runCmd(ctx, g.repoPath, "fetch"); err != nil {
 		return errors.Wrap(ctx, err, "fetch before push retry")
 	}
-	mergeOut, mergeErr := g.runCmdRaw(ctx, g.repoPath, "merge", "--no-edit", upstream)
+	mergeOut, mergeErr, rescueErr := g.mergeWithDirtyTreeRescue(ctx, upstream)
+	if rescueErr != nil {
+		return errors.Wrap(ctx, rescueErr, "merge after dirty-tree rescue failed")
+	}
 	if mergeErr != nil {
 		_, _ = g.runCmdRaw(ctx, g.repoPath, "merge", "--abort")
 		slog.WarnContext(
@@ -939,7 +942,12 @@ func (g *git) pullRebaseAndPush(ctx context.Context, upstream string) error {
 // Content conflicts are delegated to g.resolver (result="resolved" on success, "aborted" on failure).
 // On resolver failure the merge is aborted so the repo is left in a clean state.
 func (g *git) pullMergeAndPush(ctx context.Context, upstream string) error {
-	out, mergeErr := g.runCmdRaw(ctx, g.repoPath, "merge", "--no-edit", upstream)
+	out, mergeErr, rescueErr := g.mergeWithDirtyTreeRescue(ctx, upstream)
+	if rescueErr != nil {
+		g.metrics.IncGitOperationError("merge")
+		g.metrics.IncMergeOutcome("aborted")
+		return errors.Wrap(ctx, rescueErr, "merge after dirty-tree rescue failed")
+	}
 	if mergeErr == nil {
 		// Clean merge: git auto-produced a merge commit.
 		g.metrics.IncMergeOutcome("clean")
@@ -951,6 +959,45 @@ func (g *git) pullMergeAndPush(ctx context.Context, upstream string) error {
 		return nil
 	}
 	return g.resolveConflictMerge(ctx, upstream, out, mergeErr)
+}
+
+// mergeInProgress reports whether the last merge left a MERGE_HEAD, i.e. git
+// started the merge and stopped on a conflict. A merge refused because the
+// working tree would be overwritten leaves no MERGE_HEAD.
+func (g *git) mergeInProgress(ctx context.Context) bool {
+	_, err := g.runCmdOutput(ctx, g.repoPath, "rev-parse", "--verify", "--quiet", "MERGE_HEAD")
+	return err == nil
+}
+
+// mergeWithDirtyTreeRescue runs `git merge --no-edit upstream`, rescuing a dirty
+// working tree when (and only when) the merge fails, then retrying the merge
+// once inline. It returns the merge output and error, plus a non-nil rescueErr
+// when the rescue itself failed — in which case the merge was aborted and the
+// caller must return rescueErr without entering the conflict path.
+//
+// The working tree is inspected BEFORE the merge is attempted, so the decision
+// never matches git's abort text. The reset target is HEAD, never upstream:
+// this path's HEAD carries local commits that must survive the merge.
+//
+// A merge that actually started and stopped on a content conflict leaves a
+// MERGE_HEAD; such a failure is the resolver's to handle, not a dirty-tree
+// abort, so it is never rescued here even when the tree was dirty beforehand.
+func (g *git) mergeWithDirtyTreeRescue(
+	ctx context.Context,
+	upstream string,
+) ([]byte, error, error) {
+	dirty := g.workingTreeDirty(ctx)
+	out, mergeErr := g.runCmdRaw(ctx, g.repoPath, "merge", "--no-edit", upstream)
+	if mergeErr == nil || !dirty || g.mergeInProgress(ctx) {
+		return out, mergeErr, nil
+	}
+	if rescueErr := g.rescueDirtyTree(ctx, upstream, "HEAD"); rescueErr != nil {
+		// A merge abort must never leave MERGE_HEAD behind.
+		_, _ = g.runCmdRaw(ctx, g.repoPath, "merge", "--abort")
+		return out, mergeErr, rescueErr
+	}
+	out, mergeErr = g.runCmdRaw(ctx, g.repoPath, "merge", "--no-edit", upstream)
+	return out, mergeErr, nil
 }
 
 // conflictKind classifies a conflicted path by which sides of the merge carry
@@ -1711,7 +1758,7 @@ func (g *git) fastForwardOrRescue(ctx context.Context, upstream string) (bool, e
 		g.metrics.IncGitOperationError("pull")
 		return false, errors.Wrap(ctx, mergeErr, "fast-forward merge failed")
 	}
-	if err := g.rescueDirtyTree(ctx, upstream); err != nil {
+	if err := g.rescueDirtyTree(ctx, upstream, upstream); err != nil {
 		// The pull did NOT succeed: the rescue push failed and the repo is left
 		// dirty and not-ready, so the existing git-operation-error signal — and the
 		// alert on it at helm/templates/alerts.yaml:16 — must still fire.
@@ -1793,11 +1840,16 @@ func (g *git) createRescueCommit(ctx context.Context) (string, []string, error) 
 
 // rescueDirtyTree captures the whole working-tree state on a
 // rescue/<timestamp> branch and pushes it to the upstream remote. Only after that
-// push succeeds does it return the working tree to the upstream state
+// push succeeds does it return the working tree to the reset state
 // (reset --hard + clean -fd). It never discards a change: a failed push leaves
 // HEAD unmoved, the working tree dirty, and the local rescue ref in place so the
 // push can be retried by hand.
-func (g *git) rescueDirtyTree(ctx context.Context, upstream string) error {
+//
+// resetRef is path-dependent and load-bearing: the fast-forward path passes the
+// upstream tracking ref (its HEAD holds no unique commit), while the diverged,
+// push-retry and startup paths pass "HEAD" so the local commits they are about
+// to merge survive. It is never a hardcoded branch name.
+func (g *git) rescueDirtyTree(ctx context.Context, upstream, resetRef string) error {
 	branch := "rescue/" + g.currentDateTimeGetter.Now().UTC().Format("20060102T150405Z")
 
 	commit, paths, err := g.createRescueCommit(ctx)
@@ -1843,8 +1895,8 @@ func (g *git) rescueDirtyTree(ctx context.Context, upstream string) error {
 
 	// Only now is the content safe on the remote, so only now may the local
 	// working tree be returned to the upstream state.
-	if err := g.runCmd(ctx, g.repoPath, "reset", "--hard", upstream); err != nil {
-		return errors.Wrapf(ctx, err, "reset --hard %s after rescue", upstream)
+	if err := g.runCmd(ctx, g.repoPath, "reset", "--hard", resetRef); err != nil {
+		return errors.Wrapf(ctx, err, "reset --hard %s after rescue", resetRef)
 	}
 	if err := g.runCmd(ctx, g.repoPath, "clean", "-fd"); err != nil {
 		return errors.Wrap(ctx, err, "git clean -fd after rescue")

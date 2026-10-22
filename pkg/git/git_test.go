@@ -3269,3 +3269,106 @@ var _ = Describe("Push retry", func() {
 		Expect(logStr).To(ContainSubstring("Merge conflict in conflict.txt"))
 	})
 })
+
+var _ = Describe("Dirty tree rescue on the diverged path", func() {
+	var (
+		workDir       string
+		advanceRemote func()
+		remoteDir     string
+		rescueCleanup func()
+		pg            git.Git
+		ctx           context.Context
+	)
+
+	BeforeEach(func() {
+		ctx = context.Background()
+		workDir, advanceRemote, _, remoteDir, rescueCleanup = setupRescueFixture()
+		pg = git.New(
+			workDir,
+			metrics.NewMetrics(),
+			libtime.NewCurrentDateTime(),
+			"",
+			git.NewMarkerResolver(workDir),
+		)
+	})
+
+	AfterEach(func() {
+		rescueCleanup()
+	})
+
+	It("AC1/AC2/AC7: rescues, merges, pushes and keeps the local commit", func() {
+		// A local commit on its own file makes the branch diverged; the remote
+		// commit touches the file the working tree will dirty.
+		runGit(workDir, "config", "user.email", "test@example.com")
+		runGit(workDir, "config", "user.name", "Test User")
+		Expect(os.WriteFile(
+			filepath.Join(workDir, "tasks", "z.md"), []byte("local only\n"), 0o600,
+		)).To(Succeed())
+		runGit(workDir, "add", "-A")
+		runGit(workDir, "commit", "-m", "local work")
+		advanceRemote()
+		Expect(os.WriteFile(
+			filepath.Join(workDir, "tasks", "x.md"),
+			[]byte("line one\nLOCAL UNCOMMITTED EDIT\n"),
+			0o600,
+		)).To(Succeed())
+
+		before := gatherPullRescues()
+		Expect(pg.Pull(ctx)).To(Succeed())
+
+		Expect(strings.TrimSpace(gitOutputStr(workDir, "status", "--porcelain"))).To(BeEmpty())
+		logs := gitOutputStr(workDir, "log", "--oneline")
+		Expect(strings.Count(logs, "local work")).To(Equal(1))
+		Expect(strings.Count(logs, "external: touches x")).To(Equal(1))
+		Expect(gatherPullRescues() - before).To(Equal(1.0))
+
+		refs := strings.Fields(strings.TrimSpace(gitOutputStr(
+			workDir, "for-each-ref", "--format=%(refname)", "refs/heads/rescue/",
+		)))
+		Expect(refs).To(HaveLen(1))
+		commit := strings.TrimSpace(gitOutputStr(workDir, "rev-parse", refs[0]))
+		Expect(gitOutputStr(workDir, "show", commit+":tasks/x.md")).
+			To(ContainSubstring("LOCAL UNCOMMITTED EDIT"))
+		Expect(strings.TrimSpace(gitOutputStr(
+			workDir, "ls-remote", "--heads", "origin", "refs/heads/rescue/*",
+		))).To(ContainSubstring(refs[0]))
+	})
+
+	It("returns the rescue error, keeps HEAD and the dirty tree, and leaves no MERGE_HEAD", func() {
+		runGit(workDir, "config", "user.email", "test@example.com")
+		runGit(workDir, "config", "user.name", "Test User")
+		Expect(os.WriteFile(
+			filepath.Join(workDir, "tasks", "z.md"), []byte("local only\n"), 0o600,
+		)).To(Succeed())
+		runGit(workDir, "add", "-A")
+		runGit(workDir, "commit", "-m", "local work")
+		advanceRemote()
+		Expect(os.WriteFile(
+			filepath.Join(workDir, "tasks", "x.md"),
+			[]byte("line one\nLOCAL UNCOMMITTED EDIT\n"),
+			0o600,
+		)).To(Succeed())
+		headBefore := strings.TrimSpace(gitOutputStr(workDir, "rev-parse", "HEAD"))
+
+		// A pre-receive hook in the bare remote rejects rescue/* refs.
+		hooksDir := filepath.Join(remoteDir, "hooks")
+		Expect(os.MkdirAll(hooksDir, 0o750)).To(Succeed())
+		hook := "#!/bin/sh\n" +
+			"while read old new ref; do\n" +
+			"  case \"$ref\" in refs/heads/rescue/*) echo \"rejected by test hook\" >&2; exit 1;; esac\n" +
+			"done\n" +
+			"exit 0\n"
+		Expect(os.WriteFile(filepath.Join(hooksDir, "pre-receive"), []byte(hook), 0o755)).
+			To(Succeed())
+		runGit(remoteDir, "config", "core.hooksPath", "hooks")
+
+		err := pg.Pull(ctx)
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("rescue push failed"))
+
+		Expect(strings.TrimSpace(gitOutputStr(workDir, "rev-parse", "HEAD"))).To(Equal(headBefore))
+		Expect(gitOutputStr(workDir, "status", "--porcelain")).To(ContainSubstring(" M tasks/x.md"))
+		_, statErr := os.Stat(filepath.Join(workDir, ".git", "MERGE_HEAD"))
+		Expect(os.IsNotExist(statErr)).To(BeTrue())
+	})
+})
