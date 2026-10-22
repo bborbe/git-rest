@@ -10,6 +10,22 @@ import (
 	"github.com/bborbe/git-rest/pkg/metrics"
 )
 
+// CleanupStaleLocksForCycle exposes the per-cycle lock walk with an injectable
+// liveness probe, so external tests can drive the undetermined branch without
+// package-level mutable state. Test builds only.
+func CleanupStaleLocksForCycle(
+	repoPath string,
+	probe func(context.Context, string) (bool, bool),
+) func(context.Context) error {
+	g := &git{repoPath: repoPath}
+	return func(ctx context.Context) error {
+		return g.cleanupStaleLocks(ctx, probe)
+	}
+}
+
+// LockHeldByProcess exposes the liveness probe for direct tests. Test builds only.
+var LockHeldByProcess = lockHeldByProcess
+
 // NewGitWithClaimOrigin returns a Git whose claim-ref listing talks to origin
 // instead of the git binary. Test builds only.
 func NewGitWithClaimOrigin(origin ClaimOrigin) Git {

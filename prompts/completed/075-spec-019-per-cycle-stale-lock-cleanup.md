@@ -1,8 +1,13 @@
 ---
-status: approved
+status: completed
 spec: [019-bug-dirty-tree-rescue-all-pull-paths]
+summary: Added per-pull-cycle stale lock cleanup with fd-liveness probes (lsof + /proc) that fails closed, plus tests and an export seam
+execution_id: git-rest-dirty-tree-rescue-exec-075-spec-019-per-cycle-stale-lock-cleanup
+dark-factory-version: v0.198.7
 created: "2026-10-22T07:10:42Z"
 queued: "2026-10-22T07:32:06Z"
+started: "2026-10-22T07:37:59Z"
+completed: "2026-10-22T07:43:15Z"
 branch: dark-factory/bug-dirty-tree-rescue-all-pull-paths
 ---
 

@@ -1655,6 +1655,152 @@ func (g *git) recoverRepoState(ctx context.Context) error {
 	return nil
 }
 
+// cleanupStaleLocksForCycle removes stale *.lock files under .git before a pull
+// cycle. A lock is removed only when no live process holds an open file
+// descriptor on it. When liveness cannot be determined the lock is left in place
+// and a warning is logged — never fall back to an unconditional remove, which
+// could delete the lock of a concurrent git process.
+//
+// Scope matches the boot-time cleanupStaleLocks in main.go: every *.lock under
+// .git, not only index.lock. The boot cleanup stays unconditional because a lock
+// present at boot can only belong to a process that no longer exists.
+func (g *git) cleanupStaleLocksForCycle(ctx context.Context) error {
+	return g.cleanupStaleLocks(ctx, lockHeldByProcess)
+}
+
+// cleanupStaleLocks walks every *.lock under .git and removes the ones the probe
+// reports as not held by any live process. The probe is injected so the
+// undetermined-liveness branch can be exercised without process-level state.
+func (g *git) cleanupStaleLocks(
+	ctx context.Context,
+	probe func(context.Context, string) (bool, bool),
+) error {
+	gitDir := filepath.Join(g.repoPath, ".git")
+	if _, err := os.Stat(gitDir); os.IsNotExist(err) {
+		return nil
+	} else if err != nil {
+		return errors.Wrapf(ctx, err, "stat %s", gitDir)
+	}
+	return filepath.WalkDir(gitDir, func(path string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			slog.WarnContext(
+				ctx, "walk error during per-cycle lock cleanup", "path", path, "error", walkErr,
+			)
+			return nil
+		}
+		if d.IsDir() || !strings.HasSuffix(path, ".lock") {
+			return nil
+		}
+		held, determined := probe(ctx, path)
+		if !determined {
+			slog.WarnContext(
+				ctx, "stale lock liveness undetermined; leaving lock in place", "path", path,
+			)
+			return nil
+		}
+		if held {
+			return nil
+		}
+		rmErr := os.Remove(
+			path,
+		) // #nosec G122 -- path is under the repo's own .git and the liveness probe cleared it
+		if rmErr != nil {
+			if !os.IsNotExist(rmErr) {
+				slog.WarnContext(
+					ctx,
+					"failed to remove stale lock during pull cycle",
+					"path",
+					path,
+					"error",
+					rmErr,
+				)
+			}
+			return nil
+		}
+		slog.InfoContext(ctx, "stale lock removed during pull cycle", "path", path)
+		return nil
+	})
+}
+
+// lockHeldByProcess reports whether any live process holds an open file
+// descriptor on path, and whether that could be determined. The probe is
+// deliberately a file-descriptor check: git creates *.lock files with
+// O_CREAT|O_EXCL and never takes an OS lock on them, so flock/fcntl cannot see a
+// live git process. darwin uses lsof; linux reads /proc/<pid>/fd and compares
+// file identity with os.SameFile. If neither probe is available the result is
+// (false, false) — the caller must leave the lock alone.
+func lockHeldByProcess(ctx context.Context, path string) (bool, bool) {
+	if held, determined := lockHeldByLsof(ctx, path); determined {
+		return held, true
+	}
+	return lockHeldByProc(ctx, path)
+}
+
+// lockHeldByLsof probes with lsof, which exists on macOS and not in the alpine
+// image. lsof exits 1 when no process has the file open.
+func lockHeldByLsof(ctx context.Context, path string) (bool, bool) {
+	if _, err := exec.LookPath("lsof"); err != nil {
+		return false, false
+	}
+	// #nosec G204 -- binary is hardcoded to "lsof"; path is an internal repo path
+	out, err := exec.CommandContext(ctx, "lsof", "-t", path).Output()
+	if err == nil {
+		return strings.TrimSpace(string(out)) != "", true
+	}
+	var exitErr *exec.ExitError
+	if stderrors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
+		return false, true
+	}
+	return false, false
+}
+
+// lockHeldByProc probes /proc/<pid>/fd, which exists on linux and not on macOS.
+// An fd directory that cannot be read is skipped; the pod runs a single uid, so
+// same-uid holders are visible. readable==0 means /proc could not be inspected
+// and the result is undetermined.
+func lockHeldByProc(ctx context.Context, path string) (bool, bool) {
+	lockInfo, err := os.Stat(path)
+	if err != nil {
+		// The lock vanished; there is nothing to protect.
+		return false, os.IsNotExist(err)
+	}
+	procEntries, err := os.ReadDir("/proc")
+	if err != nil {
+		return false, false
+	}
+	readable := 0
+	for _, entry := range procEntries {
+		if !entry.IsDir() {
+			continue
+		}
+		if _, err := strconv.Atoi(entry.Name()); err != nil {
+			continue
+		}
+		fdDir := filepath.Join("/proc", entry.Name(), "fd")
+		fds, err := os.ReadDir(fdDir)
+		if err != nil {
+			continue
+		}
+		readable++
+		for _, fd := range fds {
+			fdInfo, err := os.Stat(filepath.Join(fdDir, fd.Name()))
+			if err != nil {
+				continue
+			}
+			if os.SameFile(lockInfo, fdInfo) {
+				return true, true
+			}
+		}
+		if ctx.Err() != nil {
+			return false, false
+		}
+	}
+	if readable == 0 {
+		return false, false
+	}
+	return false, true
+}
+
 // Pull takes the repo mutex, skips a repo with no remote, heals any abandoned
 // entry state (abandoned rebase / detached HEAD), resolves the upstream tracking
 // ref from @{u} — never a hardcoded branch name — and then delegates the sync
@@ -1677,6 +1823,12 @@ func (g *git) Pull(ctx context.Context) error {
 	if !g.hasRemote(ctx) {
 		slog.DebugContext(ctx, "git pull skipped: no remote configured")
 		return nil
+	}
+
+	// Clear locks left by a process that no longer exists before any git command
+	// needs the index. A lock held by a live process is left alone.
+	if err := g.cleanupStaleLocksForCycle(ctx); err != nil {
+		slog.WarnContext(ctx, "stale lock cleanup failed", "error", err)
 	}
 
 	// Entry-state recovery: abort any abandoned rebase or restore a detached HEAD
