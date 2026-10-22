@@ -161,11 +161,12 @@ func (r *yamlMergeResolver) parseYAML(
 func (r *yamlMergeResolver) runGitAdd(ctx context.Context, path string) error {
 	// #nosec G204 -- git binary is hardcoded; paths come from git merge output
 	cmd := exec.CommandContext(ctx, "git", "add", "--", path)
+	cmd.WaitDelay = waitDelay
 	cmd.Dir = r.repoPath
 	var buf bytes.Buffer
 	cmd.Stdout = &buf
 	cmd.Stderr = &buf
-	if err := cmd.Run(); err != nil {
+	if err := normalizeWaitDelay(cmd, cmd.Run()); err != nil {
 		r.metrics.IncResolverFailure(resolverFailureGitAdd)
 		glog.Warningf(
 			"yaml-merge-resolver: git add %q failed: %v: %s",
@@ -287,11 +288,12 @@ func gitCommitTimestamp(ctx context.Context, repoPath, sha string) (int64, error
 func runGitOutput(ctx context.Context, repoPath string, args ...string) (string, error) {
 	// #nosec G204 -- git binary is hardcoded; args are internal
 	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd.WaitDelay = waitDelay
 	cmd.Dir = repoPath
 	var buf bytes.Buffer
 	cmd.Stdout = &buf
 	cmd.Stderr = &buf
-	if err := cmd.Run(); err != nil {
+	if err := normalizeWaitDelay(cmd, cmd.Run()); err != nil {
 		return "", errors.Wrapf(
 			ctx,
 			err,

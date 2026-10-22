@@ -63,7 +63,10 @@ endif
 
 .PHONY: test
 test:
-	go test -mod=mod -p=$${GO_TEST_PARALLEL:-1} -cover $(TESTFLAGS_RACE) $(shell go list -mod=mod ./... | grep -v /vendor/)
+	# -timeout: pkg/git alone runs ~7-10 min (183 Ginkgo specs plus the
+	# git-fixture tests), so the default 10m per-package limit is hit on a loaded
+	# host and reports a timeout as a failure.
+	go test -mod=mod -timeout 20m -p=$${GO_TEST_PARALLEL:-1} -cover $(TESTFLAGS_RACE) $(shell go list -mod=mod ./... | grep -v /vendor/)
 
 .PHONY: check
 check: lint vet vulncheck osv-scanner trivy

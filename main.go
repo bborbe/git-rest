@@ -6,6 +6,7 @@ package main
 
 import (
 	"context"
+	stderrors "errors"
 	"io/fs"
 	"log/slog"
 	"net/http"
@@ -280,10 +281,19 @@ func runGitCmd(ctx context.Context, repoDir, sshCommand string, args ...string) 
 		ctx,
 		"git",
 		full...) // #nosec G204 -- args caller-controlled, internal use
+	// Bound the post-exit drain: a killed git leaves children holding the output
+	// pipe, and Wait would otherwise block for their whole lifetime (spec 022).
+	cmd.WaitDelay = 2 * time.Second
 	if sshCommand != "" {
 		cmd.Env = append(os.Environ(), "GIT_SSH_COMMAND="+sshCommand)
 	}
 	out, err := cmd.CombinedOutput()
+	// A process that succeeded before the grace expired did its work; only the
+	// trailing drain was cut, so it is not an error.
+	if err != nil && stderrors.Is(err, exec.ErrWaitDelay) &&
+		cmd.ProcessState != nil && cmd.ProcessState.Success() {
+		err = nil
+	}
 	if err != nil {
 		return string(out), errors.Wrapf(ctx, err, "git %v: %s", args, string(out))
 	}

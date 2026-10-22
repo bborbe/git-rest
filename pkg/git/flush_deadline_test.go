@@ -32,7 +32,16 @@ func installBlockingPreReceive(t *testing.T, bare string) {
 	// gone: killing the local git push leaves receive-pack (and this hook)
 	// orphaned, holding the caller's stderr pipe open until the sleep ends. The
 	// ancestor poll keeps the cut-flush timing observable without weakening the
-	// 15 s bound.
+	// 15 s bound. The poll must treat a ZOMBIE as gone: the killed `git push` is
+	// reparented to PID 1, which installs no SIGCHLD reaper (see
+	// 008-bug-pid1-no-init-leaks-grandchild-zombies), so `ps -p` keeps succeeding
+	// on the defunct entry and a plain existence check never fires.
+	// Point the bare remote at its OWN hooks directory. A global core.hooksPath
+	// overrides <bare>/hooks entirely — this host sets it to ~/.git-hooks — so
+	// without this line the hook never runs, the push succeeds, the flush is
+	// never cut, and both callers fail against correct code. Same guard as
+	// installPreReceiveRejection (git_test.go) and coalesce_durability_test.go.
+	mustGit(t, bare, "config", "core.hooksPath", "hooks")
 	script := "#!/bin/sh\n" +
 		"input=$(cat)\n" +
 		"case \"$input\" in\n" +
@@ -41,9 +50,11 @@ func installBlockingPreReceive(t *testing.T, bare string) {
 		"    gpp=$(ps -o ppid= -p \"$gp\" 2>/dev/null | tr -d ' ')\n" +
 		"    i=0\n" +
 		"    while [ \"$i\" -lt 75 ]; do\n" +
-		"      if [ -n \"$gpp\" ] && ! ps -p \"$gpp\" >/dev/null 2>&1; then\n" +
-		"        exit 1\n" +
-		"      fi\n" +
+		"      st=$(ps -o stat= -p \"$gpp\" 2>/dev/null | tr -d ' ')\n" +
+		"      case \"$st\" in\n" +
+		"        '') exit 1 ;;\n" +
+		"        Z*) exit 1 ;;\n" +
+		"      esac\n" +
 		"      sleep 0.2\n" +
 		"      i=$((i+1))\n" +
 		"    done\n" +

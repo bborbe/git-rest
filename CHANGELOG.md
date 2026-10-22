@@ -8,6 +8,12 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 * MINOR version when you add functionality in a backwards-compatible manner, and
 * PATCH version when you make backwards-compatible bug fixes.
 
+## Unreleased
+
+- fix: Bound every git subprocess with `cmd.WaitDelay` (2 s) so a cancelled command returns within the grace instead of waiting for an orphaned child to release its output pipe. Measured on nuke dev: a pull carrying a 60 s deadline blocked for 4 m 13 s because the killed `git push` left `git-receive-pack` holding the stderr pipe. A process that exited 0 before the grace expires is still reported as a success, so a push that landed is not retried into a duplicate commit. `docs/deployment.md` gains the rule.
+- test: Fix the pre-receive fixture shared by `TestFlushDeadlineCut` and `TestFlushRescueLandsAfterFlushDeadline`. It never ran its hook on a host with a global `core.hooksPath`, and its ancestor poll tested `ps -p` for existence, which keeps succeeding on a reparented zombie. Both tests now exercise the cut flush they were written for.
+- chore: Raise the per-package test timeout to 20 m; `pkg/git` alone runs about six minutes, so the default 10 m limit intermittently reported a timeout as a failure.
+
 ## v0.34.1
 
 - fix: Bound the pre-pull write flush to one third of the pull budget so a contended push cannot starve the dirty-tree rescue. A cut-off flush logs `git-rest: flush deadline exceeded before pull`, leaves the paths staged for the next cycle, and every pull cycle logs `git-rest: pull budget pull_start=… pull_deadline=… flush_deadline=…`.
