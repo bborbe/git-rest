@@ -1,5 +1,9 @@
 ---
-status: draft
+status: prompted
+approved: "2026-10-22T10:18:01Z"
+generating: "2026-10-22T10:34:33Z"
+prompted: "2026-10-22T10:40:58Z"
+branch: dark-factory/commit-coalescing
 ---
 
 ## Summary

@@ -5,6 +5,7 @@
 package main_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"net/http"
@@ -783,6 +784,122 @@ var _ = Describe("Readiness integration", func() {
 		Expect(rec.Body.String()).To(Equal("ok"))
 	})
 })
+
+// TestWriteCoalesceFlags exercises the three coalescing flags through the real
+// argument parser. The flags exist only in struct tags, so a misspelled tag
+// produces no compile error and is rejected only when an operator runs the
+// binary — this test is the only guard against that.
+func TestWriteCoalesceFlags(t *testing.T) {
+	bin := buildGitRestTestBinary(t)
+
+	t.Run("flags are accepted", func(t *testing.T) {
+		cmd, stderr, done := startFlagTestBinary(
+			t,
+			bin,
+			initFlagTestRepo(t),
+			nil,
+			"--write-coalesce=false",
+			"--write-coalesce-delay=1ms",
+			"--write-coalesce-max-delay=2ms",
+		)
+		assertBinaryKeepsRunning(t, cmd, stderr, done)
+	})
+
+	t.Run("WRITE_COALESCE env is accepted", func(t *testing.T) {
+		cmd, stderr, done := startFlagTestBinary(
+			t, bin, initFlagTestRepo(t), []string{"WRITE_COALESCE=false"},
+		)
+		assertBinaryKeepsRunning(t, cmd, stderr, done)
+	})
+
+	t.Run("invalid WRITE_COALESCE_DELAY is rejected at parse time", func(t *testing.T) {
+		cmd := exec.Command(bin, "--repo="+initFlagTestRepo(t), "--listen=127.0.0.1:0")
+		cmd.Env = append(os.Environ(), "WRITE_COALESCE_DELAY=bogus")
+		out, err := cmd.CombinedOutput()
+		if err == nil {
+			t.Fatalf("expected non-zero exit for invalid duration, output=%s", out)
+		}
+		if !strings.Contains(string(out), "parse app failed") {
+			t.Fatalf("expected parse app failed, got %s", out)
+		}
+	})
+}
+
+// buildGitRestTestBinary builds the git-rest binary. gexec.Build writes its
+// artifact under os.TempDir, which is mounted noexec in this container, so the
+// binary is built into a directory under the package dir instead.
+func buildGitRestTestBinary(t *testing.T) string {
+	t.Helper()
+	binDir, err := os.MkdirTemp(".", ".gitrest-testbin-")
+	if err != nil {
+		t.Fatalf("create bin dir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(binDir) })
+	bin := filepath.Join(binDir, "git-rest")
+	if out, err := exec.Command("go", "build", "-mod=mod", "-o", bin, ".").
+		CombinedOutput(); err != nil {
+		t.Fatalf("build binary: %v: %s", err, out)
+	}
+	return bin
+}
+
+// initFlagTestRepo creates an empty git repository the binary can serve.
+func initFlagTestRepo(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	out, err := exec.Command("git", "init", dir).CombinedOutput()
+	if err != nil {
+		t.Fatalf("git init %s: %v: %s", dir, err, out)
+	}
+	return dir
+}
+
+// startFlagTestBinary starts the binary against repo and returns its process,
+// captured stderr and a channel that receives the result of Wait.
+func startFlagTestBinary(
+	t *testing.T,
+	bin, repo string,
+	extraEnv []string,
+	args ...string,
+) (*exec.Cmd, *bytes.Buffer, <-chan error) {
+	t.Helper()
+	stderr := &bytes.Buffer{}
+	cmd := exec.Command(
+		bin,
+		append([]string{"--repo=" + repo, "--listen=127.0.0.1:0"}, args...)...,
+	)
+	cmd.Env = append(os.Environ(), extraEnv...)
+	cmd.Stderr = stderr
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start binary: %v", err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	return cmd, stderr, done
+}
+
+// assertBinaryKeepsRunning fails when the binary exits within a second or
+// reports an unknown flag, then kills it.
+func assertBinaryKeepsRunning(
+	t *testing.T,
+	cmd *exec.Cmd,
+	stderr *bytes.Buffer,
+	done <-chan error,
+) {
+	t.Helper()
+	select {
+	case err := <-done:
+		t.Fatalf("binary exited early: %v: stderr=%s", err, stderr.String())
+	case <-time.After(time.Second):
+	}
+	for _, marker := range []string{"flag provided but not defined", "unknown flag"} {
+		if strings.Contains(stderr.String(), marker) {
+			t.Fatalf("stderr contains %q: %s", marker, stderr.String())
+		}
+	}
+	_ = cmd.Process.Kill()
+	<-done
+}
 
 func TestSuite(t *testing.T) {
 	time.Local = time.UTC

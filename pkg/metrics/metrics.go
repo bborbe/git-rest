@@ -81,6 +81,24 @@ var PushRetriesTotal = prometheus.NewCounter(prometheus.CounterOpts{
 	Help: "Total push retries after a non-fast-forward rejection.",
 })
 
+// WriteFlushesTotal counts coalesced flush attempts by outcome ("ok" or "error").
+var WriteFlushesTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+	Name: "git_rest_write_flushes_total",
+	Help: "Total write-coalescing flush attempts by outcome.",
+}, []string{"outcome"})
+
+// WriteCoalescedTotal counts file writes absorbed into a coalesced commit batch.
+var WriteCoalescedTotal = prometheus.NewCounter(prometheus.CounterOpts{
+	Name: "git_rest_write_coalesced_total",
+	Help: "Total file writes absorbed into a coalesced commit batch.",
+})
+
+// WritePending reports the number of paths currently staged and waiting for a coalesced commit.
+var WritePending = prometheus.NewGauge(prometheus.GaugeOpts{
+	Name: "git_rest_write_pending",
+	Help: "Number of paths currently staged and waiting for a coalesced commit.",
+})
+
 // ResolverFailuresTotal counts conflict-resolver failures by category.
 // Categories: yaml_parse_failed, no_frontmatter, write_failed, git_add_failed,
 // quarantine_io_failed, unsafe_path, nested_source. The quarantine_io_failed bucket covers
@@ -108,6 +126,9 @@ func init() {
 		AutoresolvedTotal,
 		RefRequestsTotal,
 		PushRetriesTotal,
+		WriteFlushesTotal,
+		WriteCoalescedTotal,
+		WritePending,
 	)
 	for _, op := range []string{"write_file", "delete_file", "read_file", "list_files", "pull", "fetch", "push", "rebase"} {
 		GitOperationErrors.WithLabelValues(op, "").Add(0)
@@ -150,6 +171,13 @@ func init() {
 	// PullRescuesTotal: the series is registered at init() time so /metrics
 	// exposes it as 0 before the first retry has ever happened.
 	PushRetriesTotal.Add(0)
+	// Explicit pre-initialisation of the write-coalescing series, mirroring
+	// PullRescuesTotal: /metrics exposes them as 0 before the first write has
+	// been staged or the first flush has run.
+	WriteFlushesTotal.WithLabelValues("ok").Add(0)
+	WriteFlushesTotal.WithLabelValues("error").Add(0)
+	WriteCoalescedTotal.Add(0)
+	WritePending.Set(0)
 	for _, category := range []string{
 		"yaml_parse_failed",
 		"no_frontmatter",
@@ -206,6 +234,14 @@ type Metrics interface {
 	// IncPushRetry records one push retry performed after a non-fast-forward
 	// rejection. The first push attempt is never counted.
 	IncPushRetry()
+	// IncWriteFlush records one coalesced flush attempt. outcome is "ok" or "error".
+	IncWriteFlush(outcome string)
+	// IncWriteCoalesced records one file write absorbed into a coalesced batch.
+	// It increments once per staged write, so a three-write burst increments it by 3.
+	IncWriteCoalesced()
+	// SetWritePending records the current pending-path count. It is a setter so a
+	// successful flush returns the gauge to 0.
+	SetWritePending(count int)
 }
 
 // NewMetrics returns a Prometheus-backed Metrics implementation.
@@ -265,4 +301,16 @@ func (p *prometheusMetrics) IncRefRequest(op, result string) {
 
 func (p *prometheusMetrics) IncPushRetry() {
 	PushRetriesTotal.Inc()
+}
+
+func (p *prometheusMetrics) IncWriteFlush(outcome string) {
+	WriteFlushesTotal.WithLabelValues(outcome).Inc()
+}
+
+func (p *prometheusMetrics) IncWriteCoalesced() {
+	WriteCoalescedTotal.Inc()
+}
+
+func (p *prometheusMetrics) SetWritePending(count int) {
+	WritePending.Set(float64(count))
 }

@@ -87,6 +87,12 @@ func (u *unsafeTestMetrics) IncRefRequest(_, _ string) {}
 
 func (u *unsafeTestMetrics) IncPushRetry() {}
 
+func (u *unsafeTestMetrics) IncWriteFlush(_ string) {}
+
+func (u *unsafeTestMetrics) IncWriteCoalesced() {}
+
+func (u *unsafeTestMetrics) SetWritePending(_ int) {}
+
 func (u *unsafeTestMetrics) unsafePathCount() int {
 	u.mu.Lock()
 	defer u.mu.Unlock()
