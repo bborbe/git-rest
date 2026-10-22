@@ -79,11 +79,16 @@ func (a *application) Run(ctx context.Context, sentryClient libsentry.Client) er
 		return errors.Wrap(ctx, err, "create git client failed")
 	}
 
+	if err := gitClient.RecoverPendingWrites(ctx); err != nil {
+		slog.WarnContext(ctx, "boot recovery of pending writes failed", "error", err)
+	}
+
 	syncOnStartup(ctx, gitClient)
 
 	return service.Run(ctx,
 		a.createGitRefresher(gitClient),
 		a.createWriteFlusher(gitClient),
+		a.createShutdownFlusher(gitClient),
 		a.createHTTPServer(gitClient, metrics.NewMetrics(), a.Repo),
 		a.createMemoryReporter(),
 	)
@@ -206,6 +211,10 @@ const syncOnStartupTimeout = 60 * time.Second
 // flushTickInterval is how often the flusher asks the git client whether the
 // pending set is due. The due decision itself uses the configured delays.
 const flushTickInterval = time.Second
+
+// shutdownFlushDeadline bounds the SIGTERM flush. When it expires the process
+// exits anyway; the staged paths stay on disk for boot recovery.
+const shutdownFlushDeadline = 10 * time.Second
 
 // syncOnStartup runs one best-effort sync against the upstream tracking ref
 // before the HTTP server starts serving. It delegates to Pull so the startup
@@ -439,6 +448,33 @@ func (a *application) coalesceConfig() git.CoalesceConfig {
 func (a *application) createWriteFlusher(gitClient git.Git) run.Func {
 	return func(ctx context.Context) error {
 		return flusher.New(gitClient, libtime.Duration(flushTickInterval)).Run(ctx)
+	}
+}
+
+// createShutdownFlusher returns a run.Func that flushes pending writes when the
+// service context is cancelled. The flush runs on a context detached from
+// cancellation so the 10 s deadline, not the already-cancelled service
+// context, bounds it.
+func (a *application) createShutdownFlusher(gitClient git.Git) run.Func {
+	return func(ctx context.Context) error {
+		<-ctx.Done()
+		flushCtx, cancel := context.WithTimeout(
+			context.WithoutCancel(ctx),
+			shutdownFlushDeadline,
+		)
+		defer cancel()
+		if err := gitClient.FlushPending(flushCtx); err != nil {
+			if flushCtx.Err() != nil {
+				slog.InfoContext(
+					ctx,
+					"git-rest: flush deadline exceeded",
+					"deadline", shutdownFlushDeadline.String(),
+				)
+				return nil
+			}
+			slog.WarnContext(ctx, "git-rest: shutdown flush failed", "error", err)
+		}
+		return nil
 	}
 }
 

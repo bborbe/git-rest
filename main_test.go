@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -39,6 +40,43 @@ var _ = Describe("Main", func() {
 		var err error
 		_, err = gexec.Build(".", "-mod=mod")
 		Expect(err).NotTo(HaveOccurred())
+	})
+})
+
+var _ = Describe("ShutdownFlusher", func() {
+	It("flushes pending writes on cancellation with a bounded context", func() {
+		fakeGit := &mocks.FakeGit{}
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		Expect(main.CreateShutdownFlusher(fakeGit)(ctx)).To(Succeed())
+		Expect(fakeGit.FlushPendingCallCount()).To(Equal(1))
+
+		flushCtx := fakeGit.FlushPendingArgsForCall(0)
+		deadline, ok := flushCtx.Deadline()
+		Expect(ok).To(BeTrue())
+		Expect(time.Until(deadline)).To(BeNumerically("~", 10*time.Second, time.Second))
+	})
+
+	It("logs the deadline line when the flush is cut short", func() {
+		fakeGit := &mocks.FakeGit{}
+		fakeGit.FlushPendingStub = func(ctx context.Context) error {
+			<-ctx.Done()
+			return ctx.Err()
+		}
+
+		buf := &bytes.Buffer{}
+		prev := slog.Default()
+		slog.SetDefault(slog.New(slog.NewTextHandler(buf, &slog.HandlerOptions{
+			Level: slog.LevelInfo,
+		})))
+		defer slog.SetDefault(prev)
+
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		Expect(main.CreateShutdownFlusher(fakeGit)(ctx)).To(Succeed())
+		Expect(buf.String()).To(ContainSubstring("git-rest: flush deadline exceeded"))
 	})
 })
 

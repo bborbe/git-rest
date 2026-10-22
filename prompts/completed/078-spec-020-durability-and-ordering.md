@@ -1,8 +1,13 @@
 ---
-status: approved
+status: completed
 spec: [020-commit-coalescing]
+summary: Added SIGTERM flush with a 10s deadline, boot recovery of index-staged paths, flush-first DeleteFile ordering, and durability regression tests.
+execution_id: git-rest-coalesce-exec-078-spec-020-durability-and-ordering
+dark-factory-version: v0.198.7
 created: "2026-10-22T10:38:09Z"
 queued: "2026-10-22T10:56:37Z"
+started: "2026-10-22T11:04:06Z"
+completed: "2026-10-22T11:08:01Z"
 ---
 
 <summary>

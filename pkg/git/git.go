@@ -174,6 +174,9 @@ type Git interface {
 	// FlushPendingIfDue flushes only when the pending set is non-empty and either
 	// the trailing delay or the max-delay has elapsed.
 	FlushPendingIfDue(ctx context.Context) error
+	// RecoverPendingWrites commits and pushes paths left staged in the index by a
+	// crash, before the HTTP server starts serving. A no-op when nothing is staged.
+	RecoverPendingWrites(ctx context.Context) error
 }
 
 // CoalesceConfig controls write coalescing. Enabled=false restores the
@@ -961,6 +964,68 @@ func (g *git) restorePendingIndexLocked(ctx context.Context, preFlushSHA string,
 	}
 }
 
+// RecoverPendingWrites commits and pushes paths left staged in the index by a
+// crash. It runs before the HTTP server starts, so it is the only writer.
+func (g *git) RecoverPendingWrites(ctx context.Context) error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	out, err := g.runCmdOutput(ctx, g.repoPath, "diff", "--cached", "--name-only")
+	if err != nil {
+		return errors.Wrap(ctx, err, "list staged paths for recovery")
+	}
+	paths := make([]string, 0, 8)
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if line != "" {
+			paths = append(paths, line)
+		}
+	}
+	if len(paths) == 0 {
+		return nil
+	}
+	sort.Strings(paths)
+
+	message := "git-rest: update " + strconv.Itoa(len(paths)) + " files"
+	if len(paths) == 1 {
+		status, statusErr := g.runCmdOutput(
+			ctx, g.repoPath, "diff", "--cached", "--name-status", "--", paths[0],
+		)
+		if statusErr != nil {
+			return errors.Wrapf(ctx, statusErr, "read staged status for %s", paths[0])
+		}
+		if strings.HasPrefix(strings.TrimSpace(string(status)), "A") {
+			message = "git-rest: create " + paths[0]
+		} else {
+			message = "git-rest: update " + paths[0]
+		}
+	}
+
+	if err := g.runCmd(ctx, g.repoPath, "commit", "-m", message); err != nil {
+		g.metrics.IncWriteFlush("error")
+		return errors.Wrap(ctx, err, "git commit recovered pending writes")
+	}
+
+	pushOutcome := "skipped"
+	if g.hasRemote(ctx) {
+		if err := g.pushWithRetry(ctx, ""); err != nil {
+			g.metrics.IncWriteFlush("error")
+			return errors.Wrap(ctx, err, "git push recovered pending writes")
+		}
+		pushOutcome = "ok"
+	}
+
+	g.pending = make(map[string]pendingWrite)
+	g.metrics.SetWritePending(0)
+	g.metrics.IncWriteFlush("ok")
+	slog.InfoContext(
+		ctx,
+		"git-rest: recovered pending writes",
+		"paths", len(paths),
+		"push", pushOutcome,
+	)
+	return nil
+}
+
 // DeleteFile removes a file from the repository, commits and pushes the deletion.
 func (g *git) DeleteFile(ctx context.Context, path string) error {
 	start := g.currentDateTimeGetter.Now()
@@ -975,6 +1040,13 @@ func (g *git) DeleteFile(ctx context.Context, path string) error {
 
 	g.mu.Lock()
 	defer g.mu.Unlock()
+
+	// Flush pending writes first: a delete that jumped the queue would leave the
+	// path re-created by the later flush.
+	if err := g.flushPendingLocked(ctx); err != nil {
+		g.metrics.IncGitOperationError("delete_file")
+		return errors.Wrap(ctx, err, "flush pending writes before delete")
+	}
 
 	fullPath := filepath.Join(g.repoPath, path)
 	if _, err := os.Stat(fullPath); os.IsNotExist(err) {
