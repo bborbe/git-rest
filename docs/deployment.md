@@ -20,7 +20,7 @@ On startup:
 
 ### Remote-backed mode
 
-Pass a remote URL + SSH key. git-rest clones on startup and pushes on every write.
+Pass a remote URL + SSH key. git-rest clones on startup and pushes coalesced write bursts (see `### Write coalescing` below), or immediately on a delete.
 
 ```bash
 git-rest \
@@ -38,6 +38,18 @@ Prerequisites:
 - The SSH key must have write access to the remote (GitHub "Deploy key" with write, or a PAT-authorised key).
 - `known_hosts` is handled by the embedded SSH client; no manual config needed.
 - `/data` must be writable by the process user.
+
+### Write coalescing
+
+A write returns once its content is on disk and staged — no commit or push happens inside the request. A background flusher commits and pushes the accumulated writes once per window, and a pull cycle flushes pending writes before merging. Set `--write-coalesce=false` to restore the previous synchronous write-commit-push behaviour; that is the rollback lever.
+
+| Flag | Env | Default | Meaning |
+|------|-----|---------|---------|
+| `--write-coalesce` | `WRITE_COALESCE` | `true` | Coalesce file writes into one commit and one push per window. `false` restores the synchronous write-commit-push path on every request. |
+| `--write-coalesce-delay` | `WRITE_COALESCE_DELAY` | `30s` | Flush after the pending set has been quiet for this long. |
+| `--write-coalesce-max-delay` | `WRITE_COALESCE_MAX_DELAY` | `120s` | Flush when the oldest pending write is this old, even under a continuous write stream. |
+
+On SIGTERM the process flushes and pushes pending writes before exiting, bounded by a 10 s deadline; a flush cut short logs `git-rest: flush deadline exceeded` and leaves the paths staged. On boot, paths left staged by a crash are committed and pushed before the HTTP server starts listening, logging `git-rest: recovered pending writes` with the path count.
 
 ## Kubernetes
 
@@ -165,6 +177,16 @@ annotations:
 
 Key metrics: request count + latency histogram, git operation durations, quarantine backlog, build info.
 
+Write coalescing:
+
+| Series | Meaning |
+|--------|---------|
+| `git_rest_write_flushes_total{outcome}` | Counter over coalesced flush attempts, `outcome` = `ok` or `error`. Pre-initialised to zero at process start. |
+| `git_rest_write_coalesced_total` | Counter over writes absorbed into a coalesced batch. A three-write burst that lands as one commit increments it by 3. |
+| `git_rest_write_pending` | Gauge: paths currently staged and waiting for a coalesced commit. Returns to 0 after a successful flush. |
+
+Baseline: 12,490 `git-rest:` commits in the trailing 24 hours on `bborbe/obsidian-openclaw`, measured 2026-10-21. Coalescing is expected to reduce this by roughly the burst ratio; a return toward the baseline means the flusher is not firing.
+
 ### Claim refs
 
 Claim refs are documented in the [API reference](api.md#claim-refs). One counter covers them:
@@ -188,7 +210,7 @@ To drain: inspect `_conflicts/` inside the pod, repair the file or deliberately 
 
 ## Operational notes
 
-- **Auto-commit noise**: every write produces a commit. For high-write workloads, upstream consumers should accept this or batch through a higher-level API.
+- **Auto-commit noise**: with coalescing enabled (the default) a burst of writes produces one commit and one push per window. With `--write-coalesce=false` every write produces a commit as before.
 - **Conflict handling**: git-rest auto-recovers from divergence (local ahead AND remote ahead, no content conflict) by rebase + push within one PullInterval. Real content conflicts during rebase leave the repo in conflicted state and require human inspection (`kubectl exec` + manual resolve, or PVC reset for recoverable churn); `/readiness` stays `200` because the pod can still serve, and the conflict is visible in the pod log and through the `VaultObsidian<Realm>RebaseConflict` alert.
 - **Vault-write mode**: set `VAULT_WRITE_MODE=true` (or `--vault-write`) on pods that serve agent vault writes. The pod then uses `YAMLMergeResolver`: on a merge conflict in a markdown file with YAML frontmatter, the resolver deep-merges frontmatter keys (theirs wins on overlap) and combines bodies, producing a syntactically valid file. A **scalar frontmatter** conflict — one whose hunks lie entirely inside the frontmatter and whose lines are all single-line `key: value` scalars — is auto-resolved in place instead of quarantined: allowlisted counters (`trigger_count`, `retry_count`, `metrics_*`) take the greater integer, every other scalar takes the newer merge parent's value (a tie goes to the local side), and `git_rest_autoresolved_total` increments once per resolved path. Every other shape — non-scalar hunks, hunks outside the frontmatter, one-sided keys, duplicate keys — keeps the quarantine path described below. On YAML parse failure or missing frontmatter delimiters, the resolver fails for that file only: the puller copies the conflicted bytes to `_conflicts/<path>.<unix-ts>.md`, restores the canonical from `HEAD`, and continues the merge, so one corrupt file no longer wedges the pod. The merge aborts only when every conflicted path fails both resolve and quarantine, or when a pre-flight guard rejects the merge — an unsafe path, a conflicted path that already lives under `_conflicts/`, or `_conflicts/` existing as a regular file. Leave `VAULT_WRITE_MODE` unset (or `false`) on pods serving human-touched repos — they continue using `MarkerResolver`. Watch `git_rest_resolver_failures_total{category}` on `/metrics` to distinguish failure modes (`yaml_parse_failed`, `no_frontmatter`, `write_failed`, `git_add_failed`, `unsafe_path`, `quarantine_io_failed`, `nested_source`).
 - **Backups**: since data lives in the remote, the PVC is effectively a cache. Losing it triggers a re-clone on next bootstrap.

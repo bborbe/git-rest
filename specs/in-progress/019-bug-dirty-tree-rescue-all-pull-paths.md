@@ -1,8 +1,9 @@
 ---
-status: prompted
+status: verifying
 approved: "2026-10-22T07:01:54Z"
 generating: "2026-10-22T07:07:30Z"
 prompted: "2026-10-22T07:24:32Z"
+verifying: "2026-10-22T10:34:33Z"
 branch: dark-factory/bug-dirty-tree-rescue-all-pull-paths
 ---
 

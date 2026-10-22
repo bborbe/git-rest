@@ -61,6 +61,15 @@ type FakeMetrics struct {
 	incResolverFailureArgsForCall []struct {
 		arg1 string
 	}
+	IncWriteCoalescedStub        func()
+	incWriteCoalescedMutex       sync.RWMutex
+	incWriteCoalescedArgsForCall []struct {
+	}
+	IncWriteFlushStub        func(string)
+	incWriteFlushMutex       sync.RWMutex
+	incWriteFlushArgsForCall []struct {
+		arg1 string
+	}
 	ObserveGitOperationStub        func(string, float64)
 	observeGitOperationMutex       sync.RWMutex
 	observeGitOperationArgsForCall []struct {
@@ -70,6 +79,11 @@ type FakeMetrics struct {
 	SetQuarantinedBacklogStub        func(int)
 	setQuarantinedBacklogMutex       sync.RWMutex
 	setQuarantinedBacklogArgsForCall []struct {
+		arg1 int
+	}
+	SetWritePendingStub        func(int)
+	setWritePendingMutex       sync.RWMutex
+	setWritePendingArgsForCall []struct {
 		arg1 int
 	}
 	invocations      map[string][][]interface{}
@@ -391,6 +405,62 @@ func (fake *FakeMetrics) IncResolverFailureArgsForCall(i int) string {
 	return argsForCall.arg1
 }
 
+func (fake *FakeMetrics) IncWriteCoalesced() {
+	fake.incWriteCoalescedMutex.Lock()
+	fake.incWriteCoalescedArgsForCall = append(fake.incWriteCoalescedArgsForCall, struct {
+	}{})
+	stub := fake.IncWriteCoalescedStub
+	fake.recordInvocation("IncWriteCoalesced", []interface{}{})
+	fake.incWriteCoalescedMutex.Unlock()
+	if stub != nil {
+		fake.IncWriteCoalescedStub()
+	}
+}
+
+func (fake *FakeMetrics) IncWriteCoalescedCallCount() int {
+	fake.incWriteCoalescedMutex.RLock()
+	defer fake.incWriteCoalescedMutex.RUnlock()
+	return len(fake.incWriteCoalescedArgsForCall)
+}
+
+func (fake *FakeMetrics) IncWriteCoalescedCalls(stub func()) {
+	fake.incWriteCoalescedMutex.Lock()
+	defer fake.incWriteCoalescedMutex.Unlock()
+	fake.IncWriteCoalescedStub = stub
+}
+
+func (fake *FakeMetrics) IncWriteFlush(arg1 string) {
+	fake.incWriteFlushMutex.Lock()
+	fake.incWriteFlushArgsForCall = append(fake.incWriteFlushArgsForCall, struct {
+		arg1 string
+	}{arg1})
+	stub := fake.IncWriteFlushStub
+	fake.recordInvocation("IncWriteFlush", []interface{}{arg1})
+	fake.incWriteFlushMutex.Unlock()
+	if stub != nil {
+		fake.IncWriteFlushStub(arg1)
+	}
+}
+
+func (fake *FakeMetrics) IncWriteFlushCallCount() int {
+	fake.incWriteFlushMutex.RLock()
+	defer fake.incWriteFlushMutex.RUnlock()
+	return len(fake.incWriteFlushArgsForCall)
+}
+
+func (fake *FakeMetrics) IncWriteFlushCalls(stub func(string)) {
+	fake.incWriteFlushMutex.Lock()
+	defer fake.incWriteFlushMutex.Unlock()
+	fake.IncWriteFlushStub = stub
+}
+
+func (fake *FakeMetrics) IncWriteFlushArgsForCall(i int) string {
+	fake.incWriteFlushMutex.RLock()
+	defer fake.incWriteFlushMutex.RUnlock()
+	argsForCall := fake.incWriteFlushArgsForCall[i]
+	return argsForCall.arg1
+}
+
 func (fake *FakeMetrics) ObserveGitOperation(arg1 string, arg2 float64) {
 	fake.observeGitOperationMutex.Lock()
 	fake.observeGitOperationArgsForCall = append(fake.observeGitOperationArgsForCall, struct {
@@ -453,6 +523,38 @@ func (fake *FakeMetrics) SetQuarantinedBacklogArgsForCall(i int) int {
 	fake.setQuarantinedBacklogMutex.RLock()
 	defer fake.setQuarantinedBacklogMutex.RUnlock()
 	argsForCall := fake.setQuarantinedBacklogArgsForCall[i]
+	return argsForCall.arg1
+}
+
+func (fake *FakeMetrics) SetWritePending(arg1 int) {
+	fake.setWritePendingMutex.Lock()
+	fake.setWritePendingArgsForCall = append(fake.setWritePendingArgsForCall, struct {
+		arg1 int
+	}{arg1})
+	stub := fake.SetWritePendingStub
+	fake.recordInvocation("SetWritePending", []interface{}{arg1})
+	fake.setWritePendingMutex.Unlock()
+	if stub != nil {
+		fake.SetWritePendingStub(arg1)
+	}
+}
+
+func (fake *FakeMetrics) SetWritePendingCallCount() int {
+	fake.setWritePendingMutex.RLock()
+	defer fake.setWritePendingMutex.RUnlock()
+	return len(fake.setWritePendingArgsForCall)
+}
+
+func (fake *FakeMetrics) SetWritePendingCalls(stub func(int)) {
+	fake.setWritePendingMutex.Lock()
+	defer fake.setWritePendingMutex.Unlock()
+	fake.SetWritePendingStub = stub
+}
+
+func (fake *FakeMetrics) SetWritePendingArgsForCall(i int) int {
+	fake.setWritePendingMutex.RLock()
+	defer fake.setWritePendingMutex.RUnlock()
+	argsForCall := fake.setWritePendingArgsForCall[i]
 	return argsForCall.arg1
 }
 

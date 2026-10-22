@@ -70,6 +70,28 @@ type FakeGit struct {
 	deleteFileReturnsOnCall map[int]struct {
 		result1 error
 	}
+	FlushPendingStub        func(context.Context) error
+	flushPendingMutex       sync.RWMutex
+	flushPendingArgsForCall []struct {
+		arg1 context.Context
+	}
+	flushPendingReturns struct {
+		result1 error
+	}
+	flushPendingReturnsOnCall map[int]struct {
+		result1 error
+	}
+	FlushPendingIfDueStub        func(context.Context) error
+	flushPendingIfDueMutex       sync.RWMutex
+	flushPendingIfDueArgsForCall []struct {
+		arg1 context.Context
+	}
+	flushPendingIfDueReturns struct {
+		result1 error
+	}
+	flushPendingIfDueReturnsOnCall map[int]struct {
+		result1 error
+	}
 	InitStub        func(context.Context) error
 	initMutex       sync.RWMutex
 	initArgsForCall []struct {
@@ -148,6 +170,17 @@ type FakeGit struct {
 	readFileReturnsOnCall map[int]struct {
 		result1 []byte
 		result2 error
+	}
+	RecoverPendingWritesStub        func(context.Context) error
+	recoverPendingWritesMutex       sync.RWMutex
+	recoverPendingWritesArgsForCall []struct {
+		arg1 context.Context
+	}
+	recoverPendingWritesReturns struct {
+		result1 error
+	}
+	recoverPendingWritesReturnsOnCall map[int]struct {
+		result1 error
 	}
 	StatusStub        func(context.Context) (git.Status, error)
 	statusMutex       sync.RWMutex
@@ -499,6 +532,128 @@ func (fake *FakeGit) DeleteFileReturnsOnCall(i int, result1 error) {
 		})
 	}
 	fake.deleteFileReturnsOnCall[i] = struct {
+		result1 error
+	}{result1}
+}
+
+func (fake *FakeGit) FlushPending(arg1 context.Context) error {
+	fake.flushPendingMutex.Lock()
+	ret, specificReturn := fake.flushPendingReturnsOnCall[len(fake.flushPendingArgsForCall)]
+	fake.flushPendingArgsForCall = append(fake.flushPendingArgsForCall, struct {
+		arg1 context.Context
+	}{arg1})
+	stub := fake.FlushPendingStub
+	fakeReturns := fake.flushPendingReturns
+	fake.recordInvocation("FlushPending", []interface{}{arg1})
+	fake.flushPendingMutex.Unlock()
+	if stub != nil {
+		return stub(arg1)
+	}
+	if specificReturn {
+		return ret.result1
+	}
+	return fakeReturns.result1
+}
+
+func (fake *FakeGit) FlushPendingCallCount() int {
+	fake.flushPendingMutex.RLock()
+	defer fake.flushPendingMutex.RUnlock()
+	return len(fake.flushPendingArgsForCall)
+}
+
+func (fake *FakeGit) FlushPendingCalls(stub func(context.Context) error) {
+	fake.flushPendingMutex.Lock()
+	defer fake.flushPendingMutex.Unlock()
+	fake.FlushPendingStub = stub
+}
+
+func (fake *FakeGit) FlushPendingArgsForCall(i int) context.Context {
+	fake.flushPendingMutex.RLock()
+	defer fake.flushPendingMutex.RUnlock()
+	argsForCall := fake.flushPendingArgsForCall[i]
+	return argsForCall.arg1
+}
+
+func (fake *FakeGit) FlushPendingReturns(result1 error) {
+	fake.flushPendingMutex.Lock()
+	defer fake.flushPendingMutex.Unlock()
+	fake.FlushPendingStub = nil
+	fake.flushPendingReturns = struct {
+		result1 error
+	}{result1}
+}
+
+func (fake *FakeGit) FlushPendingReturnsOnCall(i int, result1 error) {
+	fake.flushPendingMutex.Lock()
+	defer fake.flushPendingMutex.Unlock()
+	fake.FlushPendingStub = nil
+	if fake.flushPendingReturnsOnCall == nil {
+		fake.flushPendingReturnsOnCall = make(map[int]struct {
+			result1 error
+		})
+	}
+	fake.flushPendingReturnsOnCall[i] = struct {
+		result1 error
+	}{result1}
+}
+
+func (fake *FakeGit) FlushPendingIfDue(arg1 context.Context) error {
+	fake.flushPendingIfDueMutex.Lock()
+	ret, specificReturn := fake.flushPendingIfDueReturnsOnCall[len(fake.flushPendingIfDueArgsForCall)]
+	fake.flushPendingIfDueArgsForCall = append(fake.flushPendingIfDueArgsForCall, struct {
+		arg1 context.Context
+	}{arg1})
+	stub := fake.FlushPendingIfDueStub
+	fakeReturns := fake.flushPendingIfDueReturns
+	fake.recordInvocation("FlushPendingIfDue", []interface{}{arg1})
+	fake.flushPendingIfDueMutex.Unlock()
+	if stub != nil {
+		return stub(arg1)
+	}
+	if specificReturn {
+		return ret.result1
+	}
+	return fakeReturns.result1
+}
+
+func (fake *FakeGit) FlushPendingIfDueCallCount() int {
+	fake.flushPendingIfDueMutex.RLock()
+	defer fake.flushPendingIfDueMutex.RUnlock()
+	return len(fake.flushPendingIfDueArgsForCall)
+}
+
+func (fake *FakeGit) FlushPendingIfDueCalls(stub func(context.Context) error) {
+	fake.flushPendingIfDueMutex.Lock()
+	defer fake.flushPendingIfDueMutex.Unlock()
+	fake.FlushPendingIfDueStub = stub
+}
+
+func (fake *FakeGit) FlushPendingIfDueArgsForCall(i int) context.Context {
+	fake.flushPendingIfDueMutex.RLock()
+	defer fake.flushPendingIfDueMutex.RUnlock()
+	argsForCall := fake.flushPendingIfDueArgsForCall[i]
+	return argsForCall.arg1
+}
+
+func (fake *FakeGit) FlushPendingIfDueReturns(result1 error) {
+	fake.flushPendingIfDueMutex.Lock()
+	defer fake.flushPendingIfDueMutex.Unlock()
+	fake.FlushPendingIfDueStub = nil
+	fake.flushPendingIfDueReturns = struct {
+		result1 error
+	}{result1}
+}
+
+func (fake *FakeGit) FlushPendingIfDueReturnsOnCall(i int, result1 error) {
+	fake.flushPendingIfDueMutex.Lock()
+	defer fake.flushPendingIfDueMutex.Unlock()
+	fake.FlushPendingIfDueStub = nil
+	if fake.flushPendingIfDueReturnsOnCall == nil {
+		fake.flushPendingIfDueReturnsOnCall = make(map[int]struct {
+			result1 error
+		})
+	}
+	fake.flushPendingIfDueReturnsOnCall[i] = struct {
 		result1 error
 	}{result1}
 }
@@ -884,6 +1039,67 @@ func (fake *FakeGit) ReadFileReturnsOnCall(i int, result1 []byte, result2 error)
 		result1 []byte
 		result2 error
 	}{result1, result2}
+}
+
+func (fake *FakeGit) RecoverPendingWrites(arg1 context.Context) error {
+	fake.recoverPendingWritesMutex.Lock()
+	ret, specificReturn := fake.recoverPendingWritesReturnsOnCall[len(fake.recoverPendingWritesArgsForCall)]
+	fake.recoverPendingWritesArgsForCall = append(fake.recoverPendingWritesArgsForCall, struct {
+		arg1 context.Context
+	}{arg1})
+	stub := fake.RecoverPendingWritesStub
+	fakeReturns := fake.recoverPendingWritesReturns
+	fake.recordInvocation("RecoverPendingWrites", []interface{}{arg1})
+	fake.recoverPendingWritesMutex.Unlock()
+	if stub != nil {
+		return stub(arg1)
+	}
+	if specificReturn {
+		return ret.result1
+	}
+	return fakeReturns.result1
+}
+
+func (fake *FakeGit) RecoverPendingWritesCallCount() int {
+	fake.recoverPendingWritesMutex.RLock()
+	defer fake.recoverPendingWritesMutex.RUnlock()
+	return len(fake.recoverPendingWritesArgsForCall)
+}
+
+func (fake *FakeGit) RecoverPendingWritesCalls(stub func(context.Context) error) {
+	fake.recoverPendingWritesMutex.Lock()
+	defer fake.recoverPendingWritesMutex.Unlock()
+	fake.RecoverPendingWritesStub = stub
+}
+
+func (fake *FakeGit) RecoverPendingWritesArgsForCall(i int) context.Context {
+	fake.recoverPendingWritesMutex.RLock()
+	defer fake.recoverPendingWritesMutex.RUnlock()
+	argsForCall := fake.recoverPendingWritesArgsForCall[i]
+	return argsForCall.arg1
+}
+
+func (fake *FakeGit) RecoverPendingWritesReturns(result1 error) {
+	fake.recoverPendingWritesMutex.Lock()
+	defer fake.recoverPendingWritesMutex.Unlock()
+	fake.RecoverPendingWritesStub = nil
+	fake.recoverPendingWritesReturns = struct {
+		result1 error
+	}{result1}
+}
+
+func (fake *FakeGit) RecoverPendingWritesReturnsOnCall(i int, result1 error) {
+	fake.recoverPendingWritesMutex.Lock()
+	defer fake.recoverPendingWritesMutex.Unlock()
+	fake.RecoverPendingWritesStub = nil
+	if fake.recoverPendingWritesReturnsOnCall == nil {
+		fake.recoverPendingWritesReturnsOnCall = make(map[int]struct {
+			result1 error
+		})
+	}
+	fake.recoverPendingWritesReturnsOnCall[i] = struct {
+		result1 error
+	}{result1}
 }
 
 func (fake *FakeGit) Status(arg1 context.Context) (git.Status, error) {

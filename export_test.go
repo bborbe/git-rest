@@ -11,6 +11,7 @@ import (
 
 	libhttp "github.com/bborbe/http"
 	liblog "github.com/bborbe/log"
+	"github.com/bborbe/run"
 	gorillamux "github.com/gorilla/mux"
 
 	"github.com/bborbe/git-rest/pkg/factory"
@@ -32,6 +33,12 @@ var ResolveGitSSHCommand = resolveGitSSHCommand
 
 // NewRouter is exported for testing via the main_test package.
 var NewRouter = newRouter
+
+// CreateShutdownFlusher exposes the shutdown flush hook for main_test.
+func CreateShutdownFlusher(g git.Git) run.Func {
+	a := &application{}
+	return a.createShutdownFlusher(g)
+}
 
 // CreateServerHandler returns an http.Handler wrapping the probe routes router,
 // enabling integration tests to exercise the real server construction path.

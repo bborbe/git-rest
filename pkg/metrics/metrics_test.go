@@ -192,6 +192,88 @@ var _ = Describe("RefRequestsTotal", func() {
 	})
 })
 
+// gatherCounterVecLabelPresent reports whether a CounterVec series with the
+// given label value is present in the default registry. A value-only lookup
+// cannot distinguish "registered at 0" from "not registered", so presence is
+// asserted by walking the gathered metrics.
+func gatherCounterVecLabelPresent(name, labelName, labelValue string) bool {
+	mfs, err := prometheus.DefaultGatherer.Gather()
+	Expect(err).NotTo(HaveOccurred())
+	for _, mf := range mfs {
+		if mf.GetName() != name {
+			continue
+		}
+		for _, m := range mf.GetMetric() {
+			for _, l := range m.GetLabel() {
+				if l.GetName() == labelName && l.GetValue() == labelValue {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+var _ = Describe("WriteFlushesTotal", func() {
+	It("exposes both outcome series at 0 in the default registry at init() time", func() {
+		for _, outcome := range []string{"ok", "error"} {
+			Expect(
+				gatherCounterVecLabelPresent(
+					"git_rest_write_flushes_total",
+					"outcome",
+					outcome,
+				),
+			).To(BeTrue(), "outcome="+outcome+" must be registered at init() time")
+			Expect(gatherCounterVecLabelValue(
+				"git_rest_write_flushes_total", "outcome", outcome,
+			)).To(Equal(0.0))
+		}
+	})
+
+	It("increments the matching outcome when IncWriteFlush is called", func() {
+		before := gatherCounterVecLabelValue("git_rest_write_flushes_total", "outcome", "ok")
+		m := metrics.NewMetrics()
+		m.IncWriteFlush("ok")
+		after := gatherCounterVecLabelValue("git_rest_write_flushes_total", "outcome", "ok")
+		Expect(after - before).To(Equal(1.0))
+	})
+})
+
+var _ = Describe("WriteCoalescedTotal", func() {
+	It("is registered with value 0 in the default registry at init() time", func() {
+		value, found := gatherCounterPresent("git_rest_write_coalesced_total")
+		Expect(found).To(BeTrue(), "the counter series must exist at init() time")
+		Expect(value).To(Equal(0.0))
+	})
+
+	It("increments when IncWriteCoalesced is called via the interface", func() {
+		before := gatherCounter("git_rest_write_coalesced_total")
+		m := metrics.NewMetrics()
+		m.IncWriteCoalesced()
+		m.IncWriteCoalesced()
+		after := gatherCounter("git_rest_write_coalesced_total")
+		Expect(after - before).To(Equal(2.0))
+	})
+})
+
+var _ = Describe("WritePending", func() {
+	It("is pre-initialised to 0 and exposed at init() time", func() {
+		value, found := gatherGauge("git_rest_write_pending")
+		Expect(found).To(BeTrue(), "the gauge series must exist at init() time")
+		Expect(value).To(Equal(0.0))
+	})
+
+	It("sets the gauge when SetWritePending is called via the interface", func() {
+		m := metrics.NewMetrics()
+		m.SetWritePending(3)
+		value, found := gatherGauge("git_rest_write_pending")
+		Expect(found).To(BeTrue())
+		Expect(value).To(Equal(3.0))
+		// Reset the process-global gauge so later tests see the baseline.
+		m.SetWritePending(0)
+	})
+})
+
 var _ = Describe("PushRetriesTotal", func() {
 	It("is registered with value 0 in the default registry at init() time", func() {
 		value, found := gatherCounterPresent("git_rest_push_retries_total")

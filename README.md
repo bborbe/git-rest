@@ -5,7 +5,7 @@
 [![Go Report Card](https://goreportcard.com/badge/github.com/bborbe/git-rest)](https://goreportcard.com/report/github.com/bborbe/git-rest)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/bborbe/git-rest)
 
-Lightweight REST API server for reading and writing files in a git repository. Auto-commits and pushes on writes, periodic pull keeps the local clone in sync.
+Lightweight REST API server for reading and writing files in a git repository. A write is written and staged; a background flusher commits and pushes a burst of writes as one commit, and a periodic pull keeps the local clone in sync.
 
 ## Where this fits in the bigger picture
 
@@ -29,7 +29,7 @@ Full system map: [recurring-task-creator/docs/system-map.md](https://github.com/
 - Auto-clone on startup if `--git-remote-url` is set and `--repo` is empty
 - Auto-init local-only repos when no remote URL is configured
 - Periodic `git pull` to stay in sync with the remote
-- Auto `git add + commit + push` on every write/delete
+- Coalesced writes — `git add + commit + push` runs in a background flusher once per window (default 30s quiet, 120s ceiling), not inside the request; deletes stay synchronous
 - Optional SSH key + git author config
 - Health and readiness endpoints (readiness reflects whether the served repository path is readable)
 - Prometheus metrics on `/metrics`
@@ -60,6 +60,9 @@ All flags can be set as environment variables.
 | `--listen` | `LISTEN` | yes | `:9090` | HTTP listen address |
 | `--repo` | `REPO` | yes | — | Path to git repository on disk |
 | `--pull-interval` | `PULL_INTERVAL` | no | `30s` | Periodic `git pull` interval |
+| `--write-coalesce` | `WRITE_COALESCE` | no | `true` | Coalesce file writes into one commit and one push per window |
+| `--write-coalesce-delay` | `WRITE_COALESCE_DELAY` | no | `30s` | Flush after the pending set has been quiet this long |
+| `--write-coalesce-max-delay` | `WRITE_COALESCE_MAX_DELAY` | no | `120s` | Flush when the oldest pending write is this old |
 | `--git-remote-url` | `GIT_REMOTE_URL` | no | — | Remote URL to clone on startup (omit for local-only) |
 | `--git-ssh-key` | `GIT_SSH_KEY` | no | — | Path to SSH private key for git operations |
 | `--git-user-name` | `GIT_USER_NAME` | no | — | Git author name for commits |

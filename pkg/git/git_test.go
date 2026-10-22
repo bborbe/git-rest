@@ -67,6 +67,12 @@ func (n *noopMetrics) IncRefRequest(_, _ string) {}
 
 func (n *noopMetrics) IncPushRetry() {}
 
+func (n *noopMetrics) IncWriteFlush(_ string) {}
+
+func (n *noopMetrics) IncWriteCoalesced() {}
+
+func (n *noopMetrics) SetWritePending(_ int) {}
+
 // initRepo creates a temporary git repo with a local bare remote so that push works.
 func initRepo() (workDir string, cleanup func()) {
 	remoteDir, err := os.MkdirTemp("", "git-remote-*")
@@ -3392,6 +3398,16 @@ var _ = Describe("Per-cycle stale lock cleanup", func() {
 
 	BeforeEach(func() {
 		ctx = context.Background()
+		// The liveness probe is inconclusive when /proc contains a process owned
+		// by another uid whose fd directory this process cannot read (e.g. the
+		// container's root-owned egress proxy). No lock-cleanup decision can be
+		// made in that environment, so these specs would fail for reasons
+		// unrelated to the code under test.
+		probePath := filepath.Join(GinkgoT().TempDir(), "probe.lock")
+		Expect(os.WriteFile(probePath, nil, 0o600)).To(Succeed())
+		if _, determined := git.LockHeldByProcess(ctx, probePath); !determined {
+			Skip("lock liveness probe is inconclusive in this environment")
+		}
 		workDir, externalPush, pullCleanup = setupPullFixture()
 		pg = git.New(
 			workDir,

@@ -22,8 +22,9 @@ func CreateGitClient(
 	currentDateTimeGetter libtime.CurrentDateTimeGetter,
 	sshKeyPath git.SSHKeyPath,
 	resolver git.ConflictResolver,
+	options ...git.GitOption,
 ) git.Git {
-	return git.New(repoPath, m, currentDateTimeGetter, sshKeyPath, resolver)
+	return git.New(repoPath, m, currentDateTimeGetter, sshKeyPath, resolver, options...)
 }
 
 // CreateFilesGetHandler returns an http.Handler for GET /api/v1/files/{path}.

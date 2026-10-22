@@ -169,6 +169,37 @@ type Git interface {
 	// DeleteClaimRef deletes refs/<key> with the origin's compare-and-swap.
 	// A lease mismatch or an absent ref returns ErrRefConflict.
 	DeleteClaimRef(ctx context.Context, key string, expectedSHA string) error
+	// FlushPending commits and pushes the pending write set. A no-op when the set is empty.
+	FlushPending(ctx context.Context) error
+	// FlushPendingIfDue flushes only when the pending set is non-empty and either
+	// the trailing delay or the max-delay has elapsed.
+	FlushPendingIfDue(ctx context.Context) error
+	// RecoverPendingWrites commits and pushes paths left staged in the index by a
+	// crash, before the HTTP server starts serving. A no-op when nothing is staged.
+	RecoverPendingWrites(ctx context.Context) error
+}
+
+// CoalesceConfig controls write coalescing. Enabled=false restores the
+// synchronous write-commit-push path used before coalescing existed.
+type CoalesceConfig struct {
+	Enabled  bool
+	Delay    time.Duration
+	MaxDelay time.Duration
+}
+
+// GitOptions holds optional configuration for New.
+type GitOptions struct {
+	Coalesce CoalesceConfig
+}
+
+// GitOption modifies GitOptions.
+type GitOption func(*GitOptions)
+
+// WithCoalesce sets the write-coalescing configuration.
+func WithCoalesce(config CoalesceConfig) GitOption {
+	return func(opts *GitOptions) {
+		opts.Coalesce = config
+	}
 }
 
 // New returns a Git implementation backed by the system git binary for the given repository path.
@@ -178,16 +209,31 @@ func New(
 	currentDateTimeGetter libtime.CurrentDateTimeGetter,
 	sshKeyPath SSHKeyPath,
 	resolver ConflictResolver,
+	options ...GitOption,
 ) Git {
+	gitOptions := GitOptions{}
+	for _, option := range options {
+		option(&gitOptions)
+	}
 	g := &git{
 		repoPath:              repoPath,
 		metrics:               m,
 		currentDateTimeGetter: currentDateTimeGetter,
 		sshKeyPath:            sshKeyPath,
 		resolver:              resolver,
+		coalesce:              gitOptions.Coalesce,
+		pending:               make(map[string]pendingWrite),
 	}
 	g.origin = &gitOrigin{g: g}
 	return g
+}
+
+// pendingWrite records one staged-but-uncommitted path. created is the
+// create-vs-update decision captured at the first write of the batch.
+type pendingWrite struct {
+	created      bool
+	firstSeen    time.Time
+	lastModified time.Time
 }
 
 type git struct {
@@ -198,6 +244,8 @@ type git struct {
 	sshKeyPath            SSHKeyPath
 	resolver              ConflictResolver
 	origin                ClaimOrigin
+	coalesce              CoalesceConfig
+	pending               map[string]pendingWrite
 }
 
 // validatePath rejects empty, absolute, path-traversal, and .git paths.
@@ -664,7 +712,9 @@ func (g *git) validateConflictPathsNotNested(
 	)
 }
 
-// WriteFile writes content to path, stages and commits it, then pushes.
+// WriteFile writes content to path and stages it. When write coalescing is
+// enabled a background flusher commits and pushes the staged content; otherwise
+// it commits and pushes synchronously before returning.
 func (g *git) WriteFile(ctx context.Context, path string, content []byte) error {
 	start := g.currentDateTimeGetter.Now()
 	defer func() {
@@ -685,7 +735,9 @@ func (g *git) WriteFile(ctx context.Context, path string, content []byte) error 
 }
 
 // WriteFileIfAbsent writes content to path only when no file exists there yet,
-// then stages, commits and pushes — the create-only counterpart to WriteFile.
+// then stages it — the create-only counterpart to WriteFile. When write
+// coalescing is enabled a background flusher commits and pushes the staged
+// content; otherwise it commits and pushes synchronously before returning.
 // When path is already occupied it returns ErrFileExists (via errors.Is) and
 // leaves the repository untouched. The existence check and the write share a
 // single mutex hold, so the check-then-write is atomic: an existing file can
@@ -723,6 +775,14 @@ func (g *git) writeFileLocked(
 ) error {
 	fullPath := filepath.Join(g.repoPath, path)
 
+	// Compare against the file on disk, NOT the index against HEAD: after the
+	// first write of a burst the index already differs from HEAD, so an
+	// index-vs-HEAD check would report "changed" for every later identical write.
+	if existing, err := os.ReadFile(fullPath); err == nil && bytes.Equal(existing, content) {
+		slog.InfoContext(ctx, "write file: no changes to commit (content unchanged)", "path", path)
+		return nil
+	}
+
 	if err := os.MkdirAll(filepath.Dir(fullPath), 0750); err != nil {
 		g.metrics.IncGitOperationError("write_file")
 		return errors.Wrapf(ctx, err, "create directories for %s", path)
@@ -736,6 +796,11 @@ func (g *git) writeFileLocked(
 	if err := g.runCmd(ctx, g.repoPath, "add", path); err != nil {
 		g.metrics.IncGitOperationError("write_file")
 		return errors.Wrapf(ctx, err, "git add %s", path)
+	}
+
+	if g.coalesce.Enabled {
+		g.enqueuePendingLocked(path, !fileExists)
+		return nil
 	}
 
 	commitMsg := "git-rest: create " + path
@@ -768,6 +833,199 @@ func (g *git) writeFileLocked(
 	return nil
 }
 
+// enqueuePendingLocked records path in the pending set and updates the gauges.
+// The caller holds g.mu.
+func (g *git) enqueuePendingLocked(path string, created bool) {
+	now := time.Now()
+	entry, ok := g.pending[path]
+	if !ok {
+		entry = pendingWrite{created: created, firstSeen: now}
+	}
+	entry.lastModified = now
+	g.pending[path] = entry
+	g.metrics.IncWriteCoalesced()
+	g.metrics.SetWritePending(len(g.pending))
+}
+
+// FlushPending commits and pushes the pending write set.
+func (g *git) FlushPending(ctx context.Context) error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.flushPendingLocked(ctx)
+}
+
+// FlushPendingIfDue flushes when the trailing delay or max-delay has elapsed.
+func (g *git) FlushPendingIfDue(ctx context.Context) error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if len(g.pending) == 0 {
+		return nil
+	}
+	oldest, latest := g.pendingBoundsLocked()
+	now := time.Now()
+	trailingDue := now.Sub(latest) >= g.coalesce.Delay
+	maxDue := g.coalesce.MaxDelay > 0 && now.Sub(oldest) >= g.coalesce.MaxDelay
+	if !trailingDue && !maxDue {
+		return nil
+	}
+	return g.flushPendingLocked(ctx)
+}
+
+// pendingBoundsLocked returns the oldest firstSeen and the most recent
+// lastModified in the pending set. The caller holds g.mu.
+func (g *git) pendingBoundsLocked() (oldest, latest time.Time) {
+	for _, entry := range g.pending {
+		if oldest.IsZero() || entry.firstSeen.Before(oldest) {
+			oldest = entry.firstSeen
+		}
+		if entry.lastModified.After(latest) {
+			latest = entry.lastModified
+		}
+	}
+	return oldest, latest
+}
+
+// flushPendingLocked commits and pushes the pending write set. The caller holds g.mu.
+func (g *git) flushPendingLocked(ctx context.Context) error {
+	if len(g.pending) == 0 {
+		return nil
+	}
+	if err := ctx.Err(); err != nil {
+		return errors.Wrap(ctx, err, "flush pending writes")
+	}
+
+	paths := make([]string, 0, len(g.pending))
+	for path := range g.pending {
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+	message := g.flushCommitMessageLocked(paths)
+
+	preFlushHEAD, headErr := g.runCmdOutput(ctx, g.repoPath, "rev-parse", "HEAD")
+	preFlushSHA := strings.TrimSpace(string(preFlushHEAD))
+
+	commitOut, err := g.runCmdRaw(ctx, g.repoPath, "commit", "-m", message)
+	if err != nil && !strings.Contains(string(commitOut), "nothing to commit") {
+		g.metrics.IncWriteFlush("error")
+		return errors.Wrapf(ctx, err, "git commit: %s", strings.TrimSpace(string(commitOut)))
+	}
+
+	pushOutcome := "skipped"
+	if g.hasRemote(ctx) {
+		if err := g.pushWithRetry(ctx, ""); err != nil {
+			g.restorePendingIndexLocked(ctx, preFlushSHA, headErr)
+			g.metrics.IncWriteFlush("error")
+			return errors.Wrap(ctx, err, "git push")
+		}
+		pushOutcome = "ok"
+	}
+
+	g.pending = make(map[string]pendingWrite)
+	g.metrics.SetWritePending(0)
+	g.metrics.IncWriteFlush("ok")
+	slog.InfoContext(
+		ctx,
+		"git-rest: flushed pending writes",
+		"paths", len(paths),
+		"push", pushOutcome,
+	)
+	return nil
+}
+
+// flushCommitMessageLocked builds the batch commit message. The git-rest:
+// prefix is load-bearing: the rate measurement greps ^git-rest:.
+func (g *git) flushCommitMessageLocked(paths []string) string {
+	if len(paths) == 1 {
+		if g.pending[paths[0]].created {
+			return "git-rest: create " + paths[0]
+		}
+		return "git-rest: update " + paths[0]
+	}
+	return "git-rest: update " + strconv.Itoa(len(paths)) + " files"
+}
+
+// restorePendingIndexLocked moves HEAD back to preFlushSHA while keeping the
+// committed tree in the index, so a failed push leaves the paths staged and the
+// pending set durable. The reset runs on a context without cancellation: the
+// shutdown flush may already be past its deadline and the restore is a fast
+// local operation.
+func (g *git) restorePendingIndexLocked(ctx context.Context, preFlushSHA string, headErr error) {
+	if headErr != nil || preFlushSHA == "" {
+		return
+	}
+	if err := g.runCmd(
+		context.WithoutCancel(ctx),
+		g.repoPath,
+		"reset",
+		"--soft",
+		preFlushSHA,
+	); err != nil {
+		slog.WarnContext(ctx, "git-rest: restore pending index after failed flush", "error", err)
+	}
+}
+
+// RecoverPendingWrites commits and pushes paths left staged in the index by a
+// crash. It runs before the HTTP server starts, so it is the only writer.
+func (g *git) RecoverPendingWrites(ctx context.Context) error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	out, err := g.runCmdOutput(ctx, g.repoPath, "diff", "--cached", "--name-only")
+	if err != nil {
+		return errors.Wrap(ctx, err, "list staged paths for recovery")
+	}
+	paths := make([]string, 0, 8)
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if line != "" {
+			paths = append(paths, line)
+		}
+	}
+	if len(paths) == 0 {
+		return nil
+	}
+	sort.Strings(paths)
+
+	message := "git-rest: update " + strconv.Itoa(len(paths)) + " files"
+	if len(paths) == 1 {
+		status, statusErr := g.runCmdOutput(
+			ctx, g.repoPath, "diff", "--cached", "--name-status", "--", paths[0],
+		)
+		if statusErr != nil {
+			return errors.Wrapf(ctx, statusErr, "read staged status for %s", paths[0])
+		}
+		if strings.HasPrefix(strings.TrimSpace(string(status)), "A") {
+			message = "git-rest: create " + paths[0]
+		} else {
+			message = "git-rest: update " + paths[0]
+		}
+	}
+
+	if err := g.runCmd(ctx, g.repoPath, "commit", "-m", message); err != nil {
+		g.metrics.IncWriteFlush("error")
+		return errors.Wrap(ctx, err, "git commit recovered pending writes")
+	}
+
+	pushOutcome := "skipped"
+	if g.hasRemote(ctx) {
+		if err := g.pushWithRetry(ctx, ""); err != nil {
+			g.metrics.IncWriteFlush("error")
+			return errors.Wrap(ctx, err, "git push recovered pending writes")
+		}
+		pushOutcome = "ok"
+	}
+
+	g.pending = make(map[string]pendingWrite)
+	g.metrics.SetWritePending(0)
+	g.metrics.IncWriteFlush("ok")
+	slog.InfoContext(
+		ctx,
+		"git-rest: recovered pending writes",
+		"paths", len(paths),
+		"push", pushOutcome,
+	)
+	return nil
+}
+
 // DeleteFile removes a file from the repository, commits and pushes the deletion.
 func (g *git) DeleteFile(ctx context.Context, path string) error {
 	start := g.currentDateTimeGetter.Now()
@@ -782,6 +1040,13 @@ func (g *git) DeleteFile(ctx context.Context, path string) error {
 
 	g.mu.Lock()
 	defer g.mu.Unlock()
+
+	// Flush pending writes first: a delete that jumped the queue would leave the
+	// path re-created by the later flush.
+	if err := g.flushPendingLocked(ctx); err != nil {
+		g.metrics.IncGitOperationError("delete_file")
+		return errors.Wrap(ctx, err, "flush pending writes before delete")
+	}
 
 	fullPath := filepath.Join(g.repoPath, path)
 	if _, err := os.Stat(fullPath); os.IsNotExist(err) {
@@ -1874,6 +2139,12 @@ func (g *git) Pull(ctx context.Context) error {
 	// the mutex and runs it on every exit path, so a no-op pull still counts a
 	// deleted quarantine file down.
 	defer g.refreshQuarantinedBacklog(ctx)
+
+	// Flush pending writes before resolving upstream or merging, so a pull never
+	// merges against a tree this process dirtied.
+	if err := g.flushPendingLocked(ctx); err != nil {
+		slog.WarnContext(ctx, "git-rest: flush pending writes before pull failed", "error", err)
+	}
 
 	if !g.hasRemote(ctx) {
 		slog.DebugContext(ctx, "git pull skipped: no remote configured")
