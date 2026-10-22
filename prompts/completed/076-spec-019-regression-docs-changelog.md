@@ -1,8 +1,12 @@
 ---
-status: approved
+status: completed
 spec: [019-bug-dirty-tree-rescue-all-pull-paths]
+execution_id: git-rest-dirty-tree-rescue-exec-076-spec-019-regression-docs-changelog
+dark-factory-version: v0.198.7
 created: "2026-10-22T07:10:42Z"
 queued: "2026-10-22T07:32:06Z"
+started: "2026-10-22T07:43:17Z"
+completed: "2026-10-22T08:37:51Z"
 branch: dark-factory/bug-dirty-tree-rescue-all-pull-paths
 ---
 
