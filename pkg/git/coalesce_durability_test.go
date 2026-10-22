@@ -33,6 +33,11 @@ func TestFlushPushFailureKeepsPending(t *testing.T) {
 	if err := os.WriteFile(hook, []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil { //nolint:gosec
 		t.Fatalf("write pre-receive hook: %v", err)
 	}
+	// Point the bare remote at its OWN hooks directory. A global core.hooksPath
+	// (set on this host to ~/.git-hooks) otherwise overrides $GIT_DIR/hooks, the
+	// hook never runs, the push succeeds and this test fails while the code under
+	// test is correct. Same guard as installPreReceiveRejection.
+	mustGit(t, bare, "config", "core.hooksPath", "hooks")
 
 	if err := client.FlushPending(ctx); err == nil {
 		t.Fatal("want flush to fail while the origin rejects pushes")

@@ -1,8 +1,9 @@
 ---
-status: prompted
+status: verifying
 approved: "2026-10-22T10:18:01Z"
 generating: "2026-10-22T10:34:33Z"
 prompted: "2026-10-22T10:40:58Z"
+verifying: "2026-10-22T11:09:45Z"
 branch: dark-factory/commit-coalescing
 ---
 
@@ -98,6 +99,8 @@ sleep 3
 
 Teardown after each: `kill "$PID" 2>/dev/null || true`.
 
+⚠️ **Every recipe that installs a `pre-receive` hook must also run `git -C "$BASE/origin.git" config core.hooksPath hooks`.** This host sets a **global** `core.hooksPath` (`~/.git-hooks`), which overrides `$GIT_DIR/hooks` entirely — so a hook written into the bare repo is silently ignored, the push succeeds, and the recipe produces a false result in whichever direction the hook was meant to force. Recipes (c), (d2) and (e2) all depend on their hook firing; recipe (c) is the worst case, because its slow hook is what makes AC4's comparator distinguishable from the coalesced path at all. The repo's own tests hit the same trap — `pkg/git/git_test.go:2426` carries the guard and `installPreReceiveRejection` sets `core.hooksPath hooks` for the same reason.
+
 | Recipe | `<EXTRA_FLAGS>` | Steps after preamble | Observed by |
 |---|---|---|---|
 | (a) | — | `POST tasks/x.md` = `A`, `B`, `C` 1 s apart; `sleep 40`; `GET tasks/x.md` | AC1, AC2, AC10 |
@@ -123,6 +126,7 @@ BASE=/tmp/git-rest-c && rm -rf "$BASE" && mkdir -p "$BASE" && cd "$BASE"
 git init -q --bare -b test/repro origin.git
 printf '#!/bin/sh\nsleep 0.5\n' > "$BASE/origin.git/hooks/pre-receive"
 chmod +x "$BASE/origin.git/hooks/pre-receive"
+git -C "$BASE/origin.git" config core.hooksPath hooks   # see § Recipes — required
 git clone -q origin.git seed && cd seed
 git config user.email repro@local && git config user.name repro
 mkdir -p tasks && printf 'v0\n' > tasks/x.md
