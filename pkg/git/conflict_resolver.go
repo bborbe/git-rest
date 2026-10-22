@@ -46,11 +46,12 @@ func (r *markerResolver) Resolve(ctx context.Context, conflictedPaths []string) 
 		}
 		// #nosec G204 -- git binary is hardcoded; paths come from git merge output, not user input
 		cmd := exec.CommandContext(ctx, "git", "add", "--", path)
+		cmd.WaitDelay = waitDelay
 		cmd.Dir = r.repoPath
 		var buf bytes.Buffer
 		cmd.Stdout = &buf
 		cmd.Stderr = &buf
-		if err := cmd.Run(); err != nil {
+		if err := normalizeWaitDelay(cmd, cmd.Run()); err != nil {
 			return errors.Wrapf(ctx, err, "git add %s: %s", path, strings.TrimSpace(buf.String()))
 		}
 	}

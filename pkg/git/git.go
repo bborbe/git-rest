@@ -288,6 +288,7 @@ func validatePath(ctx context.Context, path string) error {
 func (g *git) runCmd(ctx context.Context, dir string, args ...string) error {
 	// #nosec G204 -- binary is hardcoded to "git"; args are internal subcommands, not user input
 	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd.WaitDelay = waitDelay
 	cmd.Dir = dir
 	if g.sshKeyPath != "" {
 		cmd.Env = append(
@@ -301,7 +302,7 @@ func (g *git) runCmd(ctx context.Context, dir string, args ...string) error {
 	var buf bytes.Buffer
 	cmd.Stdout = &buf
 	cmd.Stderr = &buf
-	if err := cmd.Run(); err != nil {
+	if err := normalizeWaitDelay(cmd, cmd.Run()); err != nil {
 		return errors.Wrapf(ctx, err, "git %v: %s", args, buf.String())
 	}
 	return nil
@@ -311,6 +312,7 @@ func (g *git) runCmd(ctx context.Context, dir string, args ...string) error {
 func (g *git) runCmdOutput(ctx context.Context, dir string, args ...string) ([]byte, error) {
 	// #nosec G204 -- binary is hardcoded to "git"; args are internal subcommands, not user input
 	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd.WaitDelay = waitDelay
 	cmd.Dir = dir
 	if g.sshKeyPath != "" {
 		cmd.Env = append(
@@ -324,7 +326,7 @@ func (g *git) runCmdOutput(ctx context.Context, dir string, args ...string) ([]b
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
+	if err := normalizeWaitDelay(cmd, cmd.Run()); err != nil {
 		return nil, errors.Wrapf(ctx, err, "git %v: %s", args, stderr.String())
 	}
 	return stdout.Bytes(), nil
@@ -336,6 +338,7 @@ func (g *git) runCmdOutput(ctx context.Context, dir string, args ...string) ([]b
 func (g *git) runCmdRaw(ctx context.Context, dir string, args ...string) ([]byte, error) {
 	// #nosec G204 -- binary is hardcoded to "git"; args are internal subcommands, not user input
 	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd.WaitDelay = waitDelay
 	cmd.Dir = dir
 	if g.sshKeyPath != "" {
 		cmd.Env = append(
@@ -349,7 +352,7 @@ func (g *git) runCmdRaw(ctx context.Context, dir string, args ...string) ([]byte
 	var buf bytes.Buffer
 	cmd.Stdout = &buf
 	cmd.Stderr = &buf
-	err := cmd.Run()
+	err := normalizeWaitDelay(cmd, cmd.Run())
 	return buf.Bytes(), err
 }
 
@@ -357,6 +360,29 @@ func (g *git) runCmdRaw(ctx context.Context, dir string, args ...string) ([]byte
 // behaviour, not a tunable: a lost push race converges within a few hundred
 // milliseconds, and a longer loop would only hold g.mu longer.
 const pushMaxAttempts = 3
+
+// waitDelay bounds how long Wait may block after the context is cancelled or the
+// process exits. Without it a killed git leaves its children (git-remote-https,
+// ssh, receive-pack) holding the output pipe, EOF never arrives, and Wait
+// outlives the deadline by the child's whole lifetime — measured at 4m13s
+// against a 60s pull budget. Two seconds is derived from the two bounds that
+// actually constrain it: spec 022's AC1 (a 2s context must return within 6s)
+// leaves at most 4s, and spec 021's TestFlushDeadlineCut requires the whole
+// 10s pull to finish under 6s after a 3.3s flush deadline, which leaves ~2.6s.
+// It is far below the 60s pull budget, so it never becomes the constraint.
+const waitDelay = 2 * time.Second
+
+// normalizeWaitDelay turns exec.ErrWaitDelay into nil when the process itself
+// succeeded: the command did its work, only the trailing output drain was cut.
+// Without this a landed push is reported as a failure and pushWithRetry retries
+// a push that already succeeded, duplicating the commit.
+func normalizeWaitDelay(cmd *exec.Cmd, err error) error {
+	if err != nil && stderrors.Is(err, exec.ErrWaitDelay) &&
+		cmd.ProcessState != nil && cmd.ProcessState.Success() {
+		return nil
+	}
+	return err
+}
 
 // isRetryablePushRejection reports whether git push's combined output is a lost
 // push race — the remote moved after our fetch, so the push was rejected as
@@ -502,12 +528,13 @@ func (g *git) runCmdEnv(
 ) error {
 	// #nosec G204 -- binary is hardcoded to "git"; args are internal subcommands, not user input
 	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd.WaitDelay = waitDelay
 	cmd.Dir = dir
 	cmd.Env = g.childEnv(extraEnv...)
 	var buf bytes.Buffer
 	cmd.Stdout = &buf
 	cmd.Stderr = &buf
-	if err := cmd.Run(); err != nil {
+	if err := normalizeWaitDelay(cmd, cmd.Run()); err != nil {
 		return errors.Wrapf(ctx, err, "git %v: %s", args, buf.String())
 	}
 	return nil
@@ -523,12 +550,13 @@ func (g *git) runCmdOutputEnv(
 ) ([]byte, error) {
 	// #nosec G204 -- binary is hardcoded to "git"; args are internal subcommands, not user input
 	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd.WaitDelay = waitDelay
 	cmd.Dir = dir
 	cmd.Env = g.childEnv(extraEnv...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
+	if err := normalizeWaitDelay(cmd, cmd.Run()); err != nil {
 		return nil, errors.Wrapf(ctx, err, "git %v: %s", args, stderr.String())
 	}
 	return stdout.Bytes(), nil
@@ -2062,7 +2090,10 @@ func lockHeldByLsof(ctx context.Context, path string) (bool, bool) {
 		return false, false
 	}
 	// #nosec G204 -- binary is hardcoded to "lsof"; path is an internal repo path
-	out, err := exec.CommandContext(ctx, "lsof", "-t", path).Output()
+	lsofCmd := exec.CommandContext(ctx, "lsof", "-t", path)
+	lsofCmd.WaitDelay = waitDelay
+	out, err := lsofCmd.Output()
+	err = normalizeWaitDelay(lsofCmd, err)
 	if err == nil {
 		return strings.TrimSpace(string(out)) != "", true
 	}

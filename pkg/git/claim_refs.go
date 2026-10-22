@@ -486,7 +486,9 @@ func ValidateClaimKey(ctx context.Context, key string) error {
 	}
 	// #nosec G204 -- binary is hardcoded to "git"; the key is passed as a separate argument
 	cmd := exec.CommandContext(ctx, "git", "check-ref-format", "refs/"+key)
-	if out, err := cmd.CombinedOutput(); err != nil {
+	cmd.WaitDelay = waitDelay
+	out, err := cmd.CombinedOutput()
+	if err = normalizeWaitDelay(cmd, err); err != nil {
 		return errors.Wrapf(ctx, ErrInvalidRefName, "invalid ref %q: %s", key, string(out))
 	}
 	return nil
