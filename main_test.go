@@ -27,6 +27,7 @@ import (
 	"github.com/bborbe/git-rest/mocks"
 	"github.com/bborbe/git-rest/pkg/factory"
 	"github.com/bborbe/git-rest/pkg/git"
+	"github.com/bborbe/git-rest/pkg/metrics"
 	"github.com/bborbe/git-rest/pkg/puller"
 )
 
@@ -286,9 +287,26 @@ var _ = Describe("SyncOnStartup", func() {
 		return lines
 	}
 
+	newStartupGit := func(repoDir string) git.Git {
+		return git.New(
+			repoDir,
+			metrics.NewMetrics(),
+			libtime.NewCurrentDateTime(),
+			"",
+			git.NewMarkerResolver(repoDir),
+		)
+	}
+
+	gitOutput := func(dir string, args ...string) string {
+		full := append([]string{"-C", dir}, args...)
+		out, err := exec.Command("git", full...).Output()
+		Expect(err).NotTo(HaveOccurred())
+		return string(out)
+	}
+
 	Context("when .git/ does not exist", func() {
-		It("returns nil", func() {
-			Expect(main.SyncOnStartup(ctx, repoDir, "")).To(Succeed())
+		It("does not panic", func() {
+			main.SyncOnStartup(ctx, newStartupGit(repoDir))
 		})
 	})
 
@@ -308,14 +326,14 @@ var _ = Describe("SyncOnStartup", func() {
 			run("commit", "-m", "init")
 		})
 		It("returns nil without error", func() {
-			Expect(main.SyncOnStartup(ctx, repoDir, "")).To(Succeed())
+			main.SyncOnStartup(ctx, newStartupGit(repoDir))
 		})
 	})
 
 	Context("when repo has remote and working tree is clean and synced", func() {
 		It("returns nil", func() {
 			_, localDir := initRepoWithLocalRemote()
-			Expect(main.SyncOnStartup(ctx, localDir, "")).To(Succeed())
+			main.SyncOnStartup(ctx, newStartupGit(localDir))
 		})
 	})
 
@@ -336,7 +354,7 @@ var _ = Describe("SyncOnStartup", func() {
 			run("add", "recovery.md")
 			run("commit", "-m", "git-rest: recover untracked from prior crash")
 
-			Expect(main.SyncOnStartup(ctx, localDir, "")).To(Succeed())
+			main.SyncOnStartup(ctx, newStartupGit(localDir))
 			Expect(remoteLogCount(remoteDir)).To(Equal(before + 1))
 		})
 	})
@@ -365,13 +383,13 @@ var _ = Describe("SyncOnStartup", func() {
 			run2("push", "origin", "main")
 
 			before := localLogCount(localDir)
-			Expect(main.SyncOnStartup(ctx, localDir, "")).To(Succeed())
+			main.SyncOnStartup(ctx, newStartupGit(localDir))
 			Expect(localLogCount(localDir)).To(Equal(before + 1))
 		})
 	})
 
 	Context("when both local and remote have new commits (disjoint files)", func() {
-		It("returns nil (pull warns, push is non-fast-forward, both warn-logged)", func() {
+		It("merges and pushes the diverged history", func() {
 			remoteDir, localDir := initRepoWithLocalRemote()
 
 			// Local commit
@@ -406,9 +424,12 @@ var _ = Describe("SyncOnStartup", func() {
 			run2("commit", "-m", "remote commit")
 			run2("push", "origin", "main")
 
-			// Pull will fail (divergent branches, no strategy configured); push will also
-			// fail (non-fast-forward). Both must be warn-logged; function must return nil.
-			Expect(main.SyncOnStartup(ctx, localDir, "")).To(Succeed())
+			// Pull merges the diverged history and pushes the merge commit.
+			before := localLogCount(localDir)
+			main.SyncOnStartup(ctx, newStartupGit(localDir))
+			Expect(strings.TrimSpace(gitOutput(localDir, "status", "--porcelain"))).To(BeEmpty())
+			// The merge commit plus the remote commit it brings into local history.
+			Expect(localLogCount(localDir)).To(Equal(before + 2))
 		})
 	})
 
@@ -432,7 +453,60 @@ var _ = Describe("SyncOnStartup", func() {
 			// Break the remote URL
 			run("remote", "set-url", "origin", "/nonexistent/path")
 
-			Expect(main.SyncOnStartup(ctx, localDir, "")).To(Succeed())
+			main.SyncOnStartup(ctx, newStartupGit(localDir))
+		})
+	})
+
+	Context("when the working tree is dirty and the branch is diverged at boot", func() {
+		It("rescues the dirty tree, merges and pushes", func() {
+			remoteDir, localDir := initRepoWithLocalRemote()
+			runLocal := func(args ...string) {
+				full := append([]string{"-C", localDir}, args...)
+				cmd := exec.Command("git", full...)
+				out, err := cmd.CombinedOutput()
+				Expect(err).NotTo(HaveOccurred(), string(out))
+			}
+			Expect(os.WriteFile(
+				filepath.Join(localDir, "local-file.md"), []byte("local"), 0o644,
+			)).To(Succeed())
+			runLocal("add", "local-file.md")
+			runLocal("commit", "-m", "local commit")
+
+			secondDir := filepath.Join(GinkgoT().TempDir(), "second")
+			Expect(exec.Command("git", "clone", remoteDir, secondDir).Run()).To(Succeed())
+			runSecond := func(args ...string) {
+				full := append([]string{"-C", secondDir}, args...)
+				cmd := exec.Command("git", full...)
+				out, err := cmd.CombinedOutput()
+				Expect(err).NotTo(HaveOccurred(), string(out))
+			}
+			runSecond("config", "user.email", "test@example.com")
+			runSecond("config", "user.name", "Test")
+			Expect(os.WriteFile(
+				filepath.Join(secondDir, ".gitkeep"), []byte("remote\n"), 0o644,
+			)).To(Succeed())
+			runSecond("add", ".gitkeep")
+			runSecond("commit", "-m", "remote commit")
+			runSecond("push", "origin", "main")
+
+			// Dirty the file the remote commit touches, so the diverged merge aborts.
+			Expect(os.WriteFile(
+				filepath.Join(localDir, ".gitkeep"), []byte("LOCAL UNCOMMITTED\n"), 0o644,
+			)).To(Succeed())
+
+			main.SyncOnStartup(ctx, newStartupGit(localDir))
+
+			Expect(strings.TrimSpace(gitOutput(localDir, "status", "--porcelain"))).To(BeEmpty())
+			Expect(gitOutput(localDir, "log", "--oneline")).To(ContainSubstring("local commit"))
+			Expect(
+				gitOutput(localDir, "for-each-ref", "--format=%(refname)", "refs/heads/rescue/"),
+			).NotTo(BeEmpty())
+			Expect(
+				gitOutput(remoteDir, "for-each-ref", "--format=%(refname)", "refs/heads/rescue/"),
+			).NotTo(BeEmpty())
+			content, readErr := os.ReadFile(filepath.Join(localDir, ".gitkeep"))
+			Expect(readErr).NotTo(HaveOccurred())
+			Expect(content).To(Equal([]byte("remote\n")))
 		})
 	})
 })

@@ -8,6 +8,11 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 * MINOR version when you add functionality in a backwards-compatible manner, and
 * PATCH version when you make backwards-compatible bug fixes.
 
+## Unreleased
+
+- fix: Rescue a dirty working tree on every pull path, not only fast-forward. A dirty tree that blocks the diverged merge, the push-retry merge or the startup sync is now captured on a `rescue/<timestamp>` branch and pushed before the merge is retried, exactly as on the fast-forward path. The reset target is path-dependent: the upstream tracking ref on fast-forward, `HEAD` on the other three paths, so the local commits those paths are about to merge survive.
+- fix: Clear stale `.git/*.lock` files before every pull cycle, not only at boot. A lock is removed only when no live process holds an open file descriptor on it (`lsof` on macOS, `/proc/<pid>/fd` on Linux; fail closed when neither can decide), so a concurrent git process is never corrupted. Removal logs `stale lock removed during pull cycle` with the path. Fixes the 2026-10-22 dev incident where a post-boot `index.lock` defeated the rescue and wedged the pod for ~35 minutes.
+
 ## v0.33.1
 
 - fix: Report a failed retry merge by its cause. The push-retry merge error now reads `merge <upstream> failed: <cause>` instead of prefixing the cause with git's combined output, which could show merge success text for a killed process; the output is logged at warn level as `git-rest: retry merge failed`.

@@ -371,7 +371,10 @@ func (g *git) retryPush(ctx context.Context, upstream string, nextAttempt int) e
 	if err := g.runCmd(ctx, g.repoPath, "fetch"); err != nil {
 		return errors.Wrap(ctx, err, "fetch before push retry")
 	}
-	mergeOut, mergeErr := g.runCmdRaw(ctx, g.repoPath, "merge", "--no-edit", upstream)
+	mergeOut, mergeErr, rescueErr := g.mergeWithDirtyTreeRescue(ctx, upstream)
+	if rescueErr != nil {
+		return errors.Wrap(ctx, rescueErr, "merge after dirty-tree rescue failed")
+	}
 	if mergeErr != nil {
 		_, _ = g.runCmdRaw(ctx, g.repoPath, "merge", "--abort")
 		slog.WarnContext(
@@ -939,7 +942,12 @@ func (g *git) pullRebaseAndPush(ctx context.Context, upstream string) error {
 // Content conflicts are delegated to g.resolver (result="resolved" on success, "aborted" on failure).
 // On resolver failure the merge is aborted so the repo is left in a clean state.
 func (g *git) pullMergeAndPush(ctx context.Context, upstream string) error {
-	out, mergeErr := g.runCmdRaw(ctx, g.repoPath, "merge", "--no-edit", upstream)
+	out, mergeErr, rescueErr := g.mergeWithDirtyTreeRescue(ctx, upstream)
+	if rescueErr != nil {
+		g.metrics.IncGitOperationError("merge")
+		g.metrics.IncMergeOutcome("aborted")
+		return errors.Wrap(ctx, rescueErr, "merge after dirty-tree rescue failed")
+	}
 	if mergeErr == nil {
 		// Clean merge: git auto-produced a merge commit.
 		g.metrics.IncMergeOutcome("clean")
@@ -951,6 +959,45 @@ func (g *git) pullMergeAndPush(ctx context.Context, upstream string) error {
 		return nil
 	}
 	return g.resolveConflictMerge(ctx, upstream, out, mergeErr)
+}
+
+// mergeInProgress reports whether the last merge left a MERGE_HEAD, i.e. git
+// started the merge and stopped on a conflict. A merge refused because the
+// working tree would be overwritten leaves no MERGE_HEAD.
+func (g *git) mergeInProgress(ctx context.Context) bool {
+	_, err := g.runCmdOutput(ctx, g.repoPath, "rev-parse", "--verify", "--quiet", "MERGE_HEAD")
+	return err == nil
+}
+
+// mergeWithDirtyTreeRescue runs `git merge --no-edit upstream`, rescuing a dirty
+// working tree when (and only when) the merge fails, then retrying the merge
+// once inline. It returns the merge output and error, plus a non-nil rescueErr
+// when the rescue itself failed — in which case the merge was aborted and the
+// caller must return rescueErr without entering the conflict path.
+//
+// The working tree is inspected BEFORE the merge is attempted, so the decision
+// never matches git's abort text. The reset target is HEAD, never upstream:
+// this path's HEAD carries local commits that must survive the merge.
+//
+// A merge that actually started and stopped on a content conflict leaves a
+// MERGE_HEAD; such a failure is the resolver's to handle, not a dirty-tree
+// abort, so it is never rescued here even when the tree was dirty beforehand.
+func (g *git) mergeWithDirtyTreeRescue(
+	ctx context.Context,
+	upstream string,
+) ([]byte, error, error) {
+	dirty := g.workingTreeDirty(ctx)
+	out, mergeErr := g.runCmdRaw(ctx, g.repoPath, "merge", "--no-edit", upstream)
+	if mergeErr == nil || !dirty || g.mergeInProgress(ctx) {
+		return out, mergeErr, nil
+	}
+	if rescueErr := g.rescueDirtyTree(ctx, upstream, "HEAD"); rescueErr != nil {
+		// A merge abort must never leave MERGE_HEAD behind.
+		_, _ = g.runCmdRaw(ctx, g.repoPath, "merge", "--abort")
+		return out, mergeErr, rescueErr
+	}
+	out, mergeErr = g.runCmdRaw(ctx, g.repoPath, "merge", "--no-edit", upstream)
+	return out, mergeErr, nil
 }
 
 // conflictKind classifies a conflicted path by which sides of the merge carry
@@ -1608,6 +1655,207 @@ func (g *git) recoverRepoState(ctx context.Context) error {
 	return nil
 }
 
+// cleanupStaleLocksForCycle removes stale *.lock files under .git before a pull
+// cycle. A lock is removed only when no live process holds an open file
+// descriptor on it. When liveness cannot be determined the lock is left in place
+// and a warning is logged — never fall back to an unconditional remove, which
+// could delete the lock of a concurrent git process.
+//
+// Scope matches the boot-time cleanupStaleLocks in main.go: every *.lock under
+// .git, not only index.lock. The boot cleanup stays unconditional because a lock
+// present at boot can only belong to a process that no longer exists.
+func (g *git) cleanupStaleLocksForCycle(ctx context.Context) error {
+	return g.cleanupStaleLocks(ctx, lockHeldByProcess)
+}
+
+// cleanupStaleLocks walks every *.lock under .git and removes the ones the probe
+// reports as not held by any live process. The probe is injected so the
+// undetermined-liveness branch can be exercised without process-level state.
+func (g *git) cleanupStaleLocks(
+	ctx context.Context,
+	probe func(context.Context, string) (bool, bool),
+) error {
+	gitDir := filepath.Join(g.repoPath, ".git")
+	if _, err := os.Stat(gitDir); os.IsNotExist(err) {
+		return nil
+	} else if err != nil {
+		return errors.Wrapf(ctx, err, "stat %s", gitDir)
+	}
+	return filepath.WalkDir(gitDir, func(path string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			slog.WarnContext(
+				ctx, "walk error during per-cycle lock cleanup", "path", path, "error", walkErr,
+			)
+			return nil
+		}
+		if d.IsDir() {
+			// git never creates a lock under objects/, and that directory holds one
+			// entry per loose object. Descending it on every pull cycle would cost
+			// O(objects) on the mutex that serializes every API request.
+			if d.Name() == "objects" {
+				return fs.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, ".lock") {
+			return nil
+		}
+		held, determined := probe(ctx, path)
+		if !determined {
+			slog.WarnContext(
+				ctx, "stale lock liveness undetermined; leaving lock in place", "path", path,
+			)
+			return nil
+		}
+		if held {
+			return nil
+		}
+		rmErr := os.Remove(
+			path,
+		) // #nosec G122 -- path is under the repo's own .git and the liveness probe cleared it
+		if rmErr != nil {
+			if !os.IsNotExist(rmErr) {
+				slog.WarnContext(
+					ctx,
+					"failed to remove stale lock during pull cycle",
+					"path",
+					path,
+					"error",
+					rmErr,
+				)
+			}
+			return nil
+		}
+		slog.InfoContext(ctx, "stale lock removed during pull cycle", "path", path)
+		return nil
+	})
+}
+
+// lockHeldByProcess reports whether any live process holds an open file
+// descriptor on path, and whether that could be determined. The probe is
+// deliberately a file-descriptor check: git creates *.lock files with
+// O_CREAT|O_EXCL and never takes an OS lock on them, so flock/fcntl cannot see a
+// live git process. darwin uses lsof; linux reads /proc/<pid>/fd and compares
+// file identity with os.SameFile. If neither probe is available the result is
+// (false, false) — the caller must leave the lock alone.
+func lockHeldByProcess(ctx context.Context, path string) (bool, bool) {
+	if _, err := os.Stat(path); err != nil {
+		// The lock is already gone: there is nothing to protect, and that is a
+		// determined answer. Probed before the backends so a missing path never
+		// reaches lsof, which reports it on stderr and would read as undetermined.
+		return false, os.IsNotExist(err)
+	}
+	if held, determined := lockHeldByLsof(ctx, path); determined {
+		return held, true
+	}
+	return lockHeldByProc(ctx, path)
+}
+
+// lockHeldByLsof probes with lsof, which exists on macOS and not in the alpine
+// image. lsof exits 1 when no process has the file open.
+func lockHeldByLsof(ctx context.Context, path string) (bool, bool) {
+	if _, err := exec.LookPath("lsof"); err != nil {
+		return false, false
+	}
+	// #nosec G204 -- binary is hardcoded to "lsof"; path is an internal repo path
+	out, err := exec.CommandContext(ctx, "lsof", "-t", path).Output()
+	if err == nil {
+		return strings.TrimSpace(string(out)) != "", true
+	}
+	var exitErr *exec.ExitError
+	if stderrors.As(err, &exitErr) && exitErr.ExitCode() == 1 && len(exitErr.Stderr) == 0 {
+		// lsof exits 1 both when nothing holds the file and when it cannot inspect
+		// it. Only an error-free exit is evidence, so a non-empty stderr stays
+		// undetermined and the caller leaves the lock alone.
+		return false, true
+	}
+	return false, false
+}
+
+// procFDScan classifies the outcome of inspecting one /proc/<pid>/fd directory.
+type procFDScan int
+
+const (
+	// procScanVanished means the pid exited between listing /proc and reading its
+	// fds. Benign: a dead process holds no lock.
+	procScanVanished procFDScan = iota
+	// procScanUnreadable means the pid exists but its fds could not be inspected,
+	// so a holder under another uid would be invisible.
+	procScanUnreadable
+	// procScanReadable means every fd of the pid was inspected.
+	procScanReadable
+)
+
+// scanProcFDs reports whether pidDir's process holds an open descriptor on
+// lockInfo, and how conclusive the scan was.
+func scanProcFDs(pidDir string, lockInfo os.FileInfo) (bool, procFDScan) {
+	fdDir := filepath.Join(pidDir, "fd")
+	fds, err := os.ReadDir(fdDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, procScanVanished
+		}
+		return false, procScanUnreadable
+	}
+	for _, fd := range fds {
+		fdInfo, err := os.Stat(filepath.Join(fdDir, fd.Name()))
+		if err != nil {
+			continue
+		}
+		if os.SameFile(lockInfo, fdInfo) {
+			return true, procScanReadable
+		}
+	}
+	return false, procScanReadable
+}
+
+// isPIDDirName reports whether a /proc entry name is a pid.
+func isPIDDirName(name string) bool {
+	_, err := strconv.Atoi(name)
+	return err == nil
+}
+
+// lockHeldByProc probes /proc/<pid>/fd, which exists on linux and not on macOS.
+// A pid whose fd directory has vanished is skipped: the process exited, which is
+// benign. A pid that exists but cannot be inspected is a visibility gap — a
+// holder under another uid would be invisible — so the scan is not conclusive.
+// The result is undetermined when no pid could be read or when any pid was
+// visible-but-unreadable.
+func lockHeldByProc(ctx context.Context, path string) (bool, bool) {
+	lockInfo, err := os.Stat(path)
+	if err != nil {
+		// The lock vanished; there is nothing to protect.
+		return false, os.IsNotExist(err)
+	}
+	procEntries, err := os.ReadDir("/proc")
+	if err != nil {
+		return false, false
+	}
+	readable, unreadable := 0, 0
+	for _, entry := range procEntries {
+		if !entry.IsDir() || !isPIDDirName(entry.Name()) {
+			continue
+		}
+		held, scan := scanProcFDs(filepath.Join("/proc", entry.Name()), lockInfo)
+		if held {
+			return true, true
+		}
+		switch scan {
+		case procScanReadable:
+			readable++
+		case procScanUnreadable:
+			unreadable++
+		}
+		if ctx.Err() != nil {
+			return false, false
+		}
+	}
+	if readable == 0 || unreadable > 0 {
+		return false, false
+	}
+	return false, true
+}
+
 // Pull takes the repo mutex, skips a repo with no remote, heals any abandoned
 // entry state (abandoned rebase / detached HEAD), resolves the upstream tracking
 // ref from @{u} — never a hardcoded branch name — and then delegates the sync
@@ -1630,6 +1878,12 @@ func (g *git) Pull(ctx context.Context) error {
 	if !g.hasRemote(ctx) {
 		slog.DebugContext(ctx, "git pull skipped: no remote configured")
 		return nil
+	}
+
+	// Clear locks left by a process that no longer exists before any git command
+	// needs the index. A lock held by a live process is left alone.
+	if err := g.cleanupStaleLocksForCycle(ctx); err != nil {
+		slog.WarnContext(ctx, "stale lock cleanup failed", "error", err)
 	}
 
 	// Entry-state recovery: abort any abandoned rebase or restore a detached HEAD
@@ -1711,7 +1965,7 @@ func (g *git) fastForwardOrRescue(ctx context.Context, upstream string) (bool, e
 		g.metrics.IncGitOperationError("pull")
 		return false, errors.Wrap(ctx, mergeErr, "fast-forward merge failed")
 	}
-	if err := g.rescueDirtyTree(ctx, upstream); err != nil {
+	if err := g.rescueDirtyTree(ctx, upstream, upstream); err != nil {
 		// The pull did NOT succeed: the rescue push failed and the repo is left
 		// dirty and not-ready, so the existing git-operation-error signal — and the
 		// alert on it at helm/templates/alerts.yaml:16 — must still fire.
@@ -1793,11 +2047,16 @@ func (g *git) createRescueCommit(ctx context.Context) (string, []string, error) 
 
 // rescueDirtyTree captures the whole working-tree state on a
 // rescue/<timestamp> branch and pushes it to the upstream remote. Only after that
-// push succeeds does it return the working tree to the upstream state
+// push succeeds does it return the working tree to the reset state
 // (reset --hard + clean -fd). It never discards a change: a failed push leaves
 // HEAD unmoved, the working tree dirty, and the local rescue ref in place so the
 // push can be retried by hand.
-func (g *git) rescueDirtyTree(ctx context.Context, upstream string) error {
+//
+// resetRef is path-dependent and load-bearing: the fast-forward path passes the
+// upstream tracking ref (its HEAD holds no unique commit), while the diverged,
+// push-retry and startup paths pass "HEAD" so the local commits they are about
+// to merge survive. It is never a hardcoded branch name.
+func (g *git) rescueDirtyTree(ctx context.Context, upstream, resetRef string) error {
 	branch := "rescue/" + g.currentDateTimeGetter.Now().UTC().Format("20060102T150405Z")
 
 	commit, paths, err := g.createRescueCommit(ctx)
@@ -1843,8 +2102,8 @@ func (g *git) rescueDirtyTree(ctx context.Context, upstream string) error {
 
 	// Only now is the content safe on the remote, so only now may the local
 	// working tree be returned to the upstream state.
-	if err := g.runCmd(ctx, g.repoPath, "reset", "--hard", upstream); err != nil {
-		return errors.Wrapf(ctx, err, "reset --hard %s after rescue", upstream)
+	if err := g.runCmd(ctx, g.repoPath, "reset", "--hard", resetRef); err != nil {
+		return errors.Wrapf(ctx, err, "reset --hard %s after rescue", resetRef)
 	}
 	if err := g.runCmd(ctx, g.repoPath, "clean", "-fd"); err != nil {
 		return errors.Wrap(ctx, err, "git clean -fd after rescue")

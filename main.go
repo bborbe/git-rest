@@ -75,6 +75,8 @@ func (a *application) Run(ctx context.Context, sentryClient libsentry.Client) er
 		return errors.Wrap(ctx, err, "create git client failed")
 	}
 
+	syncOnStartup(ctx, gitClient)
+
 	return service.Run(ctx,
 		a.createGitRefresher(gitClient),
 		a.createHTTPServer(gitClient, metrics.NewMetrics(), a.Repo),
@@ -99,9 +101,6 @@ func (a *application) bootstrap(ctx context.Context) error {
 	}
 	if err := recoverUntracked(ctx, a.Repo, sshCommand); err != nil {
 		return errors.Wrap(ctx, err, "recover untracked")
-	}
-	if err := syncOnStartup(ctx, a.Repo, sshCommand); err != nil {
-		return errors.Wrap(ctx, err, "sync on startup")
 	}
 	return nil
 }
@@ -199,49 +198,23 @@ func hasUntracked(statusOutput string) bool {
 // syncOnStartupTimeout is the hard ceiling for the boot-time sync.
 const syncOnStartupTimeout = 60 * time.Second
 
-// syncOnStartup runs `git pull` and then `git push` once at startup, after
-// recoverUntracked. Brings the local working copy fully in sync with the
-// remote before the HTTP server starts serving.
+// syncOnStartup runs one best-effort sync against the upstream tracking ref
+// before the HTTP server starts serving. It delegates to Pull so the startup
+// path uses the same four-state machine — and therefore the same
+// dirty-working-tree rescue — as every later cycle.
 //
-// No-op when:
-//   - .git/ does not exist (pre-init)
-//   - no remote is configured (local-only mode)
-//
-// Best-effort: only the catastrophic os.Stat(.git) error returns non-nil.
-// All git network errors are warn-logged and never abort startup.
-func syncOnStartup(parentCtx context.Context, repoDir, sshCommand string) error {
-	gitDir := filepath.Join(repoDir, ".git")
-	if _, err := os.Stat(gitDir); os.IsNotExist(err) {
-		return nil
-	} else if err != nil {
-		return errors.Wrapf(parentCtx, err, "stat %s", gitDir)
-	}
-
-	ctx, cancel := context.WithTimeout(parentCtx, syncOnStartupTimeout)
+// A failure is warn-logged and never aborts startup: the puller retries on its
+// next interval. It must run after createGitClient, because the client is what
+// exposes Pull.
+func syncOnStartup(ctx context.Context, g git.Git) {
+	ctx, cancel := context.WithTimeout(ctx, syncOnStartupTimeout)
 	defer cancel()
 
-	out, err := runGitCmd(ctx, repoDir, sshCommand, "remote")
-	if err != nil {
-		slog.WarnContext(ctx, "git remote check failed during startup sync", "error", err)
-		return nil
-	}
-	if strings.TrimSpace(out) == "" {
-		slog.InfoContext(ctx, "no remote configured, skipping startup sync")
-		return nil
-	}
-
-	if _, err := runGitCmd(ctx, repoDir, sshCommand, "pull"); err != nil {
+	if err := g.Pull(ctx); err != nil {
 		slog.WarnContext(ctx, "startup git pull failed (puller will retry)", "error", err)
-	} else {
-		slog.InfoContext(ctx, "startup git pull succeeded")
+		return
 	}
-
-	if _, err := runGitCmd(ctx, repoDir, sshCommand, "push"); err != nil {
-		slog.WarnContext(ctx, "startup git push failed (next API write will retry)", "error", err)
-		return nil
-	}
-	slog.InfoContext(ctx, "startup git push succeeded")
-	return nil
+	slog.InfoContext(ctx, "startup git pull succeeded")
 }
 
 // resolveGitSSHCommand returns the SSH command git should use for network
