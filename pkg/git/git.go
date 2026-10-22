@@ -2179,9 +2179,43 @@ func (g *git) Pull(ctx context.Context) error {
 	// deleted quarantine file down.
 	defer g.refreshQuarantinedBacklog(ctx)
 
+	// Bound the flush to a third of the pull budget so a contended push cannot
+	// consume the whole deadline and starve the merge and the dirty-tree rescue,
+	// which run later in this Pull on the parent context.
+	pullStart := time.Now()
+	pullDeadline, hasPullDeadline := ctx.Deadline()
+	pullDeadlineText := "none"
+	flushDeadlineText := "none"
+	flushCtx := ctx
+	if hasPullDeadline {
+		pullDeadlineText = pullDeadline.Format(time.RFC3339Nano)
+		flushDeadline := pullStart.Add(pullDeadline.Sub(pullStart) / 3)
+		flushDeadlineText = flushDeadline.Format(time.RFC3339Nano)
+		var cancel context.CancelFunc
+		flushCtx, cancel = context.WithDeadline(ctx, flushDeadline)
+		defer cancel()
+	} else {
+		slog.DebugContext(ctx, "git-rest: flush deadline skipped: no pull deadline")
+	}
+	slog.InfoContext(
+		ctx,
+		"git-rest: pull budget pull_start="+pullStart.Format(time.RFC3339Nano)+
+			" pull_deadline="+pullDeadlineText+
+			" flush_deadline="+flushDeadlineText,
+	)
+
 	// Flush pending writes before resolving upstream or merging, so a pull never
-	// merges against a tree this process dirtied.
-	if err := g.flushPendingLocked(ctx); err != nil {
+	// merges against a tree this process dirtied. The flush runs on flushCtx, so
+	// a contended push cannot consume the budget the merge and rescue need.
+	if err := g.flushPendingLocked(flushCtx); err != nil {
+		// Only the FLUSH's own deadline counts as a cut-off. flushCtx inherits the
+		// parent's DeadlineExceeded, so testing flushCtx.Err() alone would also
+		// mislabel a pull-budget expiry as a flush cut-off. ctx.Err() == nil proves
+		// the parent was still alive when the child expired.
+		if hasPullDeadline && ctx.Err() == nil &&
+			errors.Is(flushCtx.Err(), context.DeadlineExceeded) {
+			slog.WarnContext(ctx, "git-rest: flush deadline exceeded before pull", "error", err)
+		}
 		slog.WarnContext(ctx, "git-rest: flush pending writes before pull failed", "error", err)
 	}
 

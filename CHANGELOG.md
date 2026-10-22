@@ -10,6 +10,7 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 
 ## Unreleased
 
+- fix: Bound the pre-pull write flush to one third of the pull budget so a contended push cannot starve the dirty-tree rescue. A cut-off flush logs `git-rest: flush deadline exceeded before pull`, leaves the paths staged for the next cycle, and every pull cycle logs `git-rest: pull budget pull_start=… pull_deadline=… flush_deadline=…`.
 - fix: Refuse to overwrite an existing task file when the new content has no `---` frontmatter block. Applies when the file's immediate parent directory is `25 Tasks` or `tasks`; the existing file is left byte-identical and nothing is staged, committed or pushed. The HTTP write endpoint reports this as `422`.
 
 ## v0.34.0
