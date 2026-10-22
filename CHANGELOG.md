@@ -10,6 +10,7 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 
 ## v0.33.0
 
+- fix: Report a failed retry merge by its cause. The push-retry merge error now reads `merge <upstream> failed: <cause>` instead of prefixing the cause with git's combined output, which could show merge success text for a killed process; the output is logged at warn level as `git-rest: retry merge failed`.
 - feat: Expose claim refs under `refs/claims/` over HTTP. `GET /api/v1/refs` lists claim refs live from the origin; `PUT` and `DELETE` on `/api/v1/refs/claims/{key}` create, renew and delete them with an origin-enforced compare-and-swap lease. A lost race returns `409` and is never retried; every request is counted in `git_rest_ref_requests_total{op,result}`.
 
 ## v0.32.0
