@@ -1688,7 +1688,16 @@ func (g *git) cleanupStaleLocks(
 			)
 			return nil
 		}
-		if d.IsDir() || !strings.HasSuffix(path, ".lock") {
+		if d.IsDir() {
+			// git never creates a lock under objects/, and that directory holds one
+			// entry per loose object. Descending it on every pull cycle would cost
+			// O(objects) on the mutex that serializes every API request.
+			if d.Name() == "objects" {
+				return fs.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, ".lock") {
 			return nil
 		}
 		held, determined := probe(ctx, path)
@@ -1730,6 +1739,12 @@ func (g *git) cleanupStaleLocks(
 // file identity with os.SameFile. If neither probe is available the result is
 // (false, false) — the caller must leave the lock alone.
 func lockHeldByProcess(ctx context.Context, path string) (bool, bool) {
+	if _, err := os.Stat(path); err != nil {
+		// The lock is already gone: there is nothing to protect, and that is a
+		// determined answer. Probed before the backends so a missing path never
+		// reaches lsof, which reports it on stderr and would read as undetermined.
+		return false, os.IsNotExist(err)
+	}
 	if held, determined := lockHeldByLsof(ctx, path); determined {
 		return held, true
 	}
@@ -1748,16 +1763,64 @@ func lockHeldByLsof(ctx context.Context, path string) (bool, bool) {
 		return strings.TrimSpace(string(out)) != "", true
 	}
 	var exitErr *exec.ExitError
-	if stderrors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
+	if stderrors.As(err, &exitErr) && exitErr.ExitCode() == 1 && len(exitErr.Stderr) == 0 {
+		// lsof exits 1 both when nothing holds the file and when it cannot inspect
+		// it. Only an error-free exit is evidence, so a non-empty stderr stays
+		// undetermined and the caller leaves the lock alone.
 		return false, true
 	}
 	return false, false
 }
 
+// procFDScan classifies the outcome of inspecting one /proc/<pid>/fd directory.
+type procFDScan int
+
+const (
+	// procScanVanished means the pid exited between listing /proc and reading its
+	// fds. Benign: a dead process holds no lock.
+	procScanVanished procFDScan = iota
+	// procScanUnreadable means the pid exists but its fds could not be inspected,
+	// so a holder under another uid would be invisible.
+	procScanUnreadable
+	// procScanReadable means every fd of the pid was inspected.
+	procScanReadable
+)
+
+// scanProcFDs reports whether pidDir's process holds an open descriptor on
+// lockInfo, and how conclusive the scan was.
+func scanProcFDs(pidDir string, lockInfo os.FileInfo) (bool, procFDScan) {
+	fdDir := filepath.Join(pidDir, "fd")
+	fds, err := os.ReadDir(fdDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, procScanVanished
+		}
+		return false, procScanUnreadable
+	}
+	for _, fd := range fds {
+		fdInfo, err := os.Stat(filepath.Join(fdDir, fd.Name()))
+		if err != nil {
+			continue
+		}
+		if os.SameFile(lockInfo, fdInfo) {
+			return true, procScanReadable
+		}
+	}
+	return false, procScanReadable
+}
+
+// isPIDDirName reports whether a /proc entry name is a pid.
+func isPIDDirName(name string) bool {
+	_, err := strconv.Atoi(name)
+	return err == nil
+}
+
 // lockHeldByProc probes /proc/<pid>/fd, which exists on linux and not on macOS.
-// An fd directory that cannot be read is skipped; the pod runs a single uid, so
-// same-uid holders are visible. readable==0 means /proc could not be inspected
-// and the result is undetermined.
+// A pid whose fd directory has vanished is skipped: the process exited, which is
+// benign. A pid that exists but cannot be inspected is a visibility gap — a
+// holder under another uid would be invisible — so the scan is not conclusive.
+// The result is undetermined when no pid could be read or when any pid was
+// visible-but-unreadable.
 func lockHeldByProc(ctx context.Context, path string) (bool, bool) {
 	lockInfo, err := os.Stat(path)
 	if err != nil {
@@ -1768,34 +1831,26 @@ func lockHeldByProc(ctx context.Context, path string) (bool, bool) {
 	if err != nil {
 		return false, false
 	}
-	readable := 0
+	readable, unreadable := 0, 0
 	for _, entry := range procEntries {
-		if !entry.IsDir() {
+		if !entry.IsDir() || !isPIDDirName(entry.Name()) {
 			continue
 		}
-		if _, err := strconv.Atoi(entry.Name()); err != nil {
-			continue
+		held, scan := scanProcFDs(filepath.Join("/proc", entry.Name()), lockInfo)
+		if held {
+			return true, true
 		}
-		fdDir := filepath.Join("/proc", entry.Name(), "fd")
-		fds, err := os.ReadDir(fdDir)
-		if err != nil {
-			continue
-		}
-		readable++
-		for _, fd := range fds {
-			fdInfo, err := os.Stat(filepath.Join(fdDir, fd.Name()))
-			if err != nil {
-				continue
-			}
-			if os.SameFile(lockInfo, fdInfo) {
-				return true, true
-			}
+		switch scan {
+		case procScanReadable:
+			readable++
+		case procScanUnreadable:
+			unreadable++
 		}
 		if ctx.Err() != nil {
 			return false, false
 		}
 	}
-	if readable == 0 {
+	if readable == 0 || unreadable > 0 {
 		return false, false
 	}
 	return false, true
