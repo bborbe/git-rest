@@ -354,6 +354,79 @@ var _ = Describe("Git", func() {
 		})
 	})
 
+	Context("missing frontmatter guard", func() {
+		const withFrontmatter = "---\ntitle: t\n---\nbody\n"
+
+		readBack := func(path string) []byte {
+			content, err := os.ReadFile(filepath.Join(workDir, path))
+			Expect(err).NotTo(HaveOccurred())
+			return content
+		}
+
+		commitCountFor := func(path string) int {
+			out, err := exec.Command("git", "-C", workDir, "log", "--oneline", "--", path).Output()
+			Expect(err).NotTo(HaveOccurred())
+			count := 0
+			for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+				if line != "" {
+					count++
+				}
+			}
+			return count
+		}
+
+		DescribeTable(
+			"refuses to overwrite an existing task file without frontmatter",
+			func(path string, overwrite []byte) {
+				original := []byte(withFrontmatter)
+				Expect(g.WriteFile(ctx, path, original)).To(Succeed())
+
+				err := g.WriteFile(ctx, path, overwrite)
+				Expect(err).To(HaveOccurred())
+				Expect(errors.Is(err, git.ErrMissingFrontmatter)).To(BeTrue())
+				Expect(err.Error()).To(ContainSubstring(path))
+				Expect(readBack(path)).To(Equal(original))
+				Expect(commitCountFor(path)).To(Equal(1))
+			},
+			Entry(
+				"25 Tasks directory",
+				"25 Tasks/task-a.md",
+				[]byte("error: something went wrong"),
+			),
+			Entry("tasks directory", "tasks/task-b.md", []byte("error: something went wrong")),
+			Entry("empty body", "tasks/task-c.md", []byte("")),
+		)
+
+		It("allows an overwrite that carries frontmatter", func() {
+			path := "25 Tasks/task-d.md"
+			Expect(g.WriteFile(ctx, path, []byte(withFrontmatter))).To(Succeed())
+
+			updated := []byte("---\ntitle: updated\n---\nnew body\n")
+			Expect(g.WriteFile(ctx, path, updated)).To(Succeed())
+			Expect(readBack(path)).To(Equal(updated))
+		})
+
+		It("allows a frontmatter-less write to a new task path", func() {
+			path := "tasks/task-new.md"
+			content := []byte("error: fresh")
+			Expect(g.WriteFile(ctx, path, content)).To(Succeed())
+			Expect(readBack(path)).To(Equal(content))
+		})
+
+		It("allows a frontmatter-less overwrite outside a task directory", func() {
+			path := "README.md"
+			Expect(g.WriteFile(ctx, path, []byte("# readme\n"))).To(Succeed())
+
+			content := []byte("error: replaced")
+			Expect(g.WriteFile(ctx, path, content)).To(Succeed())
+			Expect(readBack(path)).To(Equal(content))
+
+			out, err := exec.Command("git", "-C", workDir, "log", "--oneline", "-1").Output()
+			Expect(err).NotTo(HaveOccurred())
+			Expect(string(out)).To(ContainSubstring("git-rest: update README.md"))
+		})
+	})
+
 	Context("DeleteFile", func() {
 		Context("path validation", func() {
 			It("returns error for empty path", func() {

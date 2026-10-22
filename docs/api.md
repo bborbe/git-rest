@@ -74,7 +74,11 @@ Response: `{"ok":true}` on success.
 |--------|---------|
 | `200` | File written and staged |
 | `400` | Invalid path (e.g. path traversal) |
+| `409` | `create_only=1` and the path is already occupied |
 | `413` | Request body exceeds 10 MB limit |
+| `422` | Overwrite would drop a task file's frontmatter |
+
+Overwriting an existing file whose parent directory is `25 Tasks` or `tasks` is refused with `422` when the request body carries no `---` frontmatter block; the existing file is left untouched. New files in those directories and overwrites that keep frontmatter are written normally.
 
 Body limit: `10 * 1024 * 1024` bytes (10 MiB).
 

@@ -44,6 +44,11 @@ var ErrInvalidPath = stderrors.New("invalid path")
 // idempotent publishers) from a genuine write failure via errors.Is.
 var ErrFileExists = stderrors.New("file already exists")
 
+// ErrMissingFrontmatter is returned when an overwrite of an existing task file
+// would replace it with content that has no frontmatter block. The existing
+// file is left untouched. Callers detect this via errors.Is.
+var ErrMissingFrontmatter = stderrors.New("missing frontmatter")
+
 // ErrRepoUnrecoverable is returned by Pull when the repository is in a state
 // that cannot be automatically healed (e.g., git rebase --abort fails, or
 // refs/remotes/origin/HEAD is missing for detached-HEAD recovery).
@@ -766,7 +771,8 @@ func (g *git) WriteFileIfAbsent(ctx context.Context, path string, content []byte
 }
 
 // writeFileLocked performs the write + git add + commit + push while the caller
-// holds g.mu. fileExists only selects the commit message ("create" vs "update").
+// holds g.mu. fileExists selects the commit message ("create" vs "update") and,
+// together with the task-directory check, gates the missing-frontmatter refusal.
 func (g *git) writeFileLocked(
 	ctx context.Context,
 	path string,
@@ -774,6 +780,20 @@ func (g *git) writeFileLocked(
 	fileExists bool,
 ) error {
 	fullPath := filepath.Join(g.repoPath, path)
+
+	// Refuse to overwrite an existing task file with content that carries no
+	// frontmatter: a task file without its frontmatter is no longer a task
+	// file. This runs before any filesystem mutation, so the existing file
+	// stays byte-identical.
+	if fileExists && isTaskFilePath(path) && !hasFrontmatter(content) {
+		g.metrics.IncGitOperationError("write_file")
+		return errors.Wrapf(
+			ctx,
+			ErrMissingFrontmatter,
+			"refusing to overwrite %s without frontmatter",
+			path,
+		)
+	}
 
 	// Compare against the file on disk, NOT the index against HEAD: after the
 	// first write of a burst the index already differs from HEAD, so an
@@ -831,6 +851,25 @@ func (g *git) writeFileLocked(
 	}
 
 	return nil
+}
+
+// hasFrontmatter reports whether content starts with a `---` line and later
+// closes it with another `---` line. A trailing carriage return before a line
+// break is tolerated, so CRLF documents pass. A lone opening delimiter is not a
+// frontmatter block, so requiring the closing line stops the guard from
+// admitting a write that would still destroy the file.
+func hasFrontmatter(content []byte) bool {
+	_, _, ok := splitFrontmatter(string(content))
+	return ok
+}
+
+// isTaskFilePath reports whether the immediate parent directory of path is one
+// of the task directories. The whole directory element is compared, so
+// "25 Tasks/x.md" matches while "25 Tasks Archive/x.md" does not. Deeper
+// nesting is out of scope.
+func isTaskFilePath(path string) bool {
+	dir := filepath.Base(filepath.Dir(path))
+	return dir == "25 Tasks" || dir == "tasks"
 }
 
 // enqueuePendingLocked records path in the pending set and updates the gauges.
