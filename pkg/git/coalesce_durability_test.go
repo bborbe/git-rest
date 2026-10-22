@@ -25,7 +25,7 @@ func TestFlushPushFailureKeepsPending(t *testing.T) {
 		MaxDelay: time.Second,
 	})
 
-	if err := client.WriteFile(ctx, "tasks/x.md", []byte("P")); err != nil {
+	if err := client.WriteFile(ctx, "notes/x.md", []byte("P")); err != nil {
 		t.Fatalf("write: %v", err)
 	}
 
@@ -43,12 +43,12 @@ func TestFlushPushFailureKeepsPending(t *testing.T) {
 		t.Fatal("want flush to fail while the origin rejects pushes")
 	}
 
-	if got := originGitRestSubjects(t, bare, "main", "tasks/x.md"); len(got) != 0 {
+	if got := originGitRestSubjects(t, bare, "main", "notes/x.md"); len(got) != 0 {
 		t.Fatalf("want no git-rest commit on origin, got %v", got)
 	}
 	staged := strings.TrimSpace(mustGit(t, work, "diff", "--cached", "--name-only"))
-	if staged != "tasks/x.md" {
-		t.Fatalf("want tasks/x.md staged after failed push, got %q", staged)
+	if staged != "notes/x.md" {
+		t.Fatalf("want notes/x.md staged after failed push, got %q", staged)
 	}
 	flushCalls := fake.IncWriteFlushCallCount()
 	if flushCalls == 0 {
@@ -72,14 +72,14 @@ func TestFlushPushFailureKeepsPending(t *testing.T) {
 		t.Fatalf("retry flush: %v", err)
 	}
 
-	subjects := originGitRestSubjects(t, bare, "main", "tasks/x.md")
+	subjects := originGitRestSubjects(t, bare, "main", "notes/x.md")
 	if len(subjects) != 1 {
 		t.Fatalf("want exactly 1 git-rest commit on origin, got %d: %v", len(subjects), subjects)
 	}
-	if subjects[0] != "git-rest: update tasks/x.md" {
+	if subjects[0] != "git-rest: update notes/x.md" {
 		t.Fatalf("unexpected subject %q", subjects[0])
 	}
-	if got := mustGit(t, bare, "show", "main:tasks/x.md"); got != "P" {
+	if got := mustGit(t, bare, "show", "main:notes/x.md"); got != "P" {
 		t.Fatalf("want content P on origin, got %q", got)
 	}
 	flushCalls = fake.IncWriteFlushCallCount()
@@ -102,10 +102,10 @@ func TestDeleteFlushesPendingFirst(t *testing.T) {
 		MaxDelay: time.Hour,
 	})
 
-	if err := client.WriteFile(ctx, "tasks/x.md", []byte("I")); err != nil {
+	if err := client.WriteFile(ctx, "notes/x.md", []byte("I")); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	if err := client.DeleteFile(ctx, "tasks/x.md"); err != nil {
+	if err := client.DeleteFile(ctx, "notes/x.md"); err != nil {
 		t.Fatalf("delete: %v", err)
 	}
 
@@ -113,7 +113,7 @@ func TestDeleteFlushesPendingFirst(t *testing.T) {
 		strings.TrimSpace(mustGit(t, work, "log", "-2", "--format=%s")),
 		"\n",
 	)
-	want := []string{"git-rest: delete tasks/x.md", "git-rest: update tasks/x.md"}
+	want := []string{"git-rest: delete notes/x.md", "git-rest: update notes/x.md"}
 	if len(local) != 2 || local[0] != want[0] || local[1] != want[1] {
 		t.Fatalf("want local subjects %v, got %v", want, local)
 	}
@@ -145,22 +145,22 @@ func TestRecoverPendingWrites(t *testing.T) {
 	defer restore()
 
 	if err := os.WriteFile(
-		filepath.Join(work, "tasks", "x.md"), []byte("SURVIVOR"), 0o600,
+		filepath.Join(work, "notes", "x.md"), []byte("SURVIVOR"), 0o600,
 	); err != nil {
 		t.Fatalf("write staged file: %v", err)
 	}
-	mustGit(t, work, "add", "tasks/x.md")
+	mustGit(t, work, "add", "notes/x.md")
 
 	if err := client.RecoverPendingWrites(ctx); err != nil {
 		t.Fatalf("recover: %v", err)
 	}
 
-	if got := mustGit(t, bare, "show", "main:tasks/x.md"); got != "SURVIVOR" {
+	if got := mustGit(t, bare, "show", "main:notes/x.md"); got != "SURVIVOR" {
 		t.Fatalf("want SURVIVOR on origin, got %q", got)
 	}
 	if got := strings.TrimSpace(
 		mustGit(t, bare, "log", "-1", "--format=%s", "main"),
-	); got != "git-rest: update tasks/x.md" {
+	); got != "git-rest: update notes/x.md" {
 		t.Fatalf("unexpected subject %q", got)
 	}
 	if got := strings.TrimSpace(
@@ -192,16 +192,16 @@ func TestRecoverPendingWritesTwoPaths(t *testing.T) {
 	client, work, bare := newCoalesceFixture(t, git.CoalesceConfig{Enabled: true})
 
 	if err := os.WriteFile(
-		filepath.Join(work, "tasks", "x.md"), []byte("X2"), 0o600,
+		filepath.Join(work, "notes", "x.md"), []byte("X2"), 0o600,
 	); err != nil {
 		t.Fatalf("write x: %v", err)
 	}
 	if err := os.WriteFile(
-		filepath.Join(work, "tasks", "y.md"), []byte("Y2"), 0o600,
+		filepath.Join(work, "notes", "y.md"), []byte("Y2"), 0o600,
 	); err != nil {
 		t.Fatalf("write y: %v", err)
 	}
-	mustGit(t, work, "add", "tasks/x.md", "tasks/y.md")
+	mustGit(t, work, "add", "notes/x.md", "notes/y.md")
 
 	if err := client.RecoverPendingWrites(ctx); err != nil {
 		t.Fatalf("recover: %v", err)
@@ -221,11 +221,11 @@ func TestRecoverPendingWritesNewPath(t *testing.T) {
 	client, work, bare := newCoalesceFixture(t, git.CoalesceConfig{Enabled: true})
 
 	if err := os.WriteFile(
-		filepath.Join(work, "tasks", "new.md"), []byte("NEW"), 0o600,
+		filepath.Join(work, "notes", "new.md"), []byte("NEW"), 0o600,
 	); err != nil {
 		t.Fatalf("write new: %v", err)
 	}
-	mustGit(t, work, "add", "tasks/new.md")
+	mustGit(t, work, "add", "notes/new.md")
 
 	if err := client.RecoverPendingWrites(ctx); err != nil {
 		t.Fatalf("recover: %v", err)
@@ -233,10 +233,10 @@ func TestRecoverPendingWritesNewPath(t *testing.T) {
 
 	if got := strings.TrimSpace(
 		mustGit(t, bare, "log", "-1", "--format=%s", "main"),
-	); got != "git-rest: create tasks/new.md" {
+	); got != "git-rest: create notes/new.md" {
 		t.Fatalf("unexpected subject %q", got)
 	}
-	if got := mustGit(t, bare, "show", "main:tasks/new.md"); got != "NEW" {
+	if got := mustGit(t, bare, "show", "main:notes/new.md"); got != "NEW" {
 		t.Fatalf("want NEW on origin, got %q", got)
 	}
 }
@@ -251,7 +251,7 @@ func TestClaimRefsStaySynchronousWhileWritePending(t *testing.T) {
 		MaxDelay: time.Hour,
 	})
 
-	if err := client.WriteFile(ctx, "tasks/x.md", []byte("W")); err != nil {
+	if err := client.WriteFile(ctx, "notes/x.md", []byte("W")); err != nil {
 		t.Fatalf("write: %v", err)
 	}
 
@@ -266,14 +266,14 @@ func TestClaimRefsStaySynchronousWhileWritePending(t *testing.T) {
 	if !strings.Contains(refs, "refs/claims/probe") {
 		t.Fatalf("want refs/claims/probe on origin, got %q", refs)
 	}
-	if got := originGitRestSubjects(t, bare, "main", "tasks/x.md"); len(got) != 0 {
+	if got := originGitRestSubjects(t, bare, "main", "notes/x.md"); len(got) != 0 {
 		t.Fatalf("claim PUT must not flush the pending write, got %v", got)
 	}
 
 	if err := client.FlushPending(ctx); err != nil {
 		t.Fatalf("flush pending: %v", err)
 	}
-	if got := originGitRestSubjects(t, bare, "main", "tasks/x.md"); len(got) != 1 {
+	if got := originGitRestSubjects(t, bare, "main", "notes/x.md"); len(got) != 1 {
 		t.Fatalf("want the file commit after flush, got %v", got)
 	}
 }

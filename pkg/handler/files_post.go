@@ -35,17 +35,28 @@ func NewFilesPostHandler(g git.Git) libhttp.WithError {
 				return errors.Wrap(ctx, err, "read request body")
 			}
 			if err := writeFile(ctx, g, path, body, req.URL.Query().Get("create_only") == "1"); err != nil {
-				if errors.Is(err, git.ErrInvalidPath) {
-					return libhttp.WrapWithStatusCode(err, http.StatusBadRequest)
-				}
-				if errors.Is(err, git.ErrFileExists) {
-					return libhttp.WrapWithStatusCode(err, http.StatusConflict)
-				}
-				return errors.Wrap(ctx, err, "write file")
+				return mapWriteFileError(ctx, err)
 			}
 			return libhttp.SendJSONResponse(ctx, resp, map[string]bool{"ok": true}, http.StatusOK)
 		},
 	)
+}
+
+// mapWriteFileError translates a file-write failure into the HTTP status
+// contract: an invalid path is 400, an occupied create-only path is 409, an
+// overwrite that would drop a task file's frontmatter is 422, everything else
+// is a generic server error.
+func mapWriteFileError(ctx context.Context, err error) error {
+	if errors.Is(err, git.ErrInvalidPath) {
+		return libhttp.WrapWithStatusCode(err, http.StatusBadRequest)
+	}
+	if errors.Is(err, git.ErrFileExists) {
+		return libhttp.WrapWithStatusCode(err, http.StatusConflict)
+	}
+	if errors.Is(err, git.ErrMissingFrontmatter) {
+		return libhttp.WrapWithStatusCode(err, http.StatusUnprocessableEntity)
+	}
+	return errors.Wrap(ctx, err, "write file")
 }
 
 // writeFile dispatches to the create-only or the upsert write based on createOnly.

@@ -123,6 +123,22 @@ var _ = Describe("FilesPostHandler", func() {
 		})
 	})
 
+	Context("missing frontmatter", func() {
+		It("returns 422 when git returns ErrMissingFrontmatter", func() {
+			fakeGit.WriteFileReturns(git.ErrMissingFrontmatter)
+			req := httptest.NewRequest(
+				http.MethodPost,
+				"/api/v1/files/25%20Tasks/task.md",
+				bytes.NewBufferString("error: something went wrong"),
+			)
+			err := h.ServeHTTP(ctx, rec, req)
+			Expect(err).NotTo(BeNil())
+			var errWithStatus libhttp.ErrorWithStatusCode
+			Expect(errors.As(err, &errWithStatus)).To(BeTrue())
+			Expect(errWithStatus.StatusCode()).To(Equal(http.StatusUnprocessableEntity))
+		})
+	})
+
 	Context("create_only", func() {
 		It("delegates to WriteFileIfAbsent when create_only=1", func() {
 			req := httptest.NewRequest(
