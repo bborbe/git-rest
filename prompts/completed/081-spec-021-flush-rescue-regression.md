@@ -1,8 +1,13 @@
 ---
-status: approved
+status: completed
 spec: [021-flush-timeout-isolation]
+summary: Added TestFlushRescueLandsAfterFlushDeadline, a four-precondition regression test that asserts the dirty-tree rescue lands a rescue/* ref on the remote after a bounded flush, and proved it fails on the pre-fix tree at the missing-rescue assertion.
+execution_id: git-rest-coalesce-exec-081-spec-021-flush-rescue-regression
+dark-factory-version: v0.198.7
 created: "2026-10-22T14:31:10Z"
 queued: "2026-10-22T14:43:29Z"
+started: "2026-10-22T14:48:56Z"
+completed: "2026-10-22T14:55:11Z"
 ---
 
 <summary>
