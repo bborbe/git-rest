@@ -1,6 +1,7 @@
 ---
-status: draft
-created: "2026-10-22"
+status: approved
+approved: "2026-10-22T07:01:54Z"
+branch: dark-factory/bug-dirty-tree-rescue-all-pull-paths
 ---
 
 ## Summary
