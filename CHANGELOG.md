@@ -8,7 +8,7 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 * MINOR version when you add functionality in a backwards-compatible manner, and
 * PATCH version when you make backwards-compatible bug fixes.
 
-## Unreleased
+## v0.33.1
 
 - fix: Report a failed retry merge by its cause. The push-retry merge error now reads `merge <upstream> failed: <cause>` instead of prefixing the cause with git's combined output, which could show merge success text for a killed process; the output is logged at warn level as `git-rest: retry merge failed`.
 
