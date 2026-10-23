@@ -8,6 +8,10 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 * MINOR version when you add functionality in a backwards-compatible manner, and
 * PATCH version when you make backwards-compatible bug fixes.
 
+## Unreleased
+
+- fix: Return error code `CLAIM_CONFLICT` instead of `INTERNAL_ERROR` when a claim ref `PUT` or `DELETE` loses its lease race. The HTTP status stays `409`.
+
 ## v0.34.1
 
 - fix: Bound the pre-pull write flush to one third of the pull budget so a contended push cannot starve the dirty-tree rescue. A cut-off flush logs `git-rest: flush deadline exceeded before pull`, leaves the paths staged for the next cycle, and every pull cycle logs `git-rest: pull budget pull_start=… pull_deadline=… flush_deadline=…`.
