@@ -42,11 +42,15 @@ func NewRefsPutHandler(g git.Git) libhttp.WithError {
 	)
 }
 
+// ErrorCodeClaimConflict is the JSON error code returned when a claim ref
+// write loses its compare-and-swap lease race.
+const ErrorCodeClaimConflict = "CLAIM_CONFLICT"
+
 // mapRefWriteError translates a claim-ref write failure into the HTTP status
 // contract: a lost lease is 409, an invalid name is 400, everything else 500.
 func mapRefWriteError(ctx context.Context, err error, message string) error {
 	if errors.Is(err, git.ErrRefConflict) {
-		return libhttp.WrapWithStatusCode(err, http.StatusConflict)
+		return libhttp.WrapWithCode(err, ErrorCodeClaimConflict, http.StatusConflict)
 	}
 	if errors.Is(err, git.ErrInvalidRefName) {
 		return libhttp.WrapWithStatusCode(err, http.StatusBadRequest)

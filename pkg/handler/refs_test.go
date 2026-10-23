@@ -73,6 +73,17 @@ func serveRefsRequest(
 	return rec
 }
 
+// errorCodeFromBody decodes the JSON error code from a response body.
+func errorCodeFromBody(rec *httptest.ResponseRecorder) string {
+	var body struct {
+		Error struct {
+			Code string `json:"code"`
+		} `json:"error"`
+	}
+	Expect(json.Unmarshal(rec.Body.Bytes(), &body)).To(Succeed())
+	return body.Error.Code
+}
+
 var _ = Describe("Claim ref handlers", func() {
 	var (
 		fakeGit *mocks.FakeGit
@@ -302,12 +313,28 @@ var _ = Describe("Claim ref handlers", func() {
 	Context("error mapping", func() {
 		It("maps PUT errors to 409, 400 and 500", func() {
 			cases := []struct {
+				name   string
 				err    error
 				status int
+				code   string
 			}{
-				{err: git.ErrRefConflict, status: http.StatusConflict},
-				{err: git.ErrInvalidRefName, status: http.StatusBadRequest},
-				{err: errWithMessage("boom"), status: http.StatusInternalServerError},
+				{
+					name:   "lost lease",
+					err:    errors.Join(git.ErrRefConflict, errWithMessage("push rejected")),
+					status: http.StatusConflict,
+					code:   handler.ErrorCodeClaimConflict,
+				},
+				{
+					name:   "invalid ref name",
+					err:    git.ErrInvalidRefName,
+					status: http.StatusBadRequest,
+				},
+				{
+					name:   "other failure",
+					err:    errWithMessage("boom"),
+					status: http.StatusInternalServerError,
+					code:   "INTERNAL_ERROR",
+				},
 			}
 			for _, tc := range cases {
 				fakeGit.PutClaimRefReturns("", tc.err)
@@ -317,18 +344,37 @@ var _ = Describe("Claim ref handlers", func() {
 					refsRequestTarget(validRefKey),
 					validRefBody(),
 				)
-				Expect(rec.Code).To(Equal(tc.status), tc.err.Error())
+				Expect(rec.Code).To(Equal(tc.status), tc.name)
+				if tc.code != "" {
+					Expect(errorCodeFromBody(rec)).To(Equal(tc.code), tc.name)
+				}
 			}
 		})
 
 		It("maps DELETE errors to 409, 400 and 500", func() {
 			cases := []struct {
+				name   string
 				err    error
 				status int
+				code   string
 			}{
-				{err: git.ErrRefConflict, status: http.StatusConflict},
-				{err: git.ErrInvalidRefName, status: http.StatusBadRequest},
-				{err: errWithMessage("boom"), status: http.StatusInternalServerError},
+				{
+					name:   "lost lease",
+					err:    errors.Join(git.ErrRefConflict, errWithMessage("push rejected")),
+					status: http.StatusConflict,
+					code:   handler.ErrorCodeClaimConflict,
+				},
+				{
+					name:   "invalid ref name",
+					err:    git.ErrInvalidRefName,
+					status: http.StatusBadRequest,
+				},
+				{
+					name:   "other failure",
+					err:    errWithMessage("boom"),
+					status: http.StatusInternalServerError,
+					code:   "INTERNAL_ERROR",
+				},
 			}
 			for _, tc := range cases {
 				fakeGit.DeleteClaimRefReturns(tc.err)
@@ -338,7 +384,10 @@ var _ = Describe("Claim ref handlers", func() {
 					refsRequestTarget(validRefKey)+"?expected_sha="+validExpectedSHA,
 					"",
 				)
-				Expect(rec.Code).To(Equal(tc.status), tc.err.Error())
+				Expect(rec.Code).To(Equal(tc.status), tc.name)
+				if tc.code != "" {
+					Expect(errorCodeFromBody(rec)).To(Equal(tc.code), tc.name)
+				}
 			}
 		})
 

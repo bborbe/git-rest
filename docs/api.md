@@ -198,7 +198,7 @@ Body limit: 64 KiB.
 |--------|---------|
 | `200` | Claim ref created or renewed |
 | `400` | Invalid key, body or field |
-| `409` | The ref did not match `expected_sha` |
+| `409` | The ref did not match `expected_sha`; the body `error.code` is `CLAIM_CONFLICT` |
 | `413` | Request body exceeds 64 KiB |
 | `500` | No origin remote, transport/auth failure, hook decline or timeout |
 
@@ -217,7 +217,7 @@ Response: `{"ok":true}`.
 |--------|---------|
 | `200` | Claim ref deleted |
 | `400` | Invalid key or missing/invalid `expected_sha` |
-| `409` | The ref did not match `expected_sha` or was already absent |
+| `409` | The ref did not match `expected_sha` or was already absent; the body `error.code` is `CLAIM_CONFLICT` |
 | `500` | Origin unreachable or no origin configured |
 
 ## Healthz
@@ -267,10 +267,13 @@ Prometheus text format. Includes:
 
 ## Error Responses
 
-Errors are returned as JSON with an `error` field, e.g.:
+Errors are returned as JSON with a structured `error` object carrying a machine-readable
+`code` and a human-readable `message`, e.g.:
 
 ```json
-{"error":"file not found"}
+{"error":{"code":"CLAIM_CONFLICT","message":"push refs/claims/task/t-42 rejected"}}
 ```
 
-The HTTP status code carries the primary signal; the body is advisory.
+A claim ref `PUT` or `DELETE` that loses its compare-and-swap lease race returns
+`409` with `error.code` set to `CLAIM_CONFLICT`. The HTTP status code carries the
+primary signal; the body is advisory.
