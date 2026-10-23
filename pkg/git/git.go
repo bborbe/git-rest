@@ -289,6 +289,7 @@ func (g *git) runCmd(ctx context.Context, dir string, args ...string) error {
 	// #nosec G204 -- binary is hardcoded to "git"; args are internal subcommands, not user input
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = dir
+	cmd.WaitDelay = gitWaitDelay
 	if g.sshKeyPath != "" {
 		cmd.Env = append(
 			os.Environ(),
@@ -312,6 +313,7 @@ func (g *git) runCmdOutput(ctx context.Context, dir string, args ...string) ([]b
 	// #nosec G204 -- binary is hardcoded to "git"; args are internal subcommands, not user input
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = dir
+	cmd.WaitDelay = gitWaitDelay
 	if g.sshKeyPath != "" {
 		cmd.Env = append(
 			os.Environ(),
@@ -337,6 +339,7 @@ func (g *git) runCmdRaw(ctx context.Context, dir string, args ...string) ([]byte
 	// #nosec G204 -- binary is hardcoded to "git"; args are internal subcommands, not user input
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = dir
+	cmd.WaitDelay = gitWaitDelay
 	if g.sshKeyPath != "" {
 		cmd.Env = append(
 			os.Environ(),
@@ -352,6 +355,13 @@ func (g *git) runCmdRaw(ctx context.Context, dir string, args ...string) ([]byte
 	err := cmd.Run()
 	return buf.Bytes(), err
 }
+
+// gitWaitDelay bounds how long Wait keeps blocking on an orphaned child that
+// still holds the command's output pipe. A killed `git push` can leave the
+// remote's receive-pack and its hooks alive with that pipe open; without this
+// the call outlives its context deadline, so the flush's own cut-off would not
+// bound it — the starvation 021-flush-timeout-isolation exists to remove.
+const gitWaitDelay = 2 * time.Second
 
 // pushMaxAttempts bounds a push plus its in-attempt retries. It is core
 // behaviour, not a tunable: a lost push race converges within a few hundred
@@ -503,6 +513,7 @@ func (g *git) runCmdEnv(
 	// #nosec G204 -- binary is hardcoded to "git"; args are internal subcommands, not user input
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = dir
+	cmd.WaitDelay = gitWaitDelay
 	cmd.Env = g.childEnv(extraEnv...)
 	var buf bytes.Buffer
 	cmd.Stdout = &buf
@@ -524,6 +535,7 @@ func (g *git) runCmdOutputEnv(
 	// #nosec G204 -- binary is hardcoded to "git"; args are internal subcommands, not user input
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = dir
+	cmd.WaitDelay = gitWaitDelay
 	cmd.Env = g.childEnv(extraEnv...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
