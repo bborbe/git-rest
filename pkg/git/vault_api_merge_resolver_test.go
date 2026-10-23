@@ -99,7 +99,18 @@ var _ = Describe("VaultAPIMergeResolver", func() {
 	})
 
 	It("posts the three sides and stages the merged file", func() {
-		client.MergeReturns(git.VaultAPIMergeResult{Result: "merged"}, nil)
+		// vault-api writes the merged bytes back through git-rest's write API, so
+		// the fake does the same: without a write the working tree still holds
+		// git's marker file and the resolver must decline.
+		mergedContent := "---\nphase: execution\ntitle: Merged\n---\nbody\n"
+		client.MergeCalls(func(
+			_ context.Context, p string, _ git.Side, _ git.Side, _ git.Side,
+		) (git.VaultAPIMergeResult, error) {
+			Expect(os.WriteFile(
+				filepath.Join(workDir, p), []byte(mergedContent), 0o600,
+			)).To(Succeed())
+			return git.VaultAPIMergeResult{Result: "merged"}, nil
+		})
 
 		Expect(resolver.Resolve(ctx, []string{relPath})).To(Succeed())
 
@@ -119,6 +130,18 @@ var _ = Describe("VaultAPIMergeResolver", func() {
 		// the bytes through git-rest's write API.
 		Expect(unmergedStages(workDir, relPath)).To(BeEmpty())
 		Expect(fallback.ResolveCallCount()).To(Equal(0))
+	})
+
+	It("falls back when vault-api reports merged but the write never landed", func() {
+		// The fake answers "merged" without touching the file, which is what a
+		// coalesced write still pending or a misrouted write looks like from here.
+		// Staging would commit the markers while the log claimed a clean merge.
+		client.MergeReturns(git.VaultAPIMergeResult{Result: "merged"}, nil)
+
+		Expect(resolver.Resolve(ctx, []string{relPath})).To(Succeed())
+
+		Expect(fallback.ResolveCallCount()).To(Equal(1))
+		Expect(unmergedStages(workDir, relPath)).NotTo(BeEmpty())
 	})
 
 	It("falls back when vault-api quarantines the file", func() {
