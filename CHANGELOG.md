@@ -8,6 +8,10 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 * MINOR version when you add functionality in a backwards-compatible manner, and
 * PATCH version when you make backwards-compatible bug fixes.
 
+## Unreleased
+
+- feat: Resolve pull conflicts through vault-api's `POST /api/v1/merge` on vault-write pods. For each conflicted path the new resolver reads the three index stages — base, ours, theirs — pairs them with the merge base's and both parents' committer times, and posts them with the caller header so vault-api's log attributes the merge to `git-rest` rather than to an operator's curl. vault-api owns the per-key frontmatter rules and writes the result back through git-rest's write API, so the resolver only stages the outcome. Every decline — an unreachable vault-api, a quarantined file, or a conflict with no base stage such as add/add — falls through to the existing `YAMLMergeResolver` for that path alone, so enabling this can only add resolutions, never remove one, and one declined path no longer aborts the rest. Opt-in: `--vault-api-url` / `VAULT_API_URL` with `--vault-api-secret` / `VAULT_API_SECRET`; unset keeps today's behaviour exactly.
+
 ## v0.34.3
 
 - fix: Bound how long a git subprocess waits for its output pipe after the context kills it, so the flush deadline is actually enforced. A killed `git push` left the remote's `receive-pack` and its hooks holding the pipe open, and `cmd.Run()` kept blocking on it — measured 15 s past a flush deadline that had already fired, consuming the pull budget the merge and rescue need.
