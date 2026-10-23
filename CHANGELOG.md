@@ -8,6 +8,11 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 * MINOR version when you add functionality in a backwards-compatible manner, and
 * PATCH version when you make backwards-compatible bug fixes.
 
+## Unreleased
+
+- fix: Bound how long a git subprocess waits for its output pipe after the context kills it, so the flush deadline is actually enforced. A killed `git push` left the remote's `receive-pack` and its hooks holding the pipe open, and `cmd.Run()` kept blocking on it — measured 15 s past a flush deadline that had already fired, consuming the pull budget the merge and rescue need.
+- fix: Widen the push-retry backoff exponentially (100/200/400/800 ms with jitter, up to five attempts), so a contended writer waits out a burst instead of re-colliding inside it.
+
 ## v0.34.2
 
 - fix: Return error code `CLAIM_CONFLICT` instead of `INTERNAL_ERROR` when a claim ref `PUT` or `DELETE` loses its lease race. The HTTP status stays `409`.

@@ -288,6 +288,7 @@ func runGitOutput(ctx context.Context, repoPath string, args ...string) (string,
 	// #nosec G204 -- git binary is hardcoded; args are internal
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = repoPath
+	cmd.WaitDelay = gitWaitDelay
 	var buf bytes.Buffer
 	cmd.Stdout = &buf
 	cmd.Stderr = &buf

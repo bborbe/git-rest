@@ -55,6 +55,11 @@ func installBlockingPreReceive(t *testing.T, bare string) {
 	if err := os.WriteFile(filepath.Join(hooksDir, "pre-receive"), []byte(script), 0750); err != nil {
 		t.Fatalf("write pre-receive hook: %v", err)
 	}
+	// Point the bare remote at its OWN hooks directory. A global core.hooksPath
+	// (set on this host to ~/.git-hooks) otherwise overrides $GIT_DIR/hooks, the
+	// hook never runs, and the push succeeds instead of stalling — the same guard
+	// installPreReceiveRejection and the coalesce fixtures already carry.
+	mustGit(t, bare, "config", "core.hooksPath", "hooks")
 }
 
 // captureSlogLogsAtDebug is captureSlogLogs with a handler that emits Debug.
