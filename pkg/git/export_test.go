@@ -6,6 +6,7 @@ package git
 
 import (
 	"context"
+	"time"
 
 	"github.com/bborbe/git-rest/pkg/metrics"
 )
@@ -35,6 +36,18 @@ func RetryPushForTest(ctx context.Context, g Git, upstream string, nextAttempt i
 		panic("RetryPushForTest: Git is not a *git")
 	}
 	return impl.retryPush(ctx, upstream, nextAttempt)
+}
+
+// PushBackoffForTest exposes pushBackoff so external tests can assert the
+// exponential delay sequence and its jitter bounds. Test builds only.
+func PushBackoffForTest(attempt int) time.Duration {
+	return pushBackoff(attempt)
+}
+
+// SleepPushBackoffForTest exposes sleepPushBackoff so external tests can prove
+// the waiter is wired to the attempt it is given. Test builds only.
+func SleepPushBackoffForTest(ctx context.Context, attempt int) error {
+	return sleepPushBackoff(ctx, attempt)
 }
 
 // NewGitWithClaimOrigin returns a Git whose claim-ref listing talks to origin

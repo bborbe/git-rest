@@ -363,10 +363,11 @@ func (g *git) runCmdRaw(ctx context.Context, dir string, args ...string) ([]byte
 // bound it — the starvation 021-flush-timeout-isolation exists to remove.
 const gitWaitDelay = 2 * time.Second
 
-// pushMaxAttempts bounds a push plus its in-attempt retries. It is core
-// behaviour, not a tunable: a lost push race converges within a few hundred
-// milliseconds, and a longer loop would only hold g.mu longer.
-const pushMaxAttempts = 3
+// pushMaxAttempts bounds a push plus its in-attempt retries. The wait between
+// attempts runs under g.mu, so the bound exists to keep the total added sleep
+// small against the flush deadline — at most about 3 s with the exponential
+// backoff and its jitter — rather than to hold the lock indefinitely.
+const pushMaxAttempts = 5
 
 // isRetryablePushRejection reports whether git push's combined output is a lost
 // push race — the remote moved after our fetch, so the push was rejected as
@@ -412,13 +413,13 @@ func (g *git) pushWithRetry(ctx context.Context, upstream string) error {
 	return nil
 }
 
-// retryPush performs the work between two push attempts: jitter, upstream
+// retryPush performs the work between two push attempts: backoff, upstream
 // resolution (only when the caller did not know it), fetch and merge. A merge
 // failure aborts the half-finished merge so the pull path's conflict machinery
 // is never entered from here.
 func (g *git) retryPush(ctx context.Context, upstream string, nextAttempt int) error {
 	slog.InfoContext(ctx, "git-rest: push retry", "attempt", nextAttempt, "max", pushMaxAttempts)
-	if err := sleepPushJitter(ctx); err != nil {
+	if err := sleepPushBackoff(ctx, nextAttempt); err != nil {
 		return errors.Wrap(ctx, err, "push retry cancelled")
 	}
 	g.metrics.IncPushRetry()
@@ -455,12 +456,28 @@ func (g *git) retryPush(ctx context.Context, upstream string, nextAttempt int) e
 	return nil
 }
 
-// sleepPushJitter waits 100–500 ms before the next push attempt. The jitter
-// spreads retries of concurrent writers; it is not a security primitive.
-func sleepPushJitter(ctx context.Context) error {
+// pushBackoff returns the wait before push retry attempt. The base delay is
+// 100 ms at attempt 2 and doubles for each further attempt, giving 100, 200,
+// 400 and 800 ms at attempts 2-5. A random jitter of 0-100% of that base is
+// added so two writers retrying the same attempt do not wake together. There
+// is no cap: with pushMaxAttempts = 5 the largest base is 800 ms, so the total
+// wait is at most about 3 s with jitter. Attempts below 2 clamp to the
+// attempt-2 base, which keeps the function total — a negative shift panics.
+func pushBackoff(attempt int) time.Duration {
+	shift := attempt - 2
+	if shift < 0 {
+		shift = 0
+	}
+	base := 100 * time.Millisecond << uint(shift)
 	//nolint:gosec // jitter, not security-sensitive
-	delay := 100*time.Millisecond + time.Duration(rand.IntN(401))*time.Millisecond
-	timer := time.NewTimer(delay)
+	jitter := time.Duration(rand.Int64N(int64(base)))
+	return base + jitter
+}
+
+// sleepPushBackoff waits for the exponential, jittered delay of the given push
+// attempt, returning early with the context error when the context is done.
+func sleepPushBackoff(ctx context.Context, attempt int) error {
+	timer := time.NewTimer(pushBackoff(attempt))
 	defer timer.Stop()
 	select {
 	case <-ctx.Done():

@@ -3276,7 +3276,7 @@ var _ = Describe("Push retry", func() {
 		Expect(logs.String()).NotTo(ContainSubstring("push retry"))
 	})
 
-	It("bounds retries at three push attempts", func() {
+	It("bounds retries at five push attempts", func() {
 		writeLocalCommit(workDir, "local.txt", "local\n")
 		installRemoteAdvanceOnFetch(workDir, false, "")
 		countFile := installPushCountingHook(workDir)
@@ -3284,8 +3284,8 @@ var _ = Describe("Push retry", func() {
 		err := pg.Pull(ctx)
 		Expect(err).To(HaveOccurred())
 		Expect(err.Error()).To(ContainSubstring("fetch first"))
-		Expect(pushAttempts(countFile)).To(Equal(3))
-		Expect(fakeMetrics.IncPushRetryCallCount()).To(Equal(2))
+		Expect(pushAttempts(countFile)).To(Equal(5))
+		Expect(fakeMetrics.IncPushRetryCallCount()).To(Equal(4))
 	})
 
 	It("stops before the retry when the context is cancelled", func() {
