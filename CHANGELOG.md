@@ -8,7 +8,7 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 * MINOR version when you add functionality in a backwards-compatible manner, and
 * PATCH version when you make backwards-compatible bug fixes.
 
-## Unreleased
+## v0.34.2
 
 - fix: Return error code `CLAIM_CONFLICT` instead of `INTERNAL_ERROR` when a claim ref `PUT` or `DELETE` loses its lease race. The HTTP status stays `409`.
 
