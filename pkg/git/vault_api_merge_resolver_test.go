@@ -98,19 +98,14 @@ var _ = Describe("VaultAPIMergeResolver", func() {
 		cleanup()
 	})
 
-	It("posts the three sides and stages the merged file", func() {
-		// vault-api writes the merged bytes back through git-rest's write API, so
-		// the fake does the same: without a write the working tree still holds
-		// git's marker file and the resolver must decline.
+	It("posts the three sides and writes the merged bytes", func() {
+		// vault-api returns the bytes rather than writing them, because this
+		// process holds the repository mutex for the whole pull.
 		mergedContent := "---\nphase: execution\ntitle: Merged\n---\nbody\n"
-		client.MergeCalls(func(
-			_ context.Context, p string, _ git.Side, _ git.Side, _ git.Side,
-		) (git.VaultAPIMergeResult, error) {
-			Expect(os.WriteFile(
-				filepath.Join(workDir, p), []byte(mergedContent), 0o600,
-			)).To(Succeed())
-			return git.VaultAPIMergeResult{Result: "merged"}, nil
-		})
+		client.MergeReturns(git.VaultAPIMergeResult{
+			Result:  "merged",
+			Content: mergedContent,
+		}, nil)
 
 		Expect(resolver.Resolve(ctx, []string{relPath})).To(Succeed())
 
@@ -126,16 +121,18 @@ var _ = Describe("VaultAPIMergeResolver", func() {
 		Expect(theirs.CommitterTime.IsZero()).To(BeFalse())
 		Expect(base.CommitterTime.IsZero()).To(BeFalse())
 
-		// Staging is the resolver's whole remaining job once vault-api has written
-		// the bytes through git-rest's write API.
+		// The bytes landed verbatim and the conflict is resolved in the index.
+		written, err := os.ReadFile(filepath.Join(workDir, relPath))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(string(written)).To(Equal(mergedContent))
 		Expect(unmergedStages(workDir, relPath)).To(BeEmpty())
 		Expect(fallback.ResolveCallCount()).To(Equal(0))
 	})
 
-	It("falls back when vault-api reports merged but the write never landed", func() {
-		// The fake answers "merged" without touching the file, which is what a
-		// coalesced write still pending or a misrouted write looks like from here.
-		// Staging would commit the markers while the log claimed a clean merge.
+	It("falls back when vault-api reports merged without the bytes", func() {
+		// A merged answer carrying no content has nothing to stage, so staging
+		// would leave git's marker file in the index while the log claimed a
+		// clean merge.
 		client.MergeReturns(git.VaultAPIMergeResult{Result: "merged"}, nil)
 
 		Expect(resolver.Resolve(ctx, []string{relPath})).To(Succeed())

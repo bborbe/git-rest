@@ -44,12 +44,14 @@ type vaultAPIMergeSide struct {
 	CommitterTime string `json:"committer_time"`
 }
 
-// vaultAPIMergeRequest is the body of POST /api/v1/merge.
+// vaultAPIMergeRequest is the body of POST /api/v1/merge. Apply is always false
+// here: this process owns the working tree and writes the returned bytes itself.
 type vaultAPIMergeRequest struct {
 	Path   string            `json:"path"`
 	Base   vaultAPIMergeSide `json:"base"`
 	Ours   vaultAPIMergeSide `json:"ours"`
 	Theirs vaultAPIMergeSide `json:"theirs"`
+	Apply  bool              `json:"apply"`
 }
 
 // NewHTTPVaultAPIMergeClient returns a VaultAPIMergeClient that posts to
@@ -82,6 +84,7 @@ func (c *httpVaultAPIMergeClient) Merge(
 		Base:   wireSide(base),
 		Ours:   wireSide(ours),
 		Theirs: wireSide(theirs),
+		Apply:  false,
 	})
 	if err != nil {
 		return VaultAPIMergeResult{}, errors.Wrap(ctx, err, "marshal merge request")

@@ -5,7 +5,6 @@
 package git
 
 import (
-	"bytes"
 	"context"
 	stderrors "errors"
 	"os"
@@ -39,6 +38,11 @@ type Side struct {
 type VaultAPIMergeResult struct {
 	Result string `json:"result"`
 	Reason string `json:"reason"`
+	// Content carries the merged bytes. The resolver asks vault-api not to apply
+	// the merge, because this process is mid-pull holding the repository mutex:
+	// a write back through git-rest's own API waits on the lock the pull holds,
+	// and the request never returns.
+	Content string `json:"content"`
 }
 
 // vaultAPIMerged is the only Result that means the file was reconciled. Any
@@ -142,27 +146,23 @@ func (r *vaultAPIMergeResolver) resolveOne(ctx context.Context, path string) err
 		return r.fallback.Resolve(ctx, []string{path})
 	}
 
-	// vault-api wrote the merged bytes through git-rest's write API, so they are
-	// already in the working tree. Staging is all that is left: the puller's
-	// merge commit picks the file up from the index.
-	//
-	// The write is checked rather than assumed. A "merged" answer whose write did
-	// not land — a coalesced write still pending, a target outside this working
-	// tree — leaves git's marker file in place, and staging it would commit the
-	// markers while the log claimed a clean merge. Markers mean the outcome did
-	// not arrive, so that is a decline, not a success.
-	content, err := r.readConflicted(path)
-	if err != nil {
-		r.metrics.IncResolverFailure(resolverFailureVaultAPI)
-		glog.Warningf("vault-api-merge-resolver: read %q after merge: %v, falling back", path, err)
-		return r.fallback.Resolve(ctx, []string{path})
-	}
-	if bytes.Contains(content, []byte("<<<<<<<")) {
+	// vault-api returns the merged bytes rather than writing them, because this
+	// process is mid-pull holding the repository mutex: a write back through
+	// git-rest's own API would wait on the lock the pull holds and never return
+	// (measured — the client timed out at 30s with vault-api's handler still
+	// blocked). So the write is this resolver's, and the puller's merge commit
+	// picks the file up from the index.
+	if result.Content == "" {
 		r.metrics.IncResolverFailure(resolverFailureVaultAPI)
 		glog.Warningf(
-			"vault-api-merge-resolver: %q reported merged but still carries conflict markers, falling back",
+			"vault-api-merge-resolver: %q reported merged with no content, falling back",
 			path,
 		)
+		return r.fallback.Resolve(ctx, []string{path})
+	}
+	if err := r.writeMerged(path, result.Content); err != nil {
+		r.metrics.IncResolverFailure(resolverFailureWrite)
+		glog.Warningf("vault-api-merge-resolver: write %q failed: %v, falling back", path, err)
 		return r.fallback.Resolve(ctx, []string{path})
 	}
 
@@ -176,19 +176,30 @@ func (r *vaultAPIMergeResolver) resolveOne(ctx context.Context, path string) err
 	return nil
 }
 
-// readConflicted returns the working-tree file for path, refusing a path that
-// escapes the repository. It mirrors yamlMergeResolver.safePath, which is a
-// method on the other resolver and so cannot be reused here.
-func (r *vaultAPIMergeResolver) readConflicted(path string) ([]byte, error) {
+// writeMerged writes the merged bytes into the working tree, refusing a path
+// that escapes the repository. The path comes from git's own merge output, but
+// it also reaches a filesystem write, so it is confined here as the YAML
+// resolver confines its own.
+func (r *vaultAPIMergeResolver) writeMerged(path, content string) error {
+	abs, err := r.safePath(path)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(abs, []byte(content), 0o600) // #nosec G304 -- confined by safePath
+}
+
+// safePath joins the repo root with path, rejecting an absolute path or one that
+// resolves outside the root.
+func (r *vaultAPIMergeResolver) safePath(path string) (string, error) {
 	if path == "" || filepath.IsAbs(path) {
-		return nil, stderrors.New("path is empty or absolute")
+		return "", stderrors.New("path is empty or absolute")
 	}
 	joined := filepath.Join(r.repoPath, path)
 	cleanRoot := filepath.Clean(r.repoPath)
 	if !strings.HasPrefix(joined, cleanRoot+string(filepath.Separator)) {
-		return nil, stderrors.New("path escapes repo root")
+		return "", stderrors.New("path escapes repo root")
 	}
-	return os.ReadFile(joined) // #nosec G304 -- path confined to the repo root above
+	return joined, nil
 }
 
 // sides reads the three versions of path out of the merge's index stages and
