@@ -653,3 +653,238 @@ func assertRefsHandlerStatuses(t *testing.T, g git.Git) {
 		t.Fatalf("mirror-served status %d, want %d", mirrorRec.Code, http.StatusOK)
 	}
 }
+
+// TestClaimMirrorReadAfterWrite proves a write on this instance is visible to
+// the very next read without a pull, and that the read was served from the
+// mirror rather than falling back to the origin.
+func TestClaimMirrorReadAfterWrite(t *testing.T) {
+	fixture := newClaimFixture(t)
+	configureClaimIdentity(t, fixture.bare)
+	ctx := context.Background()
+
+	realClient := newClaimClient(fixture.cloneA)
+	if err := realClient.ConfigureClaimMirror(ctx); err != nil {
+		t.Fatalf("ConfigureClaimMirror: %v", err)
+	}
+	if err := realClient.Pull(ctx); err != nil {
+		t.Fatalf("Pull: %v", err)
+	}
+
+	fake := &mocks.FakeClaimOrigin{}
+	fake.ReadCommitMessageStub = func(context.Context, string) ([]byte, error) {
+		return []byte(
+			`{"cluster":"nuke","task_id":"t1","lease_until":"2026-10-25T00:00:00Z","nonce":"x"}`,
+		), nil
+	}
+	g := git.NewGitWithClaimMirrorForTest(fixture.cloneA, fake)
+	git.SetClaimMirrorFreshAtForTest(g, time.Now())
+	freshAt := git.ClaimMirrorFreshAtForTest(g)
+
+	logs, restore := captureSlogLogs()
+	defer restore()
+
+	sha, err := g.PutClaimRef(ctx, "claims/task/t1", git.ClaimRefRequest{
+		Cluster:    "nuke",
+		TaskID:     "t1",
+		LeaseUntil: "2026-10-25T00:00:00Z",
+	})
+	if err != nil {
+		t.Fatalf("PutClaimRef: %v", err)
+	}
+	if sha == "" {
+		t.Fatal("want a non-empty sha from PutClaimRef")
+	}
+	if got := git.ClaimMirrorFreshAtForTest(g); !got.Equal(freshAt) {
+		t.Fatalf("want freshness unchanged by a write, got %v (before %v)", got, freshAt)
+	}
+
+	claims, err := g.ListClaimRefs(ctx, "claims/")
+	if err != nil {
+		t.Fatalf("ListClaimRefs after put: %v", err)
+	}
+	if len(claims) != 1 || claims[0].Ref != "refs/claims/task/t1" || claims[0].SHA != sha {
+		t.Fatalf("want the just-written claim at %s, got %+v", sha, claims)
+	}
+	if got := fake.ListRefsCallCount(); got != 0 {
+		t.Fatalf("want no origin ListRefs call, got %d", got)
+	}
+	if got := countLogLines(logs.String(), "served_from=mirror"); got < 1 {
+		t.Fatalf("want a served_from=mirror line, got %d in:\n%s", got, logs)
+	}
+
+	if err := g.DeleteClaimRef(ctx, "claims/task/t1", sha); err != nil {
+		t.Fatalf("DeleteClaimRef: %v", err)
+	}
+	if got := git.ClaimMirrorFreshAtForTest(g); !got.Equal(freshAt) {
+		t.Fatalf("want freshness unchanged by a delete, got %v (before %v)", got, freshAt)
+	}
+
+	claims, err = g.ListClaimRefs(ctx, "claims/")
+	if err != nil {
+		t.Fatalf("ListClaimRefs after delete: %v", err)
+	}
+	if len(claims) != 0 {
+		t.Fatalf("want no claims after delete, got %+v", claims)
+	}
+	if got := fake.ListRefsCallCount(); got != 0 {
+		t.Fatalf("want no origin ListRefs call, got %d", got)
+	}
+	if got := countLogLines(logs.String(), "served_from=mirror"); got < 2 {
+		t.Fatalf("want a second served_from=mirror line, got %d in:\n%s", got, logs)
+	}
+}
+
+// TestClaimMirrorCrossCluster proves another cluster's claim becomes visible
+// after exactly one pull cycle, not before it.
+func TestClaimMirrorCrossCluster(t *testing.T) {
+	fixture := newClaimFixture(t)
+	ctx := context.Background()
+
+	clientA := newClaimClient(fixture.cloneA)
+	clientB := newClaimClient(fixture.cloneB)
+	for name, client := range map[string]git.Git{"A": clientA, "B": clientB} {
+		if err := client.ConfigureClaimMirror(ctx); err != nil {
+			t.Fatalf("ConfigureClaimMirror on %s: %v", name, err)
+		}
+		if err := client.Pull(ctx); err != nil {
+			t.Fatalf("Pull on %s: %v", name, err)
+		}
+	}
+
+	shaA, err := clientA.PutClaimRef(ctx, "claims/task/t9", git.ClaimRefRequest{
+		Cluster:    "cluster-a",
+		TaskID:     "t9",
+		LeaseUntil: claimLeaseUntil,
+	})
+	if err != nil {
+		t.Fatalf("PutClaimRef: %v", err)
+	}
+
+	claimsB, err := clientB.ListClaimRefs(ctx, "claims/")
+	if err != nil {
+		t.Fatalf("ListClaimRefs before pull: %v", err)
+	}
+	for _, claim := range claimsB {
+		if claim.Ref == "refs/claims/task/t9" {
+			t.Fatalf("cluster B saw the claim before its pull: %+v", claimsB)
+		}
+	}
+
+	if err := clientB.Pull(ctx); err != nil {
+		t.Fatalf("Pull on B: %v", err)
+	}
+	claimsB, err = clientB.ListClaimRefs(ctx, "claims/")
+	if err != nil {
+		t.Fatalf("ListClaimRefs after pull: %v", err)
+	}
+	if len(claimsB) != 1 ||
+		claimsB[0].Ref != "refs/claims/task/t9" ||
+		claimsB[0].SHA != shaA {
+		t.Fatalf("want the cross-cluster claim at %s after one pull, got %+v", shaA, claimsB)
+	}
+}
+
+// TestClaimMirrorSyncStateUnchanged proves a ref GET, PUT and DELETE leave the
+// clone's fetch configuration and remote-tracking refs byte-identical.
+func TestClaimMirrorSyncStateUnchanged(t *testing.T) {
+	fixture := newClaimFixture(t)
+	ctx := context.Background()
+
+	client := newClaimClient(fixture.cloneA)
+	if err := client.ConfigureClaimMirror(ctx); err != nil {
+		t.Fatalf("ConfigureClaimMirror: %v", err)
+	}
+	if err := client.Pull(ctx); err != nil {
+		t.Fatalf("Pull: %v", err)
+	}
+
+	beforeFetch := mustGit(t, fixture.cloneA, "config", "--get-all", "remote.origin.fetch")
+	beforeRefs := mustGit(t, fixture.cloneA, "for-each-ref", "refs/remotes/origin")
+	if strings.TrimSpace(beforeRefs) == "" {
+		t.Fatal("want a non-empty remote-tracking listing so the comparison can fail")
+	}
+	if !strings.Contains(beforeRefs, "refs/remotes/origin/") {
+		t.Fatalf("want refs/remotes/origin/ in the pre-operation listing, got %q", beforeRefs)
+	}
+
+	if _, err := client.ListClaimRefs(ctx, "claims/"); err != nil {
+		t.Fatalf("ListClaimRefs: %v", err)
+	}
+	sha, err := client.PutClaimRef(ctx, "claims/task/sync", git.ClaimRefRequest{
+		Cluster:    "nuke",
+		TaskID:     "sync",
+		LeaseUntil: claimLeaseUntil,
+	})
+	if err != nil {
+		t.Fatalf("PutClaimRef: %v", err)
+	}
+	if err := client.DeleteClaimRef(ctx, "claims/task/sync", sha); err != nil {
+		t.Fatalf("DeleteClaimRef: %v", err)
+	}
+
+	afterFetch := mustGit(t, fixture.cloneA, "config", "--get-all", "remote.origin.fetch")
+	afterRefs := mustGit(t, fixture.cloneA, "for-each-ref", "refs/remotes/origin")
+	if afterFetch != beforeFetch {
+		t.Fatalf("fetch config changed:\nbefore %q\nafter  %q", beforeFetch, afterFetch)
+	}
+	if afterRefs != beforeRefs {
+		t.Fatalf("remote-tracking refs changed:\nbefore %q\nafter  %q", beforeRefs, afterRefs)
+	}
+}
+
+// TestClaimMirrorUpdateFailureSwallowed proves a failed local mirror update
+// never fails the request: the origin write stands and the failure is logged.
+func TestClaimMirrorUpdateFailureSwallowed(t *testing.T) {
+	fixture := newClaimFixture(t)
+	configureClaimIdentity(t, fixture.bare)
+	ctx := context.Background()
+
+	realClient := newClaimClient(fixture.cloneA)
+	if err := realClient.ConfigureClaimMirror(ctx); err != nil {
+		t.Fatalf("ConfigureClaimMirror: %v", err)
+	}
+	if err := realClient.Pull(ctx); err != nil {
+		t.Fatalf("Pull: %v", err)
+	}
+
+	blocker := filepath.Join(fixture.cloneA, ".git", "refs", "claim-mirror")
+	if err := os.RemoveAll(blocker); err != nil {
+		t.Fatalf("clear mirror namespace: %v", err)
+	}
+	if err := os.WriteFile(blocker, []byte("blocked\n"), 0o600); err != nil {
+		t.Fatalf("block the mirror namespace with a regular file: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Remove(blocker) })
+
+	fake := &mocks.FakeClaimOrigin{}
+	g := git.NewGitWithClaimMirrorForTest(fixture.cloneA, fake)
+	git.SetClaimMirrorFreshAtForTest(g, time.Now())
+
+	logs, restore := captureSlogLogs()
+	defer restore()
+
+	sha, err := g.PutClaimRef(ctx, "claims/task/fail", git.ClaimRefRequest{
+		Cluster:    "nuke",
+		TaskID:     "fail",
+		LeaseUntil: claimLeaseUntil,
+	})
+	if err != nil {
+		t.Fatalf("PutClaimRef must succeed despite a failed mirror update: %v", err)
+	}
+	if sha == "" {
+		t.Fatal("want a non-empty sha")
+	}
+	if got := strings.TrimSpace(
+		mustGit(t, fixture.bare, "rev-parse", "refs/claims/task/fail"),
+	); got != sha {
+		t.Fatalf("want the origin ref at %s, got %q", sha, got)
+	}
+	if got := countLogLines(logs.String(), "updating the local claim mirror after a write failed"); got < 1 {
+		t.Fatalf("want a mirror-update failure log line, got %d in:\n%s", got, logs)
+	}
+	if got := strings.TrimSpace(
+		mustGit(t, fixture.cloneA, "for-each-ref", "refs/claim-mirror/task/fail"),
+	); got != "" {
+		t.Fatalf("want no local mirror ref, got %q", got)
+	}
+}

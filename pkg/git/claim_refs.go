@@ -391,6 +391,7 @@ func (g *git) PutClaimRef(
 	if err := g.pushClaimRef(ctx, key, request.ExpectedSHA, sha); err != nil {
 		return "", err
 	}
+	g.updateClaimMirrorRef(ctx, key, sha)
 	return sha, nil
 }
 
@@ -412,7 +413,11 @@ func (g *git) DeleteClaimRef(ctx context.Context, key string, expectedSHA string
 	if !g.hasRemote(ctx) {
 		return errors.Wrap(ctx, ErrNoRemote, "no origin remote configured")
 	}
-	return g.pushClaimRef(ctx, key, expectedSHA, "")
+	if err := g.pushClaimRef(ctx, key, expectedSHA, ""); err != nil {
+		return err
+	}
+	g.removeClaimMirrorRef(ctx, key)
+	return nil
 }
 
 // pushClaimRef pushes sha (or a deletion when sha is empty) to refs/<key> under

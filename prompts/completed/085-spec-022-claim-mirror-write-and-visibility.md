@@ -1,8 +1,13 @@
 ---
-status: approved
+status: completed
 spec: [022-claim-ref-local-mirror]
+summary: Updated the local claim mirror on successful claim PUT/DELETE writes, with swallowed-and-logged mirror failures, plus read-after-write, cross-cluster, sync-state and failure-swallow tests and a CHANGELOG entry.
+execution_id: git-rest-claim-mirror-exec-085-spec-022-claim-mirror-write-and-visibility
+dark-factory-version: v0.198.7
 created: "2026-10-24T15:44:42Z"
 queued: "2026-10-24T15:56:05Z"
+started: "2026-10-24T16:07:37Z"
+completed: "2026-10-24T16:11:40Z"
 branch: dark-factory/claim-ref-local-mirror
 ---
 

@@ -13,6 +13,7 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 - fix: Configure the served clone's origin fetch at startup to carry `refs/claims/*` into a local `refs/claim-mirror/*` namespace and enable `remote.origin.prune`, so the puller's existing fetch maintains a local claim-ref mirror. The step is idempotent and a failure is logged without aborting startup.
 - fix: Record the time of the last successful claim-mirror fetch in the pull path, advanced only by a `git fetch` that ran with the claim refspec present. A failed fetch leaves the previous time in place, so a severed origin cannot make an older mirror look fresh; the staleness bound is derived from the configured pull interval (twice the interval, floor 60 s).
 - fix: Serve `GET /api/v1/refs` from the local claim mirror when its claims-specific freshness is inside the staleness bound, with no `ls-remote` and no fetch on the request path. A stale, never-populated, unconfigured or object-missing mirror falls back to the unchanged live origin path, each read logs exactly one `served_from=mirror|origin` INFO line (with `age_s` on the mirror path), and the response body, key set, ordering and status codes are unchanged.
+- fix: Update the local claim mirror immediately after a successful claim `PUT` or `DELETE`, so a read-after-write on the same instance sees the new claim without waiting for a pull cycle. A failed mirror update is logged and swallowed — the origin write stands and the next pull heals the mirror.
 
 ## v0.35.0
 

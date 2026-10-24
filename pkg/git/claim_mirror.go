@@ -201,6 +201,40 @@ func (g *git) listClaimRefsFromMirror(
 	return result, true, nil
 }
 
+// claimMirrorRef maps a claim key ("claims/task/t1") to its mirror ref
+// ("refs/claim-mirror/task/t1").
+func claimMirrorRef(key string) string {
+	return claimMirrorNamespace + strings.TrimPrefix(key, claimKeyPrefix)
+}
+
+// updateClaimMirrorRef points the local mirror ref at sha after a successful
+// origin write. A failure is logged and swallowed: the origin is authoritative
+// and the next pull heals the mirror.
+func (g *git) updateClaimMirrorRef(ctx context.Context, key, sha string) {
+	if err := g.runCmd(ctx, g.repoPath, "update-ref", claimMirrorRef(key), sha); err != nil {
+		slog.WarnContext(
+			ctx,
+			"git-rest: updating the local claim mirror after a write failed",
+			"key", key,
+			"sha", sha,
+			"error", err,
+		)
+	}
+}
+
+// removeClaimMirrorRef deletes the local mirror ref after a successful origin
+// delete. A failure is logged and swallowed.
+func (g *git) removeClaimMirrorRef(ctx context.Context, key string) {
+	if err := g.runCmd(ctx, g.repoPath, "update-ref", "-d", claimMirrorRef(key)); err != nil {
+		slog.WarnContext(
+			ctx,
+			"git-rest: removing the local claim mirror ref after a delete failed",
+			"key", key,
+			"error", err,
+		)
+	}
+}
+
 // hasConfigLine reports whether output contains want as a whole line.
 func hasConfigLine(output []byte, want string) bool {
 	for _, line := range strings.Split(string(output), "\n") {
