@@ -8,8 +8,8 @@ description: >-
   monitoring Alert CRs. Used to sync Obsidian vaults into the cluster
   (`vault-obsidian-<name>`), consumed by the agent-task-controller and others.
 type: application
-version: 0.1.1
-appVersion: "v0.22.0"
+version: 0.1.2
+appVersion: "v0.35.0"
 home: https://github.com/bborbe/git-rest
 sources:
   - https://github.com/bborbe/git-rest

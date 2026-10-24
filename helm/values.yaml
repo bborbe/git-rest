@@ -65,6 +65,11 @@ alerts:
 #       repoUrl: git@github.com:bborbe/obsidian-openclaw.git
 #       writeMode: true                      # false/omitted = read-only (puller only)
 #       existingSecret: vault-obsidian-openclaw   # keys: ssh-key, gateway-secret, sentry-dsn
+#       # Optional, writeMode only: resolve pull conflicts through vault-api's
+#       # merge rules. VAULT_API_SECRET is taken from this vault's own
+#       # gateway-secret key, so the two always match. Omit = YAML resolver only.
+#       vaultApi:
+#         url: http://vault-api-openclaw:9090
 #       storage:
 #         size: 1Gi
 #         storageClassName: local-path
