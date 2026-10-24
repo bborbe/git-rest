@@ -1,8 +1,9 @@
 ---
-status: prompted
+status: verifying
 approved: "2026-10-24T15:41:45Z"
 generating: "2026-10-24T15:41:45Z"
 prompted: "2026-10-24T15:54:37Z"
+verifying: "2026-10-24T16:16:13Z"
 branch: dark-factory/claim-ref-local-mirror
 ---
 
