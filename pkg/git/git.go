@@ -1249,8 +1249,9 @@ func (g *git) pullFetchSHAs(
 	// The freshness time describes the fetch step only. A pull whose merge,
 	// rescue or push later fails still leaves a genuinely refreshed mirror, so
 	// the record must not depend on the state machine. A failed fetch returns
-	// above and never reaches this line, retaining the previous value.
-	g.recordClaimMirrorFetch(ctx, time.Now())
+	// above and never reaches this line, retaining the previous value. The time
+	// comes from the injected getter, not time.Now(), matching the rest of pkg/.
+	g.recordClaimMirrorFetch(ctx, time.Time(g.currentDateTimeGetter.Now()))
 	localOut, e := g.runCmdOutput(ctx, g.repoPath, "rev-parse", "HEAD")
 	if e != nil {
 		g.metrics.IncGitOperationError("pull")

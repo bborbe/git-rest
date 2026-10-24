@@ -26,6 +26,13 @@ import (
 	"github.com/bborbe/git-rest/pkg/handler"
 )
 
+// The TestClaimMirror* functions below are deliberately plain testing.T tests in
+// a package that otherwise bootstraps Ginkgo through TestSuite. The Ginkgo entry
+// point cannot be selected with `go test -run`, and spec 022's acceptance
+// criteria and the verification gate both select these by name, so a Ginkgo
+// conversion would silently turn every one of them into a no-op run. Precedent:
+// TestClaimCreateRace and its siblings in claim_refs_test.go.
+//
 // TestClaimMirrorConfigureFetch proves the startup step is idempotent: applied
 // twice it leaves exactly the default heads refspec plus the claim mirror
 // refspec, and enables pruning.
