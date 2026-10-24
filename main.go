@@ -39,28 +39,30 @@ func main() {
 }
 
 type application struct {
-	SentryDSN             string            `required:"false" arg:"sentry-dsn"               env:"SENTRY_DSN"               usage:"Sentry DSN"                                                                                                                                          display:"length"`
+	SentryDSN             string            `required:"false" arg:"sentry-dsn"               env:"SENTRY_DSN"               usage:"Sentry DSN"                                                                                                                                                                                            display:"length"`
 	SentryProxy           string            `required:"false" arg:"sentry-proxy"             env:"SENTRY_PROXY"             usage:"Sentry Proxy"`
-	Listen                string            `required:"true"  arg:"listen"                   env:"LISTEN"                   usage:"HTTP listen address"                                                                                                                                                  default:":9090"`
+	Listen                string            `required:"true"  arg:"listen"                   env:"LISTEN"                   usage:"HTTP listen address"                                                                                                                                                                                                    default:":9090"`
 	Repo                  string            `required:"true"  arg:"repo"                     env:"REPO"                     usage:"path to git repository on disk"`
-	PullInterval          libtime.Duration  `required:"false" arg:"pull-interval"            env:"PULL_INTERVAL"            usage:"git pull interval"                                                                                                                                                    default:"30s"`
-	PullTimeout           libtime.Duration  `required:"false" arg:"pull-timeout"             env:"PULL_TIMEOUT"             usage:"per-pull timeout; subprocess is aborted if it exceeds this duration (0 = no timeout)"                                                                                 default:"60s"`
-	BuildGitVersion       string            `required:"false" arg:"build-git-version"        env:"BUILD_GIT_VERSION"        usage:"Build Git version"                                                                                                                                                    default:"dev"`
-	BuildGitCommit        string            `required:"false" arg:"build-git-commit"         env:"BUILD_GIT_COMMIT"         usage:"Build Git commit hash"                                                                                                                                                default:"none"`
+	PullInterval          libtime.Duration  `required:"false" arg:"pull-interval"            env:"PULL_INTERVAL"            usage:"git pull interval"                                                                                                                                                                                                      default:"30s"`
+	PullTimeout           libtime.Duration  `required:"false" arg:"pull-timeout"             env:"PULL_TIMEOUT"             usage:"per-pull timeout; subprocess is aborted if it exceeds this duration (0 = no timeout)"                                                                                                                                   default:"60s"`
+	BuildGitVersion       string            `required:"false" arg:"build-git-version"        env:"BUILD_GIT_VERSION"        usage:"Build Git version"                                                                                                                                                                                                      default:"dev"`
+	BuildGitCommit        string            `required:"false" arg:"build-git-commit"         env:"BUILD_GIT_COMMIT"         usage:"Build Git commit hash"                                                                                                                                                                                                  default:"none"`
 	BuildDate             *libtime.DateTime `required:"false" arg:"build-date"               env:"BUILD_DATE"               usage:"Build timestamp (RFC3339)"`
 	GitSSHKey             git.SSHKeyPath    `required:"false" arg:"git-ssh-key"              env:"GIT_SSH_KEY"              usage:"Path to SSH private key for git operations"`
 	GitSSHCommand         string            `required:"false" arg:"git-ssh-command"          env:"GIT_SSH_COMMAND"          usage:"Full SSH command for git network ops (overrides default derived from --git-ssh-key). Empty = derive from --git-ssh-key."`
 	GitRemoteURL          git.RemoteURL     `required:"false" arg:"git-remote-url"           env:"GIT_REMOTE_URL"           usage:"Git remote URL to clone from on startup"`
 	GitUserName           string            `required:"false" arg:"git-user-name"            env:"GIT_USER_NAME"            usage:"Git author name for commits"`
 	GitUserEmail          string            `required:"false" arg:"git-user-email"           env:"GIT_USER_EMAIL"           usage:"Git author email for commits"`
-	GatewaySecret         string            `required:"false" arg:"gateway-secret"           env:"GATEWAY_SECRET"           usage:"Shared secret required in X-Gateway-Secret header for /api/v1/* requests. Empty = no auth (backward compatible)."                                    display:"length"`
-	VaultWrite            bool              `required:"false" arg:"vault-write"              env:"VAULT_WRITE_MODE"         usage:"When true, use YAMLMergeResolver for merge conflicts (deep-merges YAML frontmatter). Default false uses MarkerResolver (preserves <<<<<<< markers)."                  default:"false"`
-	MemReportInterval     libtime.Duration  `required:"false" arg:"mem-report-interval"      env:"MEM_REPORT_INTERVAL"      usage:"how often to sample process memory; 0 disables the reporter"                                                                                                          default:"30s"`
-	MemReportThreshold    int               `required:"false" arg:"mem-report-threshold-mib" env:"MEM_REPORT_THRESHOLD_MIB" usage:"log an allocation breakdown once memory reaches this many MiB"                                                                                                        default:"256"`
-	MemReportTopN         int               `required:"false" arg:"mem-report-top-n"         env:"MEM_REPORT_TOP_N"         usage:"how many largest allocation sites to log per report"                                                                                                                  default:"10"`
-	WriteCoalesce         bool              `required:"false" arg:"write-coalesce"           env:"WRITE_COALESCE"           usage:"Coalesce file writes into one commit and one push per window. false restores synchronous write-commit-push."                                                          default:"true"`
-	WriteCoalesceDelay    libtime.Duration  `required:"false" arg:"write-coalesce-delay"     env:"WRITE_COALESCE_DELAY"     usage:"Flush after the pending set has been quiet for this long."                                                                                                            default:"30s"`
-	WriteCoalesceMaxDelay libtime.Duration  `required:"false" arg:"write-coalesce-max-delay" env:"WRITE_COALESCE_MAX_DELAY" usage:"Flush when the oldest pending write is this old, even under continuous writes."                                                                                       default:"120s"`
+	GatewaySecret         string            `required:"false" arg:"gateway-secret"           env:"GATEWAY_SECRET"           usage:"Shared secret required in X-Gateway-Secret header for /api/v1/* requests. Empty = no auth (backward compatible)."                                                                                      display:"length"`
+	VaultWrite            bool              `required:"false" arg:"vault-write"              env:"VAULT_WRITE_MODE"         usage:"When true, use YAMLMergeResolver for merge conflicts (deep-merges YAML frontmatter). Default false uses MarkerResolver (preserves <<<<<<< markers)."                                                                    default:"false"`
+	VaultAPIURL           string            `required:"false" arg:"vault-api-url"            env:"VAULT_API_URL"            usage:"Base URL of the vault-api that owns the merge rules. Set on vault-write pods to resolve conflicts through POST /api/v1/merge and fall back to YAMLMergeResolver. Empty keeps YAMLMergeResolver alone."`
+	VaultAPISecret        string            `required:"false" arg:"vault-api-secret"         env:"VAULT_API_SECRET"         usage:"Value sent as X-Gateway-Secret on merge requests to vault-api. vault-api refuses to merge without its own GATEWAY_SECRET set, so this must match it."                                                  display:"length"`
+	MemReportInterval     libtime.Duration  `required:"false" arg:"mem-report-interval"      env:"MEM_REPORT_INTERVAL"      usage:"how often to sample process memory; 0 disables the reporter"                                                                                                                                                            default:"30s"`
+	MemReportThreshold    int               `required:"false" arg:"mem-report-threshold-mib" env:"MEM_REPORT_THRESHOLD_MIB" usage:"log an allocation breakdown once memory reaches this many MiB"                                                                                                                                                          default:"256"`
+	MemReportTopN         int               `required:"false" arg:"mem-report-top-n"         env:"MEM_REPORT_TOP_N"         usage:"how many largest allocation sites to log per report"                                                                                                                                                                    default:"10"`
+	WriteCoalesce         bool              `required:"false" arg:"write-coalesce"           env:"WRITE_COALESCE"           usage:"Coalesce file writes into one commit and one push per window. false restores synchronous write-commit-push."                                                                                                            default:"true"`
+	WriteCoalesceDelay    libtime.Duration  `required:"false" arg:"write-coalesce-delay"     env:"WRITE_COALESCE_DELAY"     usage:"Flush after the pending set has been quiet for this long."                                                                                                                                                              default:"30s"`
+	WriteCoalesceMaxDelay libtime.Duration  `required:"false" arg:"write-coalesce-max-delay" env:"WRITE_COALESCE_MAX_DELAY" usage:"Flush when the oldest pending write is this old, even under continuous writes."                                                                                                                                         default:"120s"`
 }
 
 func (a *application) Run(ctx context.Context, sentryClient libsentry.Client) error {
@@ -263,9 +265,24 @@ func resolveGitSSHCommand(gitSSHCommand, sshKeyPath string) string {
 // Vault-write pods get the YAMLMergeResolver (deep-merges YAML frontmatter on
 // conflict); all other pods keep the MarkerResolver (commits with <<<<<<< /
 // ======= / >>>>>>> markers intact). One resolver per process — never per-request.
+//
+// A vault-write pod configured with a vault-api URL gets the vault-api resolver
+// instead, with the YAML resolver kept as its per-path fallback: vault-api owns
+// the per-key merge rules and this process is the only one that sees the three
+// sides, so the split is by capability, not by preference. With no URL set the
+// behaviour is exactly what it was before the flag existed.
 func (a *application) selectResolver(m metrics.Metrics) git.ConflictResolver {
 	if a.VaultWrite {
-		return git.NewYAMLMergeResolver(a.Repo, m)
+		yamlResolver := git.NewYAMLMergeResolver(a.Repo, m)
+		if a.VaultAPIURL == "" {
+			return yamlResolver
+		}
+		return git.NewVaultAPIMergeResolver(
+			a.Repo,
+			git.NewHTTPVaultAPIMergeClient(a.VaultAPIURL, a.VaultAPISecret),
+			yamlResolver,
+			m,
+		)
 	}
 	return git.NewMarkerResolver(a.Repo)
 }
