@@ -1,8 +1,13 @@
 ---
-status: approved
+status: completed
 spec: [022-claim-ref-local-mirror]
+summary: Documented the claim-mirror read contract in docs/api.md, added the Unreleased fix bullet naming the claim-ref mirror, and fixed a pre-existing stderr data race in the flag-test harness so the required race verification passes.
+execution_id: git-rest-claim-mirror-exec-086-spec-022-claim-mirror-docs-changelog
+dark-factory-version: v0.198.7
 created: "2026-10-24T15:44:42Z"
 queued: "2026-10-24T15:56:08Z"
+started: "2026-10-24T16:11:41Z"
+completed: "2026-10-24T16:16:13Z"
 branch: dark-factory/claim-ref-local-mirror
 cancelled: "2026-10-24T15:59:41Z"
 ---

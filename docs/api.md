@@ -16,7 +16,7 @@ Default port: `9090` (set via `--listen`).
 | `GET` | `/api/v1/files/{path}?glob=<pattern>` | List files matching glob |
 | `POST` | `/api/v1/files/{path}` | Create or overwrite a file (written and staged; coalesced commit + push) |
 | `DELETE` | `/api/v1/files/{path}` | Delete a file (auto-commits + pushes) |
-| `GET` | `/api/v1/refs?prefix=claims/` | List claim refs live from the origin |
+| `GET` | `/api/v1/refs?prefix=claims/` | List claim refs from the local claim mirror (falls back to the origin when stale) |
 | `PUT` | `/api/v1/refs/claims/{key}` | Create or renew a claim ref (compare-and-swap) |
 | `DELETE` | `/api/v1/refs/claims/{key}?expected_sha=<sha>` | Delete a claim ref (compare-and-swap) |
 | `GET` | `/healthz` | Liveness probe |
@@ -105,9 +105,10 @@ Commit message format: `git-rest: delete <path>`.
 ## Claim Refs
 
 Claim refs are lightweight, content-free refs under `refs/claims/` that record
-which cluster and task hold a claim until when. They are read live from the
-origin and written with an origin-enforced compare-and-swap, so two callers can
-never both believe they won.
+which cluster and task hold a claim until when. Reads are served from a local
+claim mirror (falling back to the live origin when it is stale) and writes use
+an origin-enforced compare-and-swap, so two callers can never both believe they
+won.
 
 Only refs under `refs/claims/` are reachable through these endpoints. The
 `{key}` is the full path below `refs/`, e.g. `claims/task/t-42`. Any key that
@@ -131,6 +132,14 @@ and must start with `claims/`.
 ```bash
 curl 'http://localhost:9090/api/v1/refs?prefix=claims/task'
 ```
+
+The read is served from a locally maintained claim mirror under
+`refs/claim-mirror/*`, which the puller's periodic fetch refreshes. While the
+mirror is fresh the request path makes no network call. A read **falls back**
+to the live origin when the mirror is older than the staleness bound — twice the pull interval with a minimum of 60 seconds — or was never configured. A
+claim written by another cluster is visible after at most one pull cycle. Each
+read logs one INFO line naming its source: `served_from=mirror` with an
+`age_s=` field, or `served_from=origin`.
 
 Response: a JSON array, sorted by `ref`, of objects with exactly `ref`, `sha`,
 `cluster`, `task_id` and `lease_until`:
