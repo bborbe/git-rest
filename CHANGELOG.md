@@ -8,7 +8,7 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 * MINOR version when you add functionality in a backwards-compatible manner, and
 * PATCH version when you make backwards-compatible bug fixes.
 
-## Unreleased
+## v0.36.1
 
 - fix: Configure the served clone's origin fetch at startup to carry `refs/claims/*` into a local `refs/claim-mirror/*` namespace and enable `remote.origin.prune`, so the puller's existing fetch maintains a local claim-ref mirror. The step is idempotent and a failure is logged without aborting startup.
 - fix: Record the time of the last successful claim-mirror fetch in the pull path, advanced only by a `git fetch` that ran with the claim refspec present. A failed fetch leaves the previous time in place, so a severed origin cannot make an older mirror look fresh; the staleness bound is derived from the configured pull interval (twice the interval, floor 60 s).
