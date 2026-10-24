@@ -433,8 +433,10 @@ func (g *git) pushWithRetry(ctx context.Context, upstream string) error {
 
 // retryPush performs the work between two push attempts: backoff, upstream
 // resolution (only when the caller did not know it), fetch and merge. A merge
-// failure aborts the half-finished merge so the pull path's conflict machinery
-// is never entered from here.
+// failure aborts the half-finished merge so the repository is left clean and the
+// error surfaces; the caller retains its commit (or the merge commit, when this
+// merge succeeded and the following push failed), and the next pull's
+// diverged-history path is where that conflict reaches the conflict machinery.
 func (g *git) retryPush(ctx context.Context, upstream string, nextAttempt int) error {
 	slog.InfoContext(ctx, "git-rest: push retry", "attempt", nextAttempt, "max", pushMaxAttempts)
 	if err := sleepPushBackoff(ctx, nextAttempt); err != nil {
@@ -971,7 +973,9 @@ func (g *git) pendingBoundsLocked() (oldest, latest time.Time) {
 	return oldest, latest
 }
 
-// flushPendingLocked commits and pushes the pending write set. The caller holds g.mu.
+// flushPendingLocked commits and pushes the pending write set. A push failure
+// or a flush cut at its own deadline leaves the commit at HEAD, clears the
+// pending set, and returns the push error. The caller holds g.mu.
 func (g *git) flushPendingLocked(ctx context.Context) error {
 	if len(g.pending) == 0 {
 		return nil
@@ -987,9 +991,6 @@ func (g *git) flushPendingLocked(ctx context.Context) error {
 	sort.Strings(paths)
 	message := g.flushCommitMessageLocked(paths)
 
-	preFlushHEAD, headErr := g.runCmdOutput(ctx, g.repoPath, "rev-parse", "HEAD")
-	preFlushSHA := strings.TrimSpace(string(preFlushHEAD))
-
 	commitOut, err := g.runCmdRaw(ctx, g.repoPath, "commit", "-m", message)
 	if err != nil && !strings.Contains(string(commitOut), "nothing to commit") {
 		g.metrics.IncWriteFlush("error")
@@ -998,10 +999,10 @@ func (g *git) flushPendingLocked(ctx context.Context) error {
 
 	pushOutcome := "skipped"
 	if g.hasRemote(ctx) {
-		if err := g.pushWithRetry(ctx, ""); err != nil {
-			g.restorePendingIndexLocked(ctx, preFlushSHA, headErr)
+		if pushErr := g.pushWithRetry(ctx, ""); pushErr != nil {
+			g.retainCommitAfterFailedPushLocked(ctx, paths, pushErr)
 			g.metrics.IncWriteFlush("error")
-			return errors.Wrap(ctx, err, "git push")
+			return errors.Wrap(ctx, pushErr, "git push")
 		}
 		pushOutcome = "ok"
 	}
@@ -1018,6 +1019,41 @@ func (g *git) flushPendingLocked(ctx context.Context) error {
 	return nil
 }
 
+// retainCommitAfterFailedPushLocked keeps the commit a failed flush push left at
+// HEAD and clears the pending set, so a delivery failure never unmakes the
+// write: the commit stays in local history for the next pull to push or merge.
+// The HEAD read runs without cancellation because a flush cut by its own
+// deadline still holds a committed HEAD, and rev-parse is a fast local
+// operation.
+func (g *git) retainCommitAfterFailedPushLocked(
+	ctx context.Context,
+	paths []string,
+	pushErr error,
+) {
+	headOut, headErr := g.runCmdOutput(
+		context.WithoutCancel(ctx), g.repoPath, "rev-parse", "HEAD",
+	)
+	g.pending = make(map[string]pendingWrite)
+	g.metrics.SetWritePending(0)
+	if headErr != nil {
+		slog.WarnContext(
+			ctx,
+			"git-rest: flush push failed, commit retained",
+			"paths", len(paths),
+			"error", pushErr.Error(),
+			"head_error", headErr.Error(),
+		)
+		return
+	}
+	slog.WarnContext(
+		ctx,
+		"git-rest: flush push failed, commit retained",
+		"commit", strings.TrimSpace(string(headOut)),
+		"paths", len(paths),
+		"error", pushErr.Error(),
+	)
+}
+
 // flushCommitMessageLocked builds the batch commit message. The git-rest:
 // prefix is load-bearing: the rate measurement greps ^git-rest:.
 func (g *git) flushCommitMessageLocked(paths []string) string {
@@ -1028,26 +1064,6 @@ func (g *git) flushCommitMessageLocked(paths []string) string {
 		return "git-rest: update " + paths[0]
 	}
 	return "git-rest: update " + strconv.Itoa(len(paths)) + " files"
-}
-
-// restorePendingIndexLocked moves HEAD back to preFlushSHA while keeping the
-// committed tree in the index, so a failed push leaves the paths staged and the
-// pending set durable. The reset runs on a context without cancellation: the
-// shutdown flush may already be past its deadline and the restore is a fast
-// local operation.
-func (g *git) restorePendingIndexLocked(ctx context.Context, preFlushSHA string, headErr error) {
-	if headErr != nil || preFlushSHA == "" {
-		return
-	}
-	if err := g.runCmd(
-		context.WithoutCancel(ctx),
-		g.repoPath,
-		"reset",
-		"--soft",
-		preFlushSHA,
-	); err != nil {
-		slog.WarnContext(ctx, "git-rest: restore pending index after failed flush", "error", err)
-	}
 }
 
 // RecoverPendingWrites commits and pushes paths left staged in the index by a

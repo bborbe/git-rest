@@ -23,12 +23,12 @@ import (
 const rescueFixtureBase = "---\nid: x\n---\n\nalpha\nbravo\ncharlie\ndelta\necho\nfoxtrot\n"
 
 // setupFlushRescueFixture builds the four AC1 preconditions and returns the
-// client and the bare origin. The common base is created first: tasks/x.md must
+// client, the work clone and the bare origin. The common base is created first: tasks/x.md must
 // exist in the local history too, so the remote divergence is a modification of
 // the same path rather than an add/add conflict. An add/add conflict would fail
 // the flush's retry merge immediately, before the flush could consume any
 // budget, and the fixture would stop exercising the defect.
-func setupFlushRescueFixture(t *testing.T) (git.Git, string) {
+func setupFlushRescueFixture(t *testing.T) (git.Git, string, string) {
 	t.Helper()
 	client, work, bare := newCoalesceFixture(t, git.CoalesceConfig{
 		Enabled:  true,
@@ -89,17 +89,14 @@ func setupFlushRescueFixture(t *testing.T) (git.Git, string) {
 	// sleeps past the whole 10 s pull context and rejects refs/heads/main while
 	// allowing refs/heads/rescue/* immediately.
 	installBlockingPreReceive(t, bare)
-	return client, bare
+	return client, work, bare
 }
 
-// TestFlushRescueLandsAfterFlushDeadline reproduces the production starvation:
-// a flush that cannot complete, a diverged remote touching the same path as the
-// pending write, and a remote stall that outlasts the whole pull budget. On the
-// fixed tree the flush is cut at its own deadline and the dirty-tree rescue
-// still pushes a rescue/* ref to the remote. On the pre-fix tree the flush
-// consumes the pull budget and the rescue never runs.
+// TestFlushRescueLandsAfterFlushDeadline proves a flush cut by its own deadline
+// retains its commit, the next pull merges that commit with upstream, and the
+// dirty-tree rescue is no longer the cut flush's recovery path.
 func TestFlushRescueLandsAfterFlushDeadline(t *testing.T) {
-	client, bare := setupFlushRescueFixture(t)
+	client, work, bare := setupFlushRescueFixture(t)
 
 	buf, restore := captureSlogLogs()
 	defer restore()
@@ -108,32 +105,45 @@ func TestFlushRescueLandsAfterFlushDeadline(t *testing.T) {
 	defer cancel()
 	pullErr := client.Pull(pullCtx)
 
-	// Assertion 1 — the rescue ref must exist on the REMOTE. This is first and
-	// fatal so the pre-fix failure is reported as the missing rescue, not as a
-	// downstream log mismatch. --branches=PATTERN returns 0 for no match, unlike
-	// a bare glob revision argument which git rev-list rejects with a usage error.
+	// Assertion 1 — no rescue ref may reach the origin. This is first and fatal
+	// so a pre-fix run fails on the rescue rather than downstream. --branches=
+	// PATTERN returns 0 for no match, unlike a bare glob revision argument which
+	// git rev-list rejects with a usage error.
 	count := strings.TrimSpace(mustGit(t, bare, "rev-list", "--count", "--branches=rescue/*"))
-	if count == "0" {
+	if count != "0" {
 		t.Fatalf(
-			"no rescue ref pushed to origin (count=%s), pullErr=%v, logs:\n%s",
+			"want no rescue ref on origin, got %s, pullErr=%v, logs:\n%s",
 			count,
 			pullErr,
 			buf.String(),
 		)
 	}
 
-	// Assertion 2 — the rescue completed and logged its push.
-	if !strings.Contains(buf.String(), "rescue branch pushed") {
-		t.Fatalf("want rescue push log, logs:\n%s", buf.String())
+	// Assertion 2 — the cut flush's commit survives into the pull's merge: the
+	// flush commit and the clean merge commit, neither pushed because the origin
+	// stalls.
+	if got := strings.TrimSpace(
+		mustGit(t, work, "rev-list", "--count", "origin/main..HEAD"),
+	); got != "2" {
+		t.Fatalf("want 2 local commits above origin, got %q, logs:\n%s", got, buf.String())
 	}
 
-	// Assertion 3 — the rescue's git add -A was never killed: a killed command
-	// surfaces its argv inside an error log line.
-	if strings.Contains(buf.String(), "git [add -A]") {
-		t.Fatalf("rescue git add -A was killed, logs:\n%s", buf.String())
+	// Assertion 3 — the flush commit is in history.
+	if log := mustGit(t, work, "log", "--format=%s"); !strings.Contains(
+		log,
+		"git-rest: update tasks/x.md",
+	) {
+		t.Fatalf("want flush commit in history, logs:\n%s", log)
 	}
 
-	// Assertion 4 — the flush was cut by its own deadline. The trailing
+	// Assertion 4 — the tree is clean: the retained commit left no staged paths.
+	if status := strings.TrimSpace(
+		mustGit(t, work, "status", "--porcelain"),
+	); status != "" {
+		t.Fatalf("want clean work tree, got %q, logs:\n%s", status, buf.String())
+	}
+
+	// Assertion 5 — the flush was cut by its own deadline. The trailing
 	// "before pull" distinguishes this from the SIGTERM shutdown path, which
 	// logs the prefix "git-rest: flush deadline exceeded".
 	if got := strings.Count(
@@ -143,10 +153,15 @@ func TestFlushRescueLandsAfterFlushDeadline(t *testing.T) {
 		t.Fatalf("want flush cut-off log, got %d, logs:\n%s", got, buf.String())
 	}
 
-	// Assertion 5 — fixture self-guard: the flush actually failed. Without this
+	// Assertion 6 — fixture self-guard: the flush actually failed. Without this
 	// an empty pending set would return immediately, consume no budget, and let
 	// assertion 1 pass on a tree that never exercised the defect.
 	if !strings.Contains(buf.String(), "git-rest: flush pending writes before pull failed") {
 		t.Fatalf("want flush failure log, logs:\n%s", buf.String())
+	}
+
+	// Assertion 7 — the rescue is no longer the recovery path.
+	if strings.Contains(buf.String(), "rescue branch pushed") {
+		t.Fatalf("want no rescue push, logs:\n%s", buf.String())
 	}
 }

@@ -62,6 +62,45 @@ func installBlockingPreReceive(t *testing.T, bare string) {
 	mustGit(t, bare, "config", "core.hooksPath", "hooks")
 }
 
+// installFirstPushRejection installs a pre-receive hook that rejects the FIRST
+// push to refs/heads/main after stalling past the flush deadline and accepts
+// every later push. The flush's push is the one that is cut; the pull's own
+// delivery push in the same cycle succeeds, so Pull returns without error on a
+// correct build. The sentinel is created by the hook itself.
+func installFirstPushRejection(t *testing.T, bare string) {
+	t.Helper()
+	hooksDir := filepath.Join(bare, "hooks")
+	if err := os.MkdirAll(hooksDir, 0o750); err != nil {
+		t.Fatalf("mkdir hooks: %v", err)
+	}
+	sentinel := shellQuote(filepath.Join(bare, "first-push-rejected"))
+	script := "#!/bin/sh\n" +
+		"input=$(cat)\n" +
+		"case \"$input\" in\n" +
+		"  *refs/heads/main*)\n" +
+		"    if [ -f " + sentinel + " ]; then exit 0; fi\n" +
+		"    : > " + sentinel + "\n" +
+		"    gp=$(ps -o ppid= -p \"$PPID\" 2>/dev/null | tr -d ' ')\n" +
+		"    gpp=$(ps -o ppid= -p \"$gp\" 2>/dev/null | tr -d ' ')\n" +
+		"    i=0\n" +
+		"    while [ \"$i\" -lt 75 ]; do\n" +
+		"      if [ -n \"$gpp\" ] && ! ps -p \"$gpp\" >/dev/null 2>&1; then\n" +
+		"        exit 1\n" +
+		"      fi\n" +
+		"      sleep 0.2\n" +
+		"      i=$((i+1))\n" +
+		"    done\n" +
+		"    echo \"remote rejected: first push\" >&2\n" +
+		"    exit 1\n" +
+		"    ;;\n" +
+		"esac\n" +
+		"exit 0\n"
+	if err := os.WriteFile(filepath.Join(hooksDir, "pre-receive"), []byte(script), 0o750); err != nil {
+		t.Fatalf("write pre-receive hook: %v", err)
+	}
+	mustGit(t, bare, "config", "core.hooksPath", "hooks")
+}
+
 // captureSlogLogsAtDebug is captureSlogLogs with a handler that emits Debug.
 func captureSlogLogsAtDebug() (*bytes.Buffer, func()) {
 	buf := &bytes.Buffer{}
@@ -140,9 +179,10 @@ func TestFlushBudgetLine(t *testing.T) {
 }
 
 // TestFlushDeadlineCut proves a flush that cannot finish is cut at its own
-// deadline, keeps the pending batch staged and does not fail the pull.
+// deadline, retains its commit and clears the pending set, and does not fail
+// the pull: the pull delivers the retained commit in the same cycle.
 func TestFlushDeadlineCut(t *testing.T) {
-	client, work, bare := newCoalesceFixture(t, git.CoalesceConfig{
+	client, fake, work, bare := newCoalesceFixtureWithMetrics(t, git.CoalesceConfig{
 		Enabled:  true,
 		Delay:    time.Hour,
 		MaxDelay: time.Hour,
@@ -151,7 +191,7 @@ func TestFlushDeadlineCut(t *testing.T) {
 	if err := client.WriteFile(ctx, "tasks/x.md", []byte("L")); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	installBlockingPreReceive(t, bare)
+	installFirstPushRejection(t, bare)
 
 	buf, restore := captureSlogLogs()
 	defer restore()
@@ -163,13 +203,40 @@ func TestFlushDeadlineCut(t *testing.T) {
 	elapsed := time.Since(started)
 
 	if err != nil {
-		t.Fatalf("pull after cut flush: %v", err)
+		t.Fatalf("pull after cut flush: %v, logs:\n%s", err, buf.String())
 	}
-	if status := mustGit(t, work, "status", "--porcelain"); !strings.Contains(
-		status,
-		"tasks/x.md",
-	) {
-		t.Fatalf("want tasks/x.md still staged, status %q", status)
+	if got := strings.TrimSpace(
+		mustGit(t, work, "log", "-1", "--format=%s"),
+	); got != "git-rest: create tasks/x.md" {
+		t.Fatalf("want retained commit at HEAD, got %q, logs:\n%s", got, buf.String())
+	}
+	if status := strings.TrimSpace(
+		mustGit(t, work, "status", "--porcelain"),
+	); status != "" {
+		t.Fatalf("want clean work tree, got %q, logs:\n%s", status, buf.String())
+	}
+	if got := strings.TrimSpace(
+		mustGit(t, work, "rev-list", "--count", "origin/main..HEAD"),
+	); got != "0" {
+		t.Fatalf("want retained commit delivered, ahead=%q, logs:\n%s", got, buf.String())
+	}
+	subjects := originGitRestSubjects(t, bare, "main", "tasks/x.md")
+	if len(subjects) != 1 || subjects[0] != "git-rest: create tasks/x.md" {
+		t.Fatalf("want one create commit on origin, got %v, logs:\n%s", subjects, buf.String())
+	}
+	pendingCalls := fake.SetWritePendingCallCount()
+	if pendingCalls == 0 {
+		t.Fatal("want SetWritePending to have been called")
+	}
+	if got := fake.SetWritePendingArgsForCall(pendingCalls - 1); got != 0 {
+		t.Fatalf("want pending count 0 after cut flush, got %d", got)
+	}
+	flushCalls := fake.IncWriteFlushCallCount()
+	if flushCalls == 0 {
+		t.Fatal("want IncWriteFlush to have been called")
+	}
+	if got := fake.IncWriteFlushArgsForCall(flushCalls - 1); got != "error" {
+		t.Fatalf("want last flush outcome error, got %q", got)
 	}
 	if !strings.Contains(buf.String(), "git-rest: flush deadline exceeded before pull") {
 		t.Fatalf("want cut-off log in %q", buf.String())

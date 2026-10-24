@@ -7,6 +7,8 @@ verifying: "2026-10-22T14:55:11Z"
 branch: dark-factory/flush-timeout-isolation
 ---
 
+> **Superseded in part by `022-bug-coalesced-flush-discards-the-commit`.** A flush that committed now keeps its commit when its push fails or is cut at its own deadline, and clears the pending set: the paths are no longer left staged, and the dirty-tree rescue is no longer a cut flush's recovery path. What this spec established and 022 keeps is the budget rule — the pre-pull flush stays within one third of the pull budget — and the exact `git-rest: flush deadline exceeded before pull` record. `TestFlushDeadlineCut` and `TestFlushRescueLandsAfterFlushDeadline` were rewritten to the retained-commit contract.
+
 ## Summary
 
 - `020-commit-coalescing` put the pending-write flush at the top of `Pull`, so every pull cycle now pushes over the network before it does anything else.
@@ -65,12 +67,12 @@ Smallest reproduction, in-process against a real bare remote:
 
 ## Goal
 
-A pull cycle in which the flush cannot complete still performs the dirty-tree rescue and pushes the rescue branch, within the pull's own deadline. The flush is bounded; the merge and rescue are not.
+A pull cycle in which the flush cannot complete still performs the dirty-tree rescue and pushes the rescue branch, within the pull's own deadline. The flush is bounded; the merge and rescue are not. *(Superseded by 022: a cut flush retains its commit and the rescue is no longer its recovery path; the budget rule stands.)*
 
 ## Assumptions
 
 - The pull context carries a deadline in production. It does: `pkg/puller/puller.go:63` installs `--pull-timeout` (default 60 s) around `Pull`, and the startup pull is separately bounded by `syncOnStartupTimeout = 60 * time.Second` (`main.go:209`). Both are deadlines on the context `Pull` receives.
-- A rejected flush is recoverable: the staged work survives on disk, so a flush cut short by its own deadline loses nothing that a later flush cannot push.
+- A rejected flush is recoverable: the staged work survives on disk, so a flush cut short by its own deadline loses nothing that a later flush cannot push. *(Superseded by 022: a flush that committed retains its commit and clears the pending set, so recovery rests on the retained commit rather than on staged work surviving on disk.)*
 - **The rescue needs roughly two thirds of a 60 s budget.** Measured on the rollback control: `v0.33.2` completed rescue, merge and push within ~40 s of a 60 s startup budget. That is why the flush is capped at a **third** and not at half — a half-budget cap would leave the rescue 30 s for work measured at 40 s, and the reserve would be smallest exactly when the remote is contended and the rescue push is slowest.
 
 ## Non-goals
@@ -126,8 +128,8 @@ A pull cycle in which the flush cannot complete still performs the dirty-tree re
 | Trigger | Expected behavior | Recovery |
 |---|---|---|
 | `--pull-timeout=0` | No deadline on the context; no derived flush deadline; pre-fix behaviour | Debug log line `flush deadline skipped: no pull deadline`; nothing to recover |
-| Flush killed after the remote accepted the ref | The pending set is **retained** and HEAD is reset (`flushPendingLocked` clears `g.pending` only on success, `git.go:920-922`; on push error it calls `restorePendingIndexLocked`, `git.go:916`), so the next cycle re-commits and re-pushes the same content — landing a second commit with an identical tree if the first push had in fact landed | `git -C /data log origin/main --oneline -2` shows two commits with the same `git-rest:` subject; harmless, no action. This window widens under the third-budget cap, so it is expected, not a regression |
-| Remote very slow but not rejecting | Flush cut at one third; the batch stays staged and is retried next cycle | `grep -c 'flush deadline exceeded before pull'` rises while `git-rest: flushed pending writes` still rises over time; if only the former rises for an hour, raise `--pull-timeout` |
+| Flush killed after the remote accepted the ref | **Superseded by 022:** the commit is retained, the pending set is cleared, and the next pull pushes or merges it — no re-commit. | `git -C /data log origin/main --oneline -2` shows two commits with the same `git-rest:` subject; harmless, no action. This window widens under the third-budget cap, so it is expected, not a regression |
+| Remote very slow but not rejecting | Flush cut at one third; **superseded by 022:** the commit is retained and the pending set cleared, and the next pull delivers it. | `grep -c 'flush deadline exceeded before pull'` rises while `git-rest: flushed pending writes` still rises over time; if only the former rises for an hour, raise `--pull-timeout` |
 | Rescue push rejected | `rescueDirtyTree` logs `rescue push failed, leaving repo for inspection` | `git -C /data for-each-ref refs/heads/rescue` lists the ref; operator inspects and pushes by hand |
 | Flush deadline fires every cycle, nothing lands | No write ever reaches the remote | AC7 fails (`flushed pending writes` = 0 over ten minutes); treat as a regression, do not promote |
 

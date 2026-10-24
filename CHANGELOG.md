@@ -8,6 +8,10 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 * MINOR version when you add functionality in a backwards-compatible manner, and
 * PATCH version when you make backwards-compatible bug fixes.
 
+## Unreleased
+
+- fix: Keep the commit a coalesced flush made when its push fails instead of resetting HEAD below it and leaving the paths staged. A rejected push, or a flush cut at its own deadline, now leaves the write as a real local commit, clears the pending set and `git_rest_write_pending`, and logs `git-rest: flush push failed, commit retained` with the commit SHA and path count; the next pull pushes that retained commit or merges it, so a modify/modify divergence reaches the pull path's conflict machinery and the vault-api resolver fires under the default coalescing configuration. Supersedes the v0.34.1 rule that a cut flush leaves its paths staged for the next cycle, and the rescue-after-cut recovery that depended on it.
+
 ## v0.36.1
 
 - fix: Configure the served clone's origin fetch at startup to carry `refs/claims/*` into a local `refs/claim-mirror/*` namespace and enable `remote.origin.prune`, so the puller's existing fetch maintains a local claim-ref mirror. The step is idempotent and a failure is logged without aborting startup.

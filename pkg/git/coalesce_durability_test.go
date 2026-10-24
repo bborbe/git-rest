@@ -8,6 +8,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -15,8 +16,29 @@ import (
 	"github.com/bborbe/git-rest/pkg/git"
 )
 
-// TestFlushPushFailureKeepsPending proves a failed push never drops the batch:
-// the pending set and the index survive, and the next tick retries.
+// assertRetainedCommitLog checks the failed-flush WARN record names the
+// retained commit's SHA and its path count, and that the SHA is HEAD.
+func assertRetainedCommitLog(t *testing.T, work, logs string) {
+	t.Helper()
+	if !strings.Contains(logs, "git-rest: flush push failed, commit retained") {
+		t.Fatalf("want retained-commit log in %q", logs)
+	}
+	if !strings.Contains(logs, "paths=1") {
+		t.Fatalf("want paths=1 in %q", logs)
+	}
+	match := regexp.MustCompile(`commit=([0-9a-f]{40})`).FindStringSubmatch(logs)
+	if match == nil {
+		t.Fatalf("want commit SHA in %q", logs)
+	}
+	if want := strings.TrimSpace(mustGit(t, work, "rev-parse", "HEAD")); match[1] != want {
+		t.Fatalf("logged commit %q != HEAD %q", match[1], want)
+	}
+}
+
+// TestFlushPushFailureKeepsPending proves a failed coalesced push retains its
+// commit and clears the pending set, so the same batch is never re-committed on
+// top of its own commit, and the next pull delivers the retained commit once the
+// remote accepts pushes again.
 func TestFlushPushFailureKeepsPending(t *testing.T) {
 	ctx := context.Background()
 	client, fake, work, bare := newCoalesceFixtureWithMetrics(t, git.CoalesceConfig{
@@ -39,16 +61,37 @@ func TestFlushPushFailureKeepsPending(t *testing.T) {
 	// test is correct. Same guard as installPreReceiveRejection.
 	mustGit(t, bare, "config", "core.hooksPath", "hooks")
 
+	buf, restore := captureSlogLogs()
+	defer restore()
+
 	if err := client.FlushPending(ctx); err == nil {
 		t.Fatal("want flush to fail while the origin rejects pushes")
 	}
 
+	if got := strings.TrimSpace(
+		mustGit(t, work, "log", "-1", "--format=%s"),
+	); got != "git-rest: update notes/x.md" {
+		t.Fatalf("want retained commit at HEAD, got %q", got)
+	}
+	if status := strings.TrimSpace(
+		mustGit(t, work, "status", "--porcelain"),
+	); status != "" {
+		t.Fatalf("want clean work tree after failed push, got %q", status)
+	}
+	if got := strings.TrimSpace(
+		mustGit(t, work, "rev-list", "--count", "origin/main..HEAD"),
+	); got != "1" {
+		t.Fatalf("want 1 local commit above origin, got %q", got)
+	}
 	if got := originGitRestSubjects(t, bare, "main", "notes/x.md"); len(got) != 0 {
 		t.Fatalf("want no git-rest commit on origin, got %v", got)
 	}
-	staged := strings.TrimSpace(mustGit(t, work, "diff", "--cached", "--name-only"))
-	if staged != "notes/x.md" {
-		t.Fatalf("want notes/x.md staged after failed push, got %q", staged)
+	pendingCalls := fake.SetWritePendingCallCount()
+	if pendingCalls == 0 {
+		t.Fatal("want SetWritePending to have been called")
+	}
+	if got := fake.SetWritePendingArgsForCall(pendingCalls - 1); got != 0 {
+		t.Fatalf("want pending count 0 after failed push, got %d", got)
 	}
 	flushCalls := fake.IncWriteFlushCallCount()
 	if flushCalls == 0 {
@@ -57,21 +100,22 @@ func TestFlushPushFailureKeepsPending(t *testing.T) {
 	if got := fake.IncWriteFlushArgsForCall(flushCalls - 1); got != "error" {
 		t.Fatalf("want last flush outcome error, got %q", got)
 	}
-	pendingCalls := fake.SetWritePendingCallCount()
-	if pendingCalls == 0 {
-		t.Fatal("want SetWritePending to have been called")
-	}
-	if got := fake.SetWritePendingArgsForCall(pendingCalls - 1); got <= 0 {
-		t.Fatalf("want pending count > 0 after failed push, got %d", got)
-	}
+	assertRetainedCommitLog(t, work, buf.String())
 
 	if err := os.Remove(hook); err != nil {
 		t.Fatalf("remove pre-receive hook: %v", err)
 	}
-	if err := client.FlushPending(ctx); err != nil {
-		t.Fatalf("retry flush: %v", err)
+	if err := client.Pull(ctx); err != nil {
+		t.Fatalf("pull: %v", err)
 	}
 
+	assertRetainedCommitDelivered(t, work, bare)
+}
+
+// assertRetainedCommitDelivered checks the pull pushed the retained commit to
+// the origin once the hook stopped rejecting pushes.
+func assertRetainedCommitDelivered(t *testing.T, work, bare string) {
+	t.Helper()
 	subjects := originGitRestSubjects(t, bare, "main", "notes/x.md")
 	if len(subjects) != 1 {
 		t.Fatalf("want exactly 1 git-rest commit on origin, got %d: %v", len(subjects), subjects)
@@ -82,13 +126,15 @@ func TestFlushPushFailureKeepsPending(t *testing.T) {
 	if got := mustGit(t, bare, "show", "main:notes/x.md"); got != "P" {
 		t.Fatalf("want content P on origin, got %q", got)
 	}
-	flushCalls = fake.IncWriteFlushCallCount()
-	if got := fake.IncWriteFlushArgsForCall(flushCalls - 1); got != "ok" {
-		t.Fatalf("want last flush outcome ok, got %q", got)
+	if got := strings.TrimSpace(
+		mustGit(t, work, "rev-list", "--count", "origin/main..HEAD"),
+	); got != "0" {
+		t.Fatalf("want retained commit delivered, ahead=%q", got)
 	}
-	pendingCalls = fake.SetWritePendingCallCount()
-	if got := fake.SetWritePendingArgsForCall(pendingCalls - 1); got != 0 {
-		t.Fatalf("want pending count 0 after successful flush, got %d", got)
+	if status := strings.TrimSpace(
+		mustGit(t, work, "status", "--porcelain"),
+	); status != "" {
+		t.Fatalf("want clean work tree after delivery, got %q", status)
 	}
 }
 
