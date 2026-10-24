@@ -8,6 +8,10 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 * MINOR version when you add functionality in a backwards-compatible manner, and
 * PATCH version when you make backwards-compatible bug fixes.
 
+## Unreleased
+
+- fix: Configure the served clone's origin fetch at startup to carry `refs/claims/*` into a local `refs/claim-mirror/*` namespace and enable `remote.origin.prune`, so the puller's existing fetch maintains a local claim-ref mirror. The step is idempotent and a failure is logged without aborting startup.
+
 ## v0.35.0
 
 - feat: Resolve pull conflicts through vault-api's `POST /api/v1/merge` on vault-write pods. For each conflicted path the new resolver reads the three index stages — base, ours, theirs — pairs them with the merge base's and both parents' committer times, and posts them with the caller header so vault-api's log attributes the merge to `git-rest` rather than to an operator's curl. vault-api owns the per-key frontmatter rules and **returns** the merged bytes (`apply: false`) rather than writing them: this process is mid-pull holding the repository mutex, so a write back through git-rest's own API would wait on the lock the pull holds and never return — measured, the client timed out at 30s with vault-api's handler still blocked. The resolver writes the bytes itself and stages them. Every decline — an unreachable vault-api, a quarantined file, or a conflict with no base stage such as add/add — falls through to the existing `YAMLMergeResolver` for that path alone, so enabling this can only add resolutions, never remove one, and one declined path no longer aborts the rest. Opt-in: `--vault-api-url` / `VAULT_API_URL` with `--vault-api-secret` / `VAULT_API_SECRET`; unset keeps today's behaviour exactly.

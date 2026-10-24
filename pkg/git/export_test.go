@@ -56,6 +56,12 @@ func NewGitWithClaimOrigin(origin ClaimOrigin) Git {
 	return &git{origin: origin}
 }
 
+// NewGitWithClaimMirrorForTest returns a Git backed by repoPath whose
+// origin-contacting operations go to origin. Test builds only.
+func NewGitWithClaimMirrorForTest(repoPath string, origin ClaimOrigin) Git {
+	return &git{repoPath: repoPath, origin: origin}
+}
+
 // NewYAMLMergeResolverWithSideTimes exposes a resolver whose merge-parent
 // committer timestamps are stubbed, so external tests can choose the newer side
 // deterministically. Test builds only.

@@ -21,6 +21,17 @@ type FakeGit struct {
 	cloneReturnsOnCall map[int]struct {
 		result1 error
 	}
+	ConfigureClaimMirrorStub        func(context.Context) error
+	configureClaimMirrorMutex       sync.RWMutex
+	configureClaimMirrorArgsForCall []struct {
+		arg1 context.Context
+	}
+	configureClaimMirrorReturns struct {
+		result1 error
+	}
+	configureClaimMirrorReturnsOnCall map[int]struct {
+		result1 error
+	}
 	ConfigurePackMemoryStub        func(context.Context) error
 	configurePackMemoryMutex       sync.RWMutex
 	configurePackMemoryArgsForCall []struct {
@@ -283,6 +294,67 @@ func (fake *FakeGit) CloneReturnsOnCall(i int, result1 error) {
 		})
 	}
 	fake.cloneReturnsOnCall[i] = struct {
+		result1 error
+	}{result1}
+}
+
+func (fake *FakeGit) ConfigureClaimMirror(arg1 context.Context) error {
+	fake.configureClaimMirrorMutex.Lock()
+	ret, specificReturn := fake.configureClaimMirrorReturnsOnCall[len(fake.configureClaimMirrorArgsForCall)]
+	fake.configureClaimMirrorArgsForCall = append(fake.configureClaimMirrorArgsForCall, struct {
+		arg1 context.Context
+	}{arg1})
+	stub := fake.ConfigureClaimMirrorStub
+	fakeReturns := fake.configureClaimMirrorReturns
+	fake.recordInvocation("ConfigureClaimMirror", []interface{}{arg1})
+	fake.configureClaimMirrorMutex.Unlock()
+	if stub != nil {
+		return stub(arg1)
+	}
+	if specificReturn {
+		return ret.result1
+	}
+	return fakeReturns.result1
+}
+
+func (fake *FakeGit) ConfigureClaimMirrorCallCount() int {
+	fake.configureClaimMirrorMutex.RLock()
+	defer fake.configureClaimMirrorMutex.RUnlock()
+	return len(fake.configureClaimMirrorArgsForCall)
+}
+
+func (fake *FakeGit) ConfigureClaimMirrorCalls(stub func(context.Context) error) {
+	fake.configureClaimMirrorMutex.Lock()
+	defer fake.configureClaimMirrorMutex.Unlock()
+	fake.ConfigureClaimMirrorStub = stub
+}
+
+func (fake *FakeGit) ConfigureClaimMirrorArgsForCall(i int) context.Context {
+	fake.configureClaimMirrorMutex.RLock()
+	defer fake.configureClaimMirrorMutex.RUnlock()
+	argsForCall := fake.configureClaimMirrorArgsForCall[i]
+	return argsForCall.arg1
+}
+
+func (fake *FakeGit) ConfigureClaimMirrorReturns(result1 error) {
+	fake.configureClaimMirrorMutex.Lock()
+	defer fake.configureClaimMirrorMutex.Unlock()
+	fake.ConfigureClaimMirrorStub = nil
+	fake.configureClaimMirrorReturns = struct {
+		result1 error
+	}{result1}
+}
+
+func (fake *FakeGit) ConfigureClaimMirrorReturnsOnCall(i int, result1 error) {
+	fake.configureClaimMirrorMutex.Lock()
+	defer fake.configureClaimMirrorMutex.Unlock()
+	fake.ConfigureClaimMirrorStub = nil
+	if fake.configureClaimMirrorReturnsOnCall == nil {
+		fake.configureClaimMirrorReturnsOnCall = make(map[int]struct {
+			result1 error
+		})
+	}
+	fake.configureClaimMirrorReturnsOnCall[i] = struct {
 		result1 error
 	}{result1}
 }

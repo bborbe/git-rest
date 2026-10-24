@@ -160,6 +160,10 @@ type Git interface {
 	Clone(ctx context.Context, remoteURL RemoteURL) error
 	ConfigureUser(ctx context.Context, name string, email string) error
 	ConfigurePackMemory(ctx context.Context) error
+	// ConfigureClaimMirror configures the clone's origin fetch to carry the claim
+	// namespace into refs/claim-mirror/* and enables remote.origin.prune. It is
+	// idempotent and must never abort startup on failure.
+	ConfigureClaimMirror(ctx context.Context) error
 	Init(ctx context.Context) error
 	// ListClaimRefs returns the claim refs under refs/<prefix>, read live from the
 	// origin. All listed commits are fetched in one batched git invocation; when

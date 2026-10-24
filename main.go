@@ -401,14 +401,23 @@ func (a *application) createGitClient(ctx context.Context) (git.Git, error) {
 	}
 
 	m := metrics.NewMetrics()
-	return factory.CreateGitClient(
+	gitClient := factory.CreateGitClient(
 		a.Repo,
 		m,
 		libtime.NewCurrentDateTime(),
 		a.GitSSHKey,
 		a.selectResolver(m),
 		git.WithCoalesce(a.coalesceConfig()),
-	), nil
+	)
+	if err := gitClient.ConfigureClaimMirror(ctx); err != nil {
+		slog.WarnContext(
+			ctx,
+			"git-rest: claim mirror configuration failed; claim reads will use the live origin",
+			"error",
+			err,
+		)
+	}
+	return gitClient, nil
 }
 
 // createMemoryReporter returns a run.Func that samples process memory and logs
