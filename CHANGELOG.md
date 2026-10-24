@@ -8,7 +8,7 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 * MINOR version when you add functionality in a backwards-compatible manner, and
 * PATCH version when you make backwards-compatible bug fixes.
 
-## Unreleased
+## v0.36.0
 
 - feat: Give the Helm chart a per-vault `vaultApi.url`, so a vault-write instance can be deployed with the vault-api merge resolver enabled from the values file instead of a flag an operator has to remember. When set, the chart emits `VAULT_API_URL` plus `VAULT_API_SECRET` by `secretKeyRef` from the same `existingSecret` the instance already uses (`gateway-secret` key), because vault-api refuses a merge unless its own `GATEWAY_SECRET` matches the value sent — the URL and the credential that must match it are declared together and no secret value enters the values file. Unset keeps the YAML-only resolver, so a cluster with no `vault-api-<name>` Service is unaffected; the URL is not derived from the vault name, since a wrong guess would make every conflict log a failed request before falling back. Chart `0.1.2`.
 
