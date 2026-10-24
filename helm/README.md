@@ -63,7 +63,22 @@ vaults:
 | `resources` | 20m/50Mi → 500m/256Mi | per-vault container resources |
 | `keel.enabled` | `false` | keel registry-poll auto-redeploy |
 | `alerts.enabled` | `false` | quant Alert CRs (needs the CRD) |
-| `vaults[]` | `[]` | `{name, repoUrl, writeMode?, existingSecret? \| secret{}, storage{size,storageClassName}}` |
+| `vaults[]` | `[]` | `{name, repoUrl, writeMode?, existingSecret? \| secret{}, storage{size,storageClassName}, vaultApi?}` |
+| `vaults[].vaultApi.url` | `""` (off) | vault-api base URL, e.g. `http://vault-api-personal:9090`. Set it on a vault-write instance to resolve pull conflicts through vault-api's merge rules; empty keeps the YAML-only resolver |
+
+## vault-api merge resolver (`vaults[].vaultApi.url`)
+
+On a `writeMode: true` vault, setting `vaultApi.url` makes git-rest post each
+conflicted path's three sides to vault-api's `POST /api/v1/merge` and stage the
+returned bytes; every decline falls back to the YAML resolver for that path. The
+chart also sets `VAULT_API_SECRET` from the vault's own `gateway-secret` key
+(`existingSecret` or inline), because vault-api refuses a merge unless its
+`GATEWAY_SECRET` matches — the URL and the credential that must match it are
+therefore declared together, and the value never appears in the values file.
+
+The URL is per vault, not derived: the chart cannot know which `vault-api-<name>`
+Service exists on a given cluster, and a wrong guess would make every conflict
+log a failed request before falling back.
 
 ## License
 
