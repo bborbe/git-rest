@@ -62,6 +62,30 @@ func NewGitWithClaimMirrorForTest(repoPath string, origin ClaimOrigin) Git {
 	return &git{repoPath: repoPath, origin: origin}
 }
 
+// SetClaimMirrorFreshAtForTest sets the recorded last-claims-fetch time.
+// Test builds only.
+func SetClaimMirrorFreshAtForTest(g Git, at time.Time) {
+	impl, ok := g.(*git)
+	if !ok {
+		panic("SetClaimMirrorFreshAtForTest: Git is not a *git")
+	}
+	impl.claimMirrorMu.Lock()
+	impl.claimMirrorFreshAt = at
+	impl.claimMirrorMu.Unlock()
+}
+
+// ClaimMirrorFreshAtForTest returns the recorded last-claims-fetch time.
+// Test builds only.
+func ClaimMirrorFreshAtForTest(g Git) time.Time {
+	impl, ok := g.(*git)
+	if !ok {
+		panic("ClaimMirrorFreshAtForTest: Git is not a *git")
+	}
+	impl.claimMirrorMu.RLock()
+	defer impl.claimMirrorMu.RUnlock()
+	return impl.claimMirrorFreshAt
+}
+
 // NewYAMLMergeResolverWithSideTimes exposes a resolver whose merge-parent
 // committer timestamps are stubbed, so external tests can choose the newer side
 // deterministically. Test builds only.

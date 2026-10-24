@@ -1,8 +1,13 @@
 ---
-status: approved
+status: completed
 spec: [022-claim-ref-local-mirror]
+summary: Recorded a claims-specific last-successful-fetch timestamp in the pull path, advanced only when the claim refspec was present, with a derived staleness bound and tests.
+execution_id: git-rest-claim-mirror-exec-083-spec-022-claim-mirror-pull-refresh
+dark-factory-version: v0.198.7
 created: "2026-10-24T15:44:42Z"
 queued: "2026-10-24T15:56:01Z"
+started: "2026-10-24T15:59:05Z"
+completed: "2026-10-24T16:02:51Z"
 branch: dark-factory/claim-ref-local-mirror
 ---
 

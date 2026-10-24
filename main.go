@@ -408,6 +408,7 @@ func (a *application) createGitClient(ctx context.Context) (git.Git, error) {
 		a.GitSSHKey,
 		a.selectResolver(m),
 		git.WithCoalesce(a.coalesceConfig()),
+		git.WithClaimMirrorPullInterval(a.PullInterval),
 	)
 	if err := gitClient.ConfigureClaimMirror(ctx); err != nil {
 		slog.WarnContext(

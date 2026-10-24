@@ -4,6 +4,7 @@ spec: [022-claim-ref-local-mirror]
 created: "2026-10-24T15:44:42Z"
 queued: "2026-10-24T15:56:08Z"
 branch: dark-factory/claim-ref-local-mirror
+cancelled: "2026-10-24T15:59:41Z"
 ---
 
 <summary>
@@ -68,15 +69,15 @@ Do not change the response body, the key set, the sort order, the `[]`-not-`null
 
 ## 2. `CHANGELOG.md`
 
-Add, immediately after the header block (after the SemVer bullet list) and before `## v0.35.0`:
+**A `## Unreleased` heading already exists** — the earlier prompts in this batch each added their own bullet under it, and it sits between the SemVer bullet list and `## v0.35.0`. Do **not** create a second `## Unreleased` heading; a duplicate heading is a malformed changelog and the `awk` check below would still pass, so nothing would catch it.
+
+Read `CHANGELOG.md` first, then append the bullet as the **last** line of the existing `## Unreleased` section (immediately before the blank line that precedes `## v0.35.0`):
 
 ```markdown
-## Unreleased
-
 - fix: Serve `GET /api/v1/refs` from a locally maintained claim-ref mirror refreshed by the puller's periodic fetch, so a claim-ref read no longer needs the network while the mirror is fresh. A stale or unconfigured mirror falls back to the live origin, cross-cluster visibility is bounded by one pull cycle, and each read logs `served_from=mirror|origin`.
 ```
 
-The bullet must contain the literal phrase `claim-ref mirror` (or `claim ref mirror`) — the acceptance check selects the section by that phrase. One bullet per logical change; do not append unrelated entries and do not create a new version heading.
+The bullet must contain the literal phrase `claim-ref mirror` (or `claim ref mirror`) — the acceptance check selects the section by that phrase. One bullet per logical change; do not append unrelated entries and do not create a new version heading. After editing, confirm exactly one `## Unreleased` heading exists: `grep -c '^## Unreleased$' CHANGELOG.md` must print `1`.
 
 ## 3. Final verification
 

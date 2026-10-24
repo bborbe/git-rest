@@ -199,6 +199,10 @@ type CoalesceConfig struct {
 // GitOptions holds optional configuration for New.
 type GitOptions struct {
 	Coalesce CoalesceConfig
+	// ClaimMirrorPullInterval is the configured pull interval. The claim-mirror
+	// staleness bound is derived from it (twice the interval, floor 60 s).
+	// Zero uses the floor.
+	ClaimMirrorPullInterval libtime.Duration
 }
 
 // GitOption modifies GitOptions.
@@ -208,6 +212,14 @@ type GitOption func(*GitOptions)
 func WithCoalesce(config CoalesceConfig) GitOption {
 	return func(opts *GitOptions) {
 		opts.Coalesce = config
+	}
+}
+
+// WithClaimMirrorPullInterval sets the pull interval the claim-mirror
+// staleness bound is derived from.
+func WithClaimMirrorPullInterval(interval libtime.Duration) GitOption {
+	return func(opts *GitOptions) {
+		opts.ClaimMirrorPullInterval = interval
 	}
 }
 
@@ -232,6 +244,7 @@ func New(
 		resolver:              resolver,
 		coalesce:              gitOptions.Coalesce,
 		pending:               make(map[string]pendingWrite),
+		pullInterval:          gitOptions.ClaimMirrorPullInterval,
 	}
 	g.origin = &gitOrigin{g: g}
 	return g
@@ -255,6 +268,9 @@ type git struct {
 	origin                ClaimOrigin
 	coalesce              CoalesceConfig
 	pending               map[string]pendingWrite
+	pullInterval          libtime.Duration
+	claimMirrorMu         sync.RWMutex
+	claimMirrorFreshAt    time.Time
 }
 
 // validatePath rejects empty, absolute, path-traversal, and .git paths.
@@ -1232,6 +1248,11 @@ func (g *git) pullFetchSHAs(
 		g.metrics.IncGitOperationError("fetch")
 		return "", "", "", errors.Wrap(ctx, fetchErr, "fetch failed")
 	}
+	// The freshness time describes the fetch step only. A pull whose merge,
+	// rescue or push later fails still leaves a genuinely refreshed mirror, so
+	// the record must not depend on the state machine. A failed fetch returns
+	// above and never reaches this line, retaining the previous value.
+	g.recordClaimMirrorFetch(ctx, time.Now())
 	localOut, e := g.runCmdOutput(ctx, g.repoPath, "rev-parse", "HEAD")
 	if e != nil {
 		g.metrics.IncGitOperationError("pull")
