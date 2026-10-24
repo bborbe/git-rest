@@ -6,6 +6,8 @@ package git
 
 import (
 	"context"
+	"log/slog"
+	"sort"
 	"strings"
 	"time"
 
@@ -15,6 +17,9 @@ import (
 // claimMirrorNamespace is the local namespace the claims refspec writes.
 const claimMirrorNamespace = "refs/claim-mirror/"
 
+// claimRefNamespace is the origin namespace mirrored into claimMirrorNamespace.
+const claimRefNamespace = "refs/" + claimKeyPrefix
+
 // claimMirrorRefspec carries the claim namespace into a mirror namespace the
 // default heads refspec cannot reach.
 const claimMirrorRefspec = "+refs/claims/*:" + claimMirrorNamespace + "*"
@@ -22,9 +27,9 @@ const claimMirrorRefspec = "+refs/claims/*:" + claimMirrorNamespace + "*"
 const (
 	// claimMirrorStalenessFactor multiplies the pull interval to derive the
 	// staleness bound.
-	claimMirrorStalenessFactor = 2 //nolint:unused // consumed by the mirror read path
+	claimMirrorStalenessFactor = 2
 	// claimMirrorMinStaleness is the floor of the staleness bound.
-	claimMirrorMinStaleness = 60 * time.Second //nolint:unused // consumed by the mirror read path
+	claimMirrorMinStaleness = 60 * time.Second
 )
 
 // ConfigureClaimMirror makes the clone's origin fetch carry the claim namespace
@@ -61,8 +66,6 @@ func (g *git) ConfigureClaimMirror(ctx context.Context) error {
 
 // claimMirrorStalenessBound returns twice the configured pull interval, with a
 // floor of 60 seconds. It is derived, never configured separately.
-//
-//nolint:unused // consumed by the mirror read path
 func (g *git) claimMirrorStalenessBound() time.Duration {
 	bound := claimMirrorStalenessFactor * time.Duration(g.pullInterval)
 	if bound < claimMirrorMinStaleness {
@@ -95,12 +98,107 @@ func (g *git) recordClaimMirrorFetch(ctx context.Context, at time.Time) {
 }
 
 // claimMirrorFreshAtTime returns the recorded time, zero when never recorded.
-//
-//nolint:unused // consumed by the mirror read path
 func (g *git) claimMirrorFreshAtTime() time.Time {
 	g.claimMirrorMu.RLock()
 	defer g.claimMirrorMu.RUnlock()
 	return g.claimMirrorFreshAt
+}
+
+// claimMirrorAge reports the age of the last claims-specific fetch and whether
+// the mirror is fresh enough to serve. A never-recorded time, or one older than
+// the staleness bound, reports false. A negative age (wall clock stepped
+// backwards) is clamped to zero so it cannot be mistaken for stale.
+func (g *git) claimMirrorAge() (time.Duration, bool) {
+	freshAt := g.claimMirrorFreshAtTime()
+	if freshAt.IsZero() {
+		return 0, false
+	}
+	age := time.Since(freshAt)
+	if age < 0 {
+		age = 0
+	}
+	if age > g.claimMirrorStalenessBound() {
+		return 0, false
+	}
+	return age, true
+}
+
+// listClaimRefsFromMirror lists claim refs from the local mirror. served=false
+// means the caller must take the live path; it is returned for every condition
+// that would make a mirror answer untrustworthy, and never together with a
+// partial result.
+func (g *git) listClaimRefsFromMirror(
+	ctx context.Context,
+	prefix string,
+) (claims []ClaimRef, served bool, err error) {
+	out, err := g.runCmdOutput(
+		ctx,
+		g.repoPath,
+		"for-each-ref",
+		"--format=%(objectname) %(refname)",
+		claimMirrorNamespace,
+	)
+	if err != nil {
+		slog.WarnContext(
+			ctx,
+			"git-rest: listing the local claim mirror failed; using the live origin",
+			"error", err,
+		)
+		return nil, false, nil
+	}
+	matched := make([]RemoteRef, 0)
+	for _, line := range strings.Split(string(out), "\n") {
+		sha, ref, found := strings.Cut(line, " ")
+		if !found {
+			continue
+		}
+		claimRef := claimRefNamespace + strings.TrimPrefix(ref, claimMirrorNamespace)
+		if !matchesClaimPrefix(claimRef, prefix) {
+			continue
+		}
+		matched = append(matched, RemoteRef{SHA: sha, Ref: claimRef})
+	}
+	sort.Slice(matched, func(i, j int) bool { return matched[i].Ref < matched[j].Ref })
+	if len(matched) == 0 {
+		return []ClaimRef{}, true, nil
+	}
+	result := make([]ClaimRef, 0, len(matched))
+	for _, entry := range matched {
+		select {
+		case <-ctx.Done():
+			return nil, false, errors.Wrap(ctx, ctx.Err(), "claim ref listing cancelled")
+		default:
+		}
+		message, readErr := g.origin.ReadCommitMessage(ctx, entry.SHA)
+		if readErr != nil {
+			slog.WarnContext(
+				ctx,
+				"git-rest: reading a mirrored claim commit failed; using the live origin",
+				"ref", entry.Ref,
+				"sha", entry.SHA,
+				"error", readErr,
+			)
+			return nil, false, nil
+		}
+		claim := ClaimRef{Ref: entry.Ref, SHA: entry.SHA}
+		cluster, taskID, leaseUntil, parseErr := parseClaimMetadata(ctx, message)
+		if parseErr != nil {
+			slog.WarnContext(
+				ctx,
+				"claim ref has unparseable metadata",
+				"ref", entry.Ref,
+				"sha", entry.SHA,
+				"error", parseErr,
+			)
+			result = append(result, claim)
+			continue
+		}
+		claim.Cluster = cluster
+		claim.TaskID = taskID
+		claim.LeaseUntil = leaseUntil
+		result = append(result, claim)
+	}
+	return result, true, nil
 }
 
 // hasConfigLine reports whether output contains want as a whole line.

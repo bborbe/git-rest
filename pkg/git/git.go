@@ -165,12 +165,10 @@ type Git interface {
 	// idempotent and must never abort startup on failure.
 	ConfigureClaimMirror(ctx context.Context) error
 	Init(ctx context.Context) error
-	// ListClaimRefs returns the claim refs under refs/<prefix>, read live from the
-	// origin. All listed commits are fetched in one batched git invocation; when
-	// that fetch fails, each commit is fetched on its own. An entry is dropped
-	// with one WARN only when a re-list shows its ref vanished or moved; a fetch
-	// failure for a ref that still points at the listed sha is returned as an
-	// error.
+	// ListClaimRefs returns the claim refs under refs/<prefix>. A fresh local
+	// claim mirror answers without touching the network; a stale, absent,
+	// unconfigured or object-missing mirror falls back to the live origin path.
+	// The response contract is identical on both paths.
 	ListClaimRefs(ctx context.Context, prefix string) ([]ClaimRef, error)
 	// PutClaimRef creates or renews refs/<key> with the origin's compare-and-swap.
 	// It returns the new commit sha. A lease mismatch returns ErrRefConflict.

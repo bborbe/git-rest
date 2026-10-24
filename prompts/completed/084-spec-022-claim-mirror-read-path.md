@@ -1,8 +1,13 @@
 ---
-status: approved
+status: completed
 spec: [022-claim-ref-local-mirror]
+summary: Added the claim-ref read dispatcher and local-mirror read path, falling back to the unchanged live origin on stale, unconfigured or object-missing mirrors, with tests for all AC3/4/5/8 cases.
+execution_id: git-rest-claim-mirror-exec-084-spec-022-claim-mirror-read-path
+dark-factory-version: v0.198.7
 created: "2026-10-24T15:44:42Z"
 queued: "2026-10-24T15:56:03Z"
+started: "2026-10-24T16:02:53Z"
+completed: "2026-10-24T16:07:35Z"
 branch: dark-factory/claim-ref-local-mirror
 ---
 
