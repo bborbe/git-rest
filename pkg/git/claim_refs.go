@@ -143,12 +143,36 @@ func (o *gitOrigin) ReadCommitMessage(ctx context.Context, sha string) ([]byte, 
 	return []byte(message), nil
 }
 
-// ListClaimRefs returns the claim refs under refs/<prefix>, read live from the
-// origin. All listed commits are fetched in one batched git invocation; when
-// that fetch fails, each commit is fetched on its own. An entry is dropped with
-// one WARN only when a re-list shows its ref vanished or moved; a fetch failure
-// for a ref that still points at the listed sha is returned as an error.
+// ListClaimRefs returns the claim refs under refs/<prefix>. It serves a fresh
+// local claim mirror without touching the network and falls back to the live
+// origin when the mirror is stale, absent, unconfigured or missing an object.
 func (g *git) ListClaimRefs(ctx context.Context, prefix string) ([]ClaimRef, error) {
+	if age, fresh := g.claimMirrorAge(); fresh {
+		claims, served, err := g.listClaimRefsFromMirror(ctx, prefix)
+		if err != nil {
+			return nil, err
+		}
+		if served {
+			slog.InfoContext(
+				ctx,
+				"git-rest: claim refs read",
+				"served_from", "mirror",
+				"age_s", int64(age.Seconds()),
+			)
+			return claims, nil
+		}
+	}
+	slog.InfoContext(ctx, "git-rest: claim refs read", "served_from", "origin")
+	return g.listClaimRefsLive(ctx, prefix)
+}
+
+// listClaimRefsLive lists claim refs from the origin. This is the pre-mirror
+// behaviour, unchanged. All listed commits are fetched in one batched git
+// invocation; when that fetch fails, each commit is fetched on its own. An entry
+// is dropped with one WARN only when a re-list shows its ref vanished or moved;
+// a fetch failure for a ref that still points at the listed sha is returned as
+// an error.
+func (g *git) listClaimRefsLive(ctx context.Context, prefix string) ([]ClaimRef, error) {
 	entries, err := g.origin.ListRefs(ctx, "refs/"+prefix+"*")
 	if err != nil {
 		return nil, errors.Wrap(ctx, err, "list claim refs")
@@ -367,6 +391,7 @@ func (g *git) PutClaimRef(
 	if err := g.pushClaimRef(ctx, key, request.ExpectedSHA, sha); err != nil {
 		return "", err
 	}
+	g.updateClaimMirrorRef(ctx, key, sha)
 	return sha, nil
 }
 
@@ -388,7 +413,11 @@ func (g *git) DeleteClaimRef(ctx context.Context, key string, expectedSHA string
 	if !g.hasRemote(ctx) {
 		return errors.Wrap(ctx, ErrNoRemote, "no origin remote configured")
 	}
-	return g.pushClaimRef(ctx, key, expectedSHA, "")
+	if err := g.pushClaimRef(ctx, key, expectedSHA, ""); err != nil {
+		return err
+	}
+	g.removeClaimMirrorRef(ctx, key)
+	return nil
 }
 
 // pushClaimRef pushes sha (or a deletion when sha is empty) to refs/<key> under

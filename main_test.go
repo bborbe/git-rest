@@ -930,13 +930,15 @@ func assertBinaryKeepsRunning(
 		t.Fatalf("binary exited early: %v: stderr=%s", err, stderr.String())
 	case <-time.After(time.Second):
 	}
+	_ = cmd.Process.Kill()
+	<-done
+	// Read the buffer only after Wait has returned: until then the process's
+	// stderr copier goroutine is still writing into it.
 	for _, marker := range []string{"flag provided but not defined", "unknown flag"} {
 		if strings.Contains(stderr.String(), marker) {
 			t.Fatalf("stderr contains %q: %s", marker, stderr.String())
 		}
 	}
-	_ = cmd.Process.Kill()
-	<-done
 }
 
 func TestSuite(t *testing.T) {

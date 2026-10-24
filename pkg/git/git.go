@@ -160,13 +160,15 @@ type Git interface {
 	Clone(ctx context.Context, remoteURL RemoteURL) error
 	ConfigureUser(ctx context.Context, name string, email string) error
 	ConfigurePackMemory(ctx context.Context) error
+	// ConfigureClaimMirror configures the clone's origin fetch to carry the claim
+	// namespace into refs/claim-mirror/* and enables remote.origin.prune. It is
+	// idempotent and must never abort startup on failure.
+	ConfigureClaimMirror(ctx context.Context) error
 	Init(ctx context.Context) error
-	// ListClaimRefs returns the claim refs under refs/<prefix>, read live from the
-	// origin. All listed commits are fetched in one batched git invocation; when
-	// that fetch fails, each commit is fetched on its own. An entry is dropped
-	// with one WARN only when a re-list shows its ref vanished or moved; a fetch
-	// failure for a ref that still points at the listed sha is returned as an
-	// error.
+	// ListClaimRefs returns the claim refs under refs/<prefix>. A fresh local
+	// claim mirror answers without touching the network; a stale, absent,
+	// unconfigured or object-missing mirror falls back to the live origin path.
+	// The response contract is identical on both paths.
 	ListClaimRefs(ctx context.Context, prefix string) ([]ClaimRef, error)
 	// PutClaimRef creates or renews refs/<key> with the origin's compare-and-swap.
 	// It returns the new commit sha. A lease mismatch returns ErrRefConflict.
@@ -195,6 +197,10 @@ type CoalesceConfig struct {
 // GitOptions holds optional configuration for New.
 type GitOptions struct {
 	Coalesce CoalesceConfig
+	// ClaimMirrorPullInterval is the configured pull interval. The claim-mirror
+	// staleness bound is derived from it (twice the interval, floor 60 s).
+	// Zero uses the floor.
+	ClaimMirrorPullInterval libtime.Duration
 }
 
 // GitOption modifies GitOptions.
@@ -204,6 +210,14 @@ type GitOption func(*GitOptions)
 func WithCoalesce(config CoalesceConfig) GitOption {
 	return func(opts *GitOptions) {
 		opts.Coalesce = config
+	}
+}
+
+// WithClaimMirrorPullInterval sets the pull interval the claim-mirror
+// staleness bound is derived from.
+func WithClaimMirrorPullInterval(interval libtime.Duration) GitOption {
+	return func(opts *GitOptions) {
+		opts.ClaimMirrorPullInterval = interval
 	}
 }
 
@@ -228,6 +242,7 @@ func New(
 		resolver:              resolver,
 		coalesce:              gitOptions.Coalesce,
 		pending:               make(map[string]pendingWrite),
+		pullInterval:          gitOptions.ClaimMirrorPullInterval,
 	}
 	g.origin = &gitOrigin{g: g}
 	return g
@@ -251,6 +266,9 @@ type git struct {
 	origin                ClaimOrigin
 	coalesce              CoalesceConfig
 	pending               map[string]pendingWrite
+	pullInterval          libtime.Duration
+	claimMirrorMu         sync.RWMutex
+	claimMirrorFreshAt    time.Time
 }
 
 // validatePath rejects empty, absolute, path-traversal, and .git paths.
@@ -1228,6 +1246,12 @@ func (g *git) pullFetchSHAs(
 		g.metrics.IncGitOperationError("fetch")
 		return "", "", "", errors.Wrap(ctx, fetchErr, "fetch failed")
 	}
+	// The freshness time describes the fetch step only. A pull whose merge,
+	// rescue or push later fails still leaves a genuinely refreshed mirror, so
+	// the record must not depend on the state machine. A failed fetch returns
+	// above and never reaches this line, retaining the previous value. The time
+	// comes from the injected getter, not time.Now(), matching the rest of pkg/.
+	g.recordClaimMirrorFetch(ctx, time.Time(g.currentDateTimeGetter.Now()))
 	localOut, e := g.runCmdOutput(ctx, g.repoPath, "rev-parse", "HEAD")
 	if e != nil {
 		g.metrics.IncGitOperationError("pull")
