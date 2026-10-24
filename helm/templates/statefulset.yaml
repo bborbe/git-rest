@@ -93,6 +93,20 @@ spec:
             - name: VAULT_WRITE_MODE
               value: 'true'
             {{- end }}
+            {{- with $vault.vaultApi }}
+            {{- with .url }}
+            - name: VAULT_API_URL
+              value: {{ . | quote }}
+            # vault-api refuses a merge unless its own GATEWAY_SECRET matches the
+            # one sent here, and this Secret already carries that key for this
+            # instance's own API — so the credential is referenced, never inlined.
+            - name: VAULT_API_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secretName }}
+                  key: gateway-secret
+            {{- end }}
+            {{- end }}
           ports:
             - containerPort: 9090
               name: http
