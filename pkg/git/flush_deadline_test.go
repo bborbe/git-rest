@@ -241,7 +241,13 @@ func TestFlushDeadlineCut(t *testing.T) {
 	if !strings.Contains(buf.String(), "git-rest: flush deadline exceeded before pull") {
 		t.Fatalf("want cut-off log in %q", buf.String())
 	}
-	if elapsed >= 6*time.Second {
+	// 8s, not the 6s this test carried before the retained-commit change: the
+	// cut baseline is the 3.3s flush third plus the 2s gitWaitDelay drain, and the
+	// pull now also delivers the retained commit in the same cycle — a push the
+	// pre-fix flow never spent. The bound still discriminates: an uncut flush
+	// runs into the 10s pull context (measured 13.5s with the drain), and the
+	// hook stalls the first push for up to 15s. Keep it below 10s.
+	if elapsed >= 8*time.Second {
 		t.Fatalf("flush was not bounded: pull took %v", elapsed)
 	}
 }

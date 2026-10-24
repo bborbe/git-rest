@@ -10,6 +10,7 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 
 ## Unreleased
 
+- test: Raise `TestFlushDeadlineCut`'s elapsed bound from 6 s to 8 s, because the retained commit now makes a delivery push in the same pull cycle that the pre-fix flow never spent; the bound still separates a cut flush (10 s pull context) from an uncut one.
 - fix: Keep the commit a coalesced flush made when its push fails instead of resetting HEAD below it and leaving the paths staged. A rejected push, or a flush cut at its own deadline, now leaves the write as a real local commit, clears the pending set and `git_rest_write_pending`, and logs `git-rest: flush push failed, commit retained` with the commit SHA and path count; the next pull pushes that retained commit or merges it, so a modify/modify divergence reaches the pull path's conflict machinery and the vault-api resolver fires under the default coalescing configuration. Supersedes the v0.34.1 rule that a cut flush leaves its paths staged for the next cycle, and the rescue-after-cut recovery that depended on it.
 
 ## v0.36.1
