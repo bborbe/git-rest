@@ -766,6 +766,12 @@ func (g *git) writeFileLocked(
 ) error {
 	fullPath := filepath.Join(g.repoPath, path)
 
+	// Normalize the documented phase alias on every task-file write, before the
+	// unchanged-content check so a repeat write of an already-normalized body
+	// still short-circuits. This is independent of the frontmatter guard below
+	// and runs for creates as well as overwrites.
+	content = normalizeTaskPhase(path, content)
+
 	// Refuse to overwrite an existing task file with content that carries no
 	// frontmatter: a task file without its frontmatter is no longer a task
 	// file. This runs before any filesystem mutation, so the existing file
