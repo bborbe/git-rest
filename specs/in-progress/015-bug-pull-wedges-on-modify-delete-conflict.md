@@ -7,6 +7,8 @@ verifying: "2026-10-07T19:55:10Z"
 branch: dark-factory/bug-pull-wedges-on-modify-delete-conflict
 ---
 
+> **Partly superseded** by `specs/bug-quarantined-path-aborts-whole-merge.md`. Superseded: Desired Behavior 5 ("the nesting guard still refuses a genuine re-quarantine … the merge aborts"), the second clause of the AC titled "The drain does not trip the nesting guard, and a genuine re-quarantine still does" (its first clause, the drain's `nested_source` delta of 0, stays in force), the Failure Modes row "`_conflicts/` path conflicted with no upstream deletion", and the live test `pkg/git/git_test.go:2916` `"AC8: is still refused by the nesting guard"`. A conflicted `_conflicts/` path with no upstream deletion is now skipped and kept local instead of aborting the merge. Everything else here — the modify/delete resolution, the drain, the never-mid-merge invariant — stays in force.
+
 ## Summary
 
 - A `git merge` that produces `CONFLICT (modify/delete):` is invisible to the conflict-path parser, which matches only the content-conflict form. The conflict list comes back empty, the resolver is never reached, and the pull returns an error **without running `git merge --abort`** — the repository is left mid-merge.
