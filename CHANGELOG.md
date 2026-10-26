@@ -8,7 +8,7 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 * MINOR version when you add functionality in a backwards-compatible manner, and
 * PATCH version when you make backwards-compatible bug fixes.
 
-## Unreleased
+## v0.36.3
 
 - fix: Resolve a conflicted path that already lives under `_conflicts/` by keeping the local version instead of aborting the whole merge. The path is never re-quarantined, so `_conflicts/_conflicts/` still cannot be created; `git_rest_resolver_failures_total{category="nested_source"}` still increments once per skipped path, and `git_rest_merge_outcome_total{result="aborted"}` is no longer incremented for this shape. Supersedes spec 013's abort rule and spec 015's "a genuine re-quarantine still aborts" clause.
 
