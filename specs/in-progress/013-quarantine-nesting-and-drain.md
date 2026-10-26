@@ -7,7 +7,7 @@ verifying: "2026-09-14T06:19:13Z"
 branch: dark-factory/quarantine-nesting-and-drain
 ---
 
-> **Partly superseded** by `specs/bug-quarantined-path-aborts-whole-merge.md`. Superseded: the non-goal bullet at `:41` ("The abort rule stands for every rejected merge, including a `_conflicts/` path both sides changed"), Desired Behaviors 2 and 3, the ACs at `:122` and `:123`, the two Failure Modes rows that say the guard rejects the merge, and the Summary/Goal/Expected-vs-Actual/Reproduction sentences that state it. An already-quarantined path is now skipped and kept local instead of aborting the merge. Still in force: the one-level `quarantineDestPath` contract (DB1), the `nested_source` category (DB4), the backlog gauge (DB5–DB6) and the alerts (DB7–DB8).
+> **Partly superseded** by `specs/in-progress/023-bug-quarantined-path-aborts-whole-merge.md`. Superseded: the non-goal bullet at `:41` ("The abort rule stands for every rejected merge, including a `_conflicts/` path both sides changed"), Desired Behaviors 2 and 3, the ACs at `:122` and `:123`, the two Failure Modes rows that say the guard rejects the merge, and the Summary/Goal/Expected-vs-Actual/Reproduction sentences that state it. An already-quarantined path is now skipped and kept local instead of aborting the merge. Still in force: the one-level `quarantineDestPath` contract (DB1), the `nested_source` category (DB4), the backlog gauge (DB5–DB6) and the alerts (DB7–DB8).
 
 ## Summary
 
