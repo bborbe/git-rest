@@ -8,7 +8,7 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 * MINOR version when you add functionality in a backwards-compatible manner, and
 * PATCH version when you make backwards-compatible bug fixes.
 
-## Unreleased
+## v0.37.0
 
 - feat: git-rest now normalizes the documented `in_progress` phase alias to `execution` on every task-file write path — overwrite, create, and all three conflict-resolver writes — matching vault-cli's `NormalizeTaskPhase` alias map; any other phase value passes through unchanged.
 
