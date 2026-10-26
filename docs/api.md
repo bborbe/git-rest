@@ -80,6 +80,8 @@ Response: `{"ok":true}` on success.
 
 Overwriting an existing file whose parent directory is `25 Tasks` or `tasks` is refused with `422` when the request body carries no `---` frontmatter block; the existing file is left untouched. New files in those directories and overwrites that keep frontmatter are written normally.
 
+A task file's top-level `phase:` line is normalized on every write: the documented alias `phase: in_progress` is stored as `phase: execution`, matching vault-cli's `NormalizeTaskPhase`. No other phase value and no `status:` line is rewritten.
+
 Body limit: `10 * 1024 * 1024` bytes (10 MiB).
 
 Commit message format: `git-rest: create <path>` or `git-rest: update <path>`. A coalesced batch spanning more than one path uses `git-rest: update <n> files`.

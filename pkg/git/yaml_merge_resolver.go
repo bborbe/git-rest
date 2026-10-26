@@ -133,7 +133,7 @@ func (r *yamlMergeResolver) resolveOne(ctx context.Context, path string) error {
 	body := combineBodies(oursBody, theirsBody)
 	final := "---\n" + string(mergedFM) + "---\n" + body
 
-	if err := os.WriteFile(abs, []byte(final), 0o600); err != nil {
+	if err := os.WriteFile(abs, normalizeTaskPhase(path, []byte(final)), 0o600); err != nil {
 		r.metrics.IncResolverFailure(resolverFailureWrite)
 		glog.Warningf("yaml-merge-resolver: write %q: %v", path, err)
 		return errors.Wrap(ctx, ErrConflictResolutionFailed, "write merged file")
@@ -836,7 +836,7 @@ func (r *yamlMergeResolver) applyScalarFrontmatterRule(
 	}
 
 	// #nosec G703 -- path validated by safePath
-	if writeErr := os.WriteFile(abs, []byte(final), 0o600); writeErr != nil {
+	if writeErr := os.WriteFile(abs, normalizeTaskPhase(path, []byte(final)), 0o600); writeErr != nil {
 		r.metrics.IncResolverFailure(resolverFailureWrite)
 		glog.Warningf("yaml-merge-resolver: write scalar-resolved %q: %v", path, writeErr)
 		return true, errors.Wrap(ctx, ErrConflictResolutionFailed, "write scalar-resolved file")

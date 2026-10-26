@@ -11,6 +11,10 @@ import (
 	"github.com/bborbe/git-rest/pkg/metrics"
 )
 
+// NormalizeTaskPhaseForTest exposes normalizeTaskPhase to the external test
+// package. Test builds only.
+var NormalizeTaskPhaseForTest = normalizeTaskPhase
+
 // CleanupStaleLocksForCycle exposes the per-cycle lock walk with an injectable
 // liveness probe, so external tests can drive the undetermined branch without
 // package-level mutable state. Test builds only.

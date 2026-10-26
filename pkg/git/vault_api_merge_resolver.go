@@ -185,7 +185,11 @@ func (r *vaultAPIMergeResolver) writeMerged(path, content string) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(abs, []byte(content), 0o600) // #nosec G304 -- confined by safePath
+	return os.WriteFile(
+		abs,
+		normalizeTaskPhase(path, []byte(content)),
+		0o600,
+	) // #nosec G304 -- confined by safePath
 }
 
 // safePath joins the repo root with path, rejecting an absolute path or one that
