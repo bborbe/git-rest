@@ -1,8 +1,9 @@
 ---
-status: prompted
+status: verifying
 approved: "2026-10-26T10:49:10Z"
 generating: "2026-10-26T11:09:07Z"
 prompted: "2026-10-26T11:16:06Z"
+verifying: "2026-10-26T12:15:04Z"
 branch: dark-factory/bug-quarantined-path-aborts-whole-merge
 ---
 
