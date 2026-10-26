@@ -694,76 +694,12 @@ func unsafeConflictPath(repoPath, rel string) (bool, string) {
 	return false, ""
 }
 
-// nestedConflictPath returns the first path in paths that already lives under the
-// _conflicts/ quarantine directory, or "" when no path does. Quarantining such a
-// path again would nest the tree one level deeper on every retry.
-func nestedConflictPath(paths []string) string {
-	prefix := conflictsDirName + "/"
-	for _, path := range paths {
-		if path == conflictsDirName || strings.HasPrefix(path, prefix) {
-			return path
-		}
-	}
-	return ""
-}
-
 // isUnderConflictsDir reports whether path lives in the quarantine directory:
 // the path equals conflictsDirName or has the prefix conflictsDirName + "/".
-// Shared by the nesting guard's drain filter and the modify/delete resolution
-// arm so the two cannot drift apart.
+// Shared by the modify/delete resolution arm and the skip that keeps the local
+// side of an already-quarantined path, so the two cannot drift apart.
 func isUnderConflictsDir(path string) bool {
 	return path == conflictsDirName || strings.HasPrefix(path, conflictsDirName+"/")
-}
-
-// dropAcceptedDrains returns paths minus the ones that are an operator drain: a
-// path under _conflicts/ whose upstream change is a deletion
-// (conflictKindTheirsDeleted). Those are resolved by accepting the deletion, so
-// the nesting guard must not reject them. A path absent from kinds is treated as
-// a content conflict and kept, preserving the guard's behaviour for callers that
-// pass no classification.
-func dropAcceptedDrains(paths []string, kinds map[string]conflictKind) []string {
-	kept := make([]string, 0, len(paths))
-	for _, path := range paths {
-		if isUnderConflictsDir(path) && kinds[path] == conflictKindTheirsDeleted {
-			continue
-		}
-		kept = append(kept, path)
-	}
-	return kept
-}
-
-// validateConflictPathsNotNested pre-flights the conflict path list before any disk
-// I/O. A conflicted path that already lives under _conflicts/ is rejected: the file
-// stays exactly one level deep, the nested_source counter records the rejection, and
-// the merge is aborted. A _conflicts/ path whose upstream change is a deletion is an
-// operator drain and is resolved rather than rejected, so it is dropped from the
-// candidate list before the check. Returns wrapped ErrConflictResolutionFailed when a
-// nested path is present, nil otherwise. Pure read of the path list; no file writes.
-func (g *git) validateConflictPathsNotNested(
-	ctx context.Context,
-	conflictPaths []string,
-	kinds map[string]conflictKind,
-) error {
-	path := nestedConflictPath(dropAcceptedDrains(conflictPaths, kinds))
-	if path == "" {
-		return nil
-	}
-	g.metrics.IncResolverFailure(quarantineFailureNested)
-	slog.WarnContext(
-		ctx,
-		"git-rest: nested conflicted path already under _conflicts/ rejected; aborting merge",
-		"path",
-		path,
-		"reason",
-		"path already under _conflicts/; re-quarantining would nest the tree one level deeper",
-	)
-	_, _ = g.runCmdRaw(ctx, g.repoPath, "merge", "--abort")
-	g.metrics.IncMergeOutcome("aborted")
-	return errors.Wrap(
-		ctx,
-		ErrConflictResolutionFailed,
-		"nested conflict path already quarantined",
-	)
 }
 
 // WriteFile writes content to path and stages it. When write coalescing is
@@ -1533,6 +1469,57 @@ func (g *git) resolveModifyDelete(ctx context.Context, path string, kind conflic
 	return false
 }
 
+// skipQuarantinedPath resolves a conflicted path that already lives under
+// _conflicts/ by keeping the local side. `git checkout --ours -- <path>` writes
+// HEAD's version into the working tree and `git add -- <path>` clears the
+// unmerged index entry, so the merge can commit with the tree byte-identical to
+// HEAD and no conflict markers staged. The path is never passed to
+// quarantineOne, so the quarantine tree cannot gain a second "_conflicts/" level.
+//
+// The configured resolver is deliberately not tried: _conflicts/ is
+// operator-owned, and a resolver that rewrote a quarantined file would mutate
+// the artefact the operator is meant to inspect, silently, on every pull. The
+// upstream edit stays reachable in the merge's second parent.
+//
+// Records the nested_source category exactly once per skipped path and does NOT
+// record an aborted merge outcome. Returns false when either git command fails,
+// leaving the index entry unmerged so a later commit refuses rather than
+// silently dropping the conflict.
+func (g *git) skipQuarantinedPath(ctx context.Context, path string) bool {
+	if err := g.runCmd(ctx, g.repoPath, "checkout", "--ours", "--", path); err != nil {
+		slog.WarnContext(
+			ctx,
+			"git-rest: keeping the local version of a conflicted path under _conflicts/ failed",
+			"path",
+			path,
+			"err",
+			err.Error(),
+		)
+		return false
+	}
+	if err := g.runCmd(ctx, g.repoPath, "add", "--", path); err != nil {
+		slog.WarnContext(
+			ctx,
+			"git-rest: staging the kept local version of a conflicted path under _conflicts/ failed",
+			"path",
+			path,
+			"err",
+			err.Error(),
+		)
+		return false
+	}
+	g.metrics.IncResolverFailure(quarantineFailureNested)
+	slog.WarnContext(
+		ctx,
+		"git-rest: nested conflicted path already under _conflicts/ skipped; keeping the local version",
+		"path",
+		path,
+		"reason",
+		"path already under _conflicts/; keeping the local version keeps the tree one level deep",
+	)
+	return true
+}
+
 // resolveConflictMerge handles the conflict path of pullMergeAndPush: delegates to g.resolver,
 // commits the resolved merge, then pushes. On per-file resolver failure, the failing file is
 // quarantined (via read + git rm + write + git add — git refuses to git mv conflicted files)
@@ -1584,10 +1571,11 @@ func (g *git) resolveConflictMerge(
 // output. Returns nil on successful commit+push; returns wrapped ErrConflictResolutionFailed
 // on any abort path.
 //
-// Ordering invariant (do not reorder): both pre-flights — validateConflictPathsSafe
-// and validateConflictPathsNotNested — MUST run BEFORE ensureConflictsDir so neither
-// abort path creates _conflicts/ as a side-effect. Reordering breaks the
-// path-traversal test's negative-evidence check.
+// Ordering invariant (do not reorder): validateConflictPathsSafe MUST run BEFORE
+// ensureConflictsDir so the unsafe-path abort never creates _conflicts/ as a
+// side-effect. Reordering breaks the path-traversal test's negative-evidence
+// check. A path that already lives under _conflicts/ is handled per path inside
+// resolveEachPath, not by a pre-flight.
 func (g *git) resolveConflictPaths(
 	ctx context.Context,
 	upstream string,
@@ -1600,16 +1588,10 @@ func (g *git) resolveConflictPaths(
 		return err
 	}
 	// Read-only classification of the unmerged index. It must run after
-	// validateConflictPathsSafe and before the nesting guard, because the guard
-	// needs the classification to tell an accepted operator drain (a _conflicts/
-	// path whose upstream change is a deletion) from a genuine re-quarantine. It
-	// writes nothing, so the ordering invariant above is preserved.
+	// validateConflictPathsSafe and before resolveEachPath, because resolveEachPath
+	// dispatches modify/delete conflicts from it. It writes nothing, so the ordering
+	// invariant above is preserved.
 	kinds := g.classifyConflicts(ctx)
-	// Pre-flight: a conflicted path that already lives under _conflicts/ aborts the
-	// merge before any disk I/O, so a re-quarantine can never deepen the tree.
-	if err := g.validateConflictPathsNotNested(ctx, conflictPaths, kinds); err != nil {
-		return err
-	}
 	if err := g.ensureConflictsDir(ctx); err != nil {
 		return err
 	}
@@ -1671,7 +1653,9 @@ func (g *git) validateConflictPathsSafe(
 //
 // Modify/delete conflicts are dispatched to resolveModifyDelete before the
 // configured resolver; a path absent from kinds behaves exactly as before and
-// goes to the resolver.
+// goes to the resolver. A path already under _conflicts/ is skipped and kept
+// local after the modify/delete dispatch, so it is never quarantined a second
+// time and never reaches the configured resolver.
 func (g *git) resolveEachPath(
 	ctx context.Context,
 	conflictPaths []string,
@@ -1688,6 +1672,19 @@ func (g *git) resolveEachPath(
 		}
 		if g.resolveModifyDelete(ctx, path, kinds[path]) {
 			resolved = append(resolved, path)
+			continue
+		}
+		// A path that already lives under _conflicts/ is operator-owned: keep the
+		// local side instead of re-quarantining it (which would nest the tree) or
+		// handing it to the configured resolver (which would silently rewrite the
+		// artefact the operator inspects). The modify/delete dispatch above must run
+		// first: an ours-deleted quarantined path has no stage 2, so `checkout
+		// --ours` would fail on it, and resolveModifyDelete resolves it by taking
+		// the upstream version instead.
+		if isUnderConflictsDir(path) {
+			if g.skipQuarantinedPath(ctx, path) {
+				resolved = append(resolved, path)
+			}
 			continue
 		}
 		resolveErr := g.resolver.Resolve(ctx, []string{path})

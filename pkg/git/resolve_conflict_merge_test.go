@@ -105,6 +105,18 @@ func (u *unsafeTestMetrics) unsafePathCount() int {
 	return n
 }
 
+func (u *unsafeTestMetrics) nestedCount() int {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	n := 0
+	for _, c := range u.incResolverFailureCalls {
+		if c == "nested_source" {
+			n++
+		}
+	}
+	return n
+}
+
 func (u *unsafeTestMetrics) quarantineIOCount() int {
 	u.mu.Lock()
 	defer u.mu.Unlock()
@@ -494,35 +506,70 @@ func TestQuarantineDestPathSingleConflictsSegment(t *testing.T) {
 	}
 }
 
-// TestNestedConflictPath covers the prefix rule that decides whether a conflicted
+// TestIsUnderConflictsDir covers the prefix rule that decides whether a conflicted
 // path is already quarantined. The "_conflicts-archive/a.md" case pins the
 // boundary: only the exact "_conflicts" directory and its children count.
-func TestNestedConflictPath(t *testing.T) {
+func TestIsUnderConflictsDir(t *testing.T) {
 	cases := []struct {
-		name  string
-		paths []string
-		want  string
+		name string
+		path string
+		want bool
 	}{
-		{"empty list", nil, ""},
-		{"ordinary path", []string{"notes/a.md"}, ""},
-		{"sibling dir with the same prefix", []string{"_conflicts-archive/a.md"}, ""},
-		{"nested path at the root", []string{"_conflicts/a.md"}, "_conflicts/a.md"},
-		{
-			"nested path in a subdir",
-			[]string{"_conflicts/25 Tasks/Prev A.md"},
-			"_conflicts/25 Tasks/Prev A.md",
-		},
-		{"bare _conflicts", []string{"_conflicts"}, "_conflicts"},
-		{
-			"first nested path wins",
-			[]string{"notes/a.md", "_conflicts/b.md", "_conflicts/c.md"},
-			"_conflicts/b.md",
-		},
+		{"ordinary path", "notes/a.md", false},
+		{"sibling dir with the same prefix", "_conflicts-archive/a.md", false},
+		{"nested path at the root", "_conflicts/a.md", true},
+		{"nested path in a subdir", "_conflicts/25 Tasks/Prev A.md", true},
+		{"bare _conflicts", "_conflicts", true},
 	}
 	for _, tc := range cases {
-		if got := nestedConflictPath(tc.paths); got != tc.want {
-			t.Errorf("%s: nestedConflictPath(%v) = %q, want %q", tc.name, tc.paths, got, tc.want)
+		if got := isUnderConflictsDir(tc.path); got != tc.want {
+			t.Errorf("%s: isUnderConflictsDir(%q) = %v, want %v", tc.name, tc.path, got, tc.want)
 		}
+	}
+}
+
+// TestSkipQuarantinedPathFailure verifies the failure branch of
+// skipQuarantinedPath: when `git checkout --ours` fails (the path does not
+// exist in the index), the helper reports false, records no nested_source
+// event and records no merge outcome. Leaving the index entry unmerged is what
+// makes a later commit refuse rather than silently drop the conflict.
+func TestSkipQuarantinedPathFailure(t *testing.T) {
+	ctx := context.Background()
+	workDir, err := os.MkdirTemp("", "git-skip-quarantined-*")
+	if err != nil {
+		t.Fatalf("mkdir workdir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(workDir) })
+
+	run := func(args ...string) {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = workDir
+		out, e := cmd.CombinedOutput()
+		if e != nil {
+			t.Fatalf("%s %v: %s", "git", args, string(out))
+		}
+	}
+	run("init", "-q", "-b", "main")
+	run("config", "user.email", "test@example.com")
+	run("config", "user.name", "Test")
+	run("commit", "--allow-empty", "-q", "-m", "init")
+
+	metrics := &unsafeTestMetrics{}
+	repo, ok := New(
+		workDir, metrics, libtime.NewCurrentDateTime(), "", fakeResolver{},
+	).(*git)
+	if !ok {
+		t.Fatal("New did not return *git")
+	}
+
+	if repo.skipQuarantinedPath(ctx, "missing.md") {
+		t.Fatal("skipQuarantinedPath must return false when checkout --ours fails")
+	}
+	if got := metrics.nestedCount(); got != 0 {
+		t.Fatalf("a failed skip must not record nested_source, got %d", got)
+	}
+	if got := len(metrics.incMergeOutcomeCalls); got != 0 {
+		t.Fatalf("a failed skip must not record a merge outcome, got %d", got)
 	}
 }
 

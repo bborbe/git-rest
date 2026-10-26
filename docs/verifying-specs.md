@@ -298,19 +298,20 @@ Fixture B assertions, after the one-interval wait:
 - **The drain does not trip the nesting guard:** `git_rest_resolver_failures_total{category="nested_source"}` read after the pull equals the reading taken **before** the pull (delta 0). The pre-pull reading must be taken in the same process lifetime as the post-pull one — the counter is per-process.
 - **The drain is visible to an operator:** `$BASE/run.log` contains one INFO record naming `_conflicts/25 Tasks/Prev A.1791388434.md` and containing the substring `upstream deletion`.
 
-Fixture C — the shape that must stay refused:
+Fixture C — the shape spec 023 fixed (an already-quarantined path is kept local):
 
 Same fixture as B, except step 4 **modifies** the `_conflicts/` path on the remote with **invalid YAML** frontmatter (`---\ntitle: [unclosed\n---\nREMOTE CHANGE\n`) and step 5 modifies it locally with valid frontmatter (`---\ntitle: a\n---\nLOCAL CHANGE\n`) — a content conflict in which both sides changed the path and the resolver cannot merge the remote side. Run the puller with `-vault-write=true`, the deployed configuration for the personal and openclaw vaults (`values-dev.yaml` sets `writeMode: true`), which selects the YAML merge resolver.
 
 Assertions:
 
-- `/readiness` is non-200.
-- `git_rest_resolver_failures_total{category="nested_source"}` climbs by one per pull interval.
+- `/readiness` is `200`.
+- `git_rest_resolver_failures_total{category="nested_source"}` increases by exactly 1 across the one pull: read it before and after in the same process lifetime — the counter is per-process. The path is skipped once, not rejected once per interval.
+- `git_rest_merge_outcome_total{result="aborted"}` is unchanged across the pull.
 - No path exists at `_conflicts/_conflicts`.
-- `git -C "$BASE/work" status --porcelain` prints 0 lines — the abort restored the worktree.
-- The log carries a WARN naming the nested path.
+- `git -C "$BASE/work" status --porcelain` prints 0 lines — the merge committed, so the worktree is clean because the local version was staged into the merge, not because an abort restored the tree.
+- The log carries a WARN naming the nested path, and no WARN containing `aborting merge`.
 
-This is the shape the nesting guard exists for. A recipe run that "fixes" fixture C is a **regression, not a pass**: it means the tree gained a second `_conflicts/` level.
+A recipe run that makes fixture C abort again — readiness non-200, `nested_source` climbing per interval, no merge commit — is a regression.
 
 Teardown: fixture A shares `:18445` with spec 014's recipe, so each run must start from a clean process — a survivor keeps answering the port and returns stale evidence. Both fixtures kill their binary by name, `kill "$(pgrep -f /tmp/git-rest-md-repro-bin)" 2>/dev/null || true` and `kill "$(pgrep -f /tmp/git-rest-drain-repro-bin)" 2>/dev/null || true`, before the next run.
 

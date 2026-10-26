@@ -1,6 +1,8 @@
 ---
-status: approved
+status: prompted
 approved: "2026-10-26T10:49:10Z"
+generating: "2026-10-26T11:09:07Z"
+prompted: "2026-10-26T11:16:06Z"
 branch: dark-factory/bug-quarantined-path-aborts-whole-merge
 ---
 
@@ -185,7 +187,7 @@ grep -c 'already under _conflicts/ rejected' pkg/git/git.go
 | A quarantined path is deleted upstream | `resolveModifyDelete` accepts the deletion (spec 015, unchanged) | None needed | `merge: … quarantined=[]` commit line |
 | A quarantined path is deleted locally, modified upstream | `stageUpstreamVersion` takes the upstream version | None needed | `git status --porcelain` empty after pull |
 | A **new** conflicting path with no `_conflicts/` prefix | Resolver first, quarantine at depth 1 on failure (unchanged) | Operator inspects `_conflicts/` | `git_rest_quarantined_files_total` + backlog gauge |
-| `git checkout --ours` fails for a reason other than an `ours`-deleted path (e.g. the path is absent from the index) | The index entry stays unmerged, `git commit` refuses, and `commitAndPushMerge` aborts the merge and returns a **wrapped commit error** — not `ErrConflictResolutionFailed`, and it does **not** call `IncMergeOutcome("aborted")` | Operator drains the path on the remote: `git rm` the `_conflicts/` entry, commit and push, after which the next pull accepts it as an upstream deletion and the metric delta is the only trace left | `git_rest_git_operation_errors_total{operation="merge"}` delta of 1, no new commit in `git log`, `git status --porcelain` clean — the pull error itself carries only `commit resolved merge: …` with no path, so the metric is the discriminator |
+| `git checkout --ours` fails for a reason other than an `ours`-deleted path (e.g. the path is absent from the index) | The path joins neither the resolved nor the quarantined list. If it was the **only** conflicted path, the pre-existing "all conflicted paths failed resolve and quarantine" branch returns `ErrConflictResolutionFailed` and records the aborted outcome. If any sibling path resolved, the index entry stays unmerged, `git commit` refuses, and `commitAndPushMerge` aborts the merge and returns a **wrapped commit error** — and it does **not** call `IncMergeOutcome("aborted")` | Operator drains the path on the remote: `git rm` the `_conflicts/` entry, commit and push, after which the next pull accepts it as an upstream deletion | Single-path case: `ErrConflictResolutionFailed` plus a `git_rest_merge_outcome_total{result="aborted"}` delta of 1. Multi-path case: `git_rest_git_operation_errors_total{operation="merge"}` delta of 1, no new commit, `git status --porcelain` clean — the pull error carries only `commit resolved merge: …` with no path, so the metric is the discriminator. The arm is unreachable in practice: git reports no conflict for a path absent from the index |
 | The merge commits but the push fails (remote moved mid-cycle) | The merge commit is retained locally and the pull returns a push error; the next cycle pushes it | None needed — the next pull retries the push | `git pull failed` WARN with a push error, and `git log origin/master..HEAD` lists the retained merge commit |
 | Crash between `checkout --ours` and `git add` | Repository left mid-merge, the pre-existing recovery path handles it | Existing entry-state recovery | `git status` shows an unmerged path |
 
