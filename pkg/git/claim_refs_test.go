@@ -20,6 +20,7 @@ import (
 
 	libtime "github.com/bborbe/time"
 
+	"github.com/bborbe/git-rest/mocks"
 	"github.com/bborbe/git-rest/pkg/git"
 )
 
@@ -888,5 +889,106 @@ func TestClaimNoRemote(t *testing.T) {
 	if after := mustGit(t, dir, "count-objects", "-v"); after != before {
 		t.Fatalf("PutClaimRef wrote to a remote-less repo:\nbefore:\n%s\nafter:\n%s",
 			before, after)
+	}
+}
+
+// newClaimClientWithMetrics builds a claim client that records observations in
+// fake, so the tests can assert which git operations were instrumented.
+func newClaimClientWithMetrics(repoPath string, fake *mocks.FakeMetrics) git.Git {
+	return git.New(repoPath, fake, libtime.NewCurrentDateTime(), "", nil)
+}
+
+// countObservedOperation returns how many times fake recorded an observation for
+// operation.
+func countObservedOperation(fake *mocks.FakeMetrics, operation string) int {
+	count := 0
+	for i := 0; i < fake.ObserveGitOperationCallCount(); i++ {
+		op, _ := fake.ObserveGitOperationArgsForCall(i)
+		if op == operation {
+			count++
+		}
+	}
+	return count
+}
+
+func TestClaimPutObservesPush(t *testing.T) {
+	fixture := newClaimFixture(t)
+	fake := &mocks.FakeMetrics{}
+	client := newClaimClientWithMetrics(fixture.cloneA, fake)
+	ctx := context.Background()
+
+	if _, err := client.PutClaimRef(ctx, "claims/metrics/put", git.ClaimRefRequest{
+		Cluster:    "c",
+		TaskID:     "t",
+		LeaseUntil: claimLeaseUntil,
+	}); err != nil {
+		t.Fatalf("PutClaimRef: %v", err)
+	}
+	if got := countObservedOperation(fake, "push"); got != 1 {
+		t.Fatalf("expected exactly one push observation, got %d", got)
+	}
+	if got := countObservedOperation(fake, "ls-remote"); got != 0 {
+		t.Fatalf("claim push must not observe ls-remote, got %d", got)
+	}
+}
+
+func TestClaimPutFailureObservesPush(t *testing.T) {
+	fixture := newClaimFixture(t)
+	fake := &mocks.FakeMetrics{}
+	client := newClaimClientWithMetrics(fixture.cloneA, fake)
+	mustGit(t, fixture.cloneA, "remote", "set-url", "origin",
+		filepath.Join(t.TempDir(), "absent.git"))
+
+	if _, err := client.PutClaimRef(context.Background(), "claims/metrics/fail",
+		git.ClaimRefRequest{Cluster: "c"}); err == nil {
+		t.Fatal("PutClaimRef: expected an error against an absent origin")
+	}
+	if got := countObservedOperation(fake, "push"); got != 1 {
+		t.Fatalf("expected exactly one push observation on failure, got %d", got)
+	}
+}
+
+func TestClaimListObservesLsRemote(t *testing.T) {
+	fixture := newClaimFixture(t)
+	fake := &mocks.FakeMetrics{}
+	client := newClaimClientWithMetrics(fixture.cloneA, fake)
+
+	if _, err := client.ListClaimRefs(context.Background(), "claims/"); err != nil {
+		t.Fatalf("ListClaimRefs: %v", err)
+	}
+	if got := countObservedOperation(fake, "ls-remote"); got != 1 {
+		t.Fatalf("expected exactly one ls-remote observation, got %d", got)
+	}
+}
+
+func TestClaimListFailureObservesLsRemote(t *testing.T) {
+	fixture := newClaimFixture(t)
+	fake := &mocks.FakeMetrics{}
+	client := newClaimClientWithMetrics(fixture.cloneA, fake)
+	mustGit(t, fixture.cloneA, "remote", "set-url", "origin",
+		filepath.Join(t.TempDir(), "absent.git"))
+
+	if _, err := client.ListClaimRefs(context.Background(), "claims/"); err == nil {
+		t.Fatal("ListClaimRefs: expected an error against an absent origin")
+	}
+	if got := countObservedOperation(fake, "ls-remote"); got != 1 {
+		t.Fatalf("expected exactly one ls-remote observation on failure, got %d", got)
+	}
+}
+
+func TestClaimListNoRemoteObservesNothing(t *testing.T) {
+	fixture := newClaimFixture(t)
+	fake := &mocks.FakeMetrics{}
+	client := newClaimClientWithMetrics(fixture.cloneA, fake)
+	mustGit(t, fixture.cloneA, "remote", "remove", "origin")
+
+	if _, err := client.ListClaimRefs(context.Background(), "claims/"); !errors.Is(
+		err,
+		git.ErrNoRemote,
+	) {
+		t.Fatalf("ListClaimRefs: expected ErrNoRemote, got %v", err)
+	}
+	if got := countObservedOperation(fake, "ls-remote"); got != 0 {
+		t.Fatalf("no-remote guard must not observe ls-remote, got %d", got)
 	}
 }

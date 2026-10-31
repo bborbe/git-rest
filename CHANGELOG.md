@@ -8,6 +8,10 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 * MINOR version when you add functionality in a backwards-compatible manner, and
 * PATCH version when you make backwards-compatible bug fixes.
 
+## Unreleased
+
+- feat: `git_rest_git_operation_duration_seconds` now carries `push` and `ls-remote` samples — the claim-ref push, every branch-push attempt (one sample per attempt, including a retried push), and the origin ref listing are all observed, and the histogram gained 30 s and 60 s buckets so a sample above 30 s is readable in a finite bucket.
+
 ## v0.37.0
 
 - feat: git-rest now normalizes the documented `in_progress` phase alias to `execution` on every task-file write path — overwrite, create, and all three conflict-resolver writes — matching vault-cli's `NormalizeTaskPhase` alias map; any other phase value passes through unchanged.
