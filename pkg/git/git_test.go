@@ -3623,13 +3623,32 @@ var _ = Describe("Push retry", func() {
 
 	It("records a push sample when the push is killed by its context", func() {
 		remoteDir := strings.TrimSpace(gitOutputStr(workDir, "remote", "get-url", "origin"))
-		installSlowPreReceiveHook(remoteDir)
+		marker := installSlowPreReceiveHook(remoteDir)
 		writeLocalCommit(workDir, "local.txt", "local\n")
 
-		cancelCtx, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
+		// Cancel only once the push is in flight: the hook writes its marker
+		// before it sleeps, so the marker proves the push reached the remote.
+		// A fixed deadline instead would usually expire during the fetch, and
+		// the push would never be attempted — the observation would then have
+		// nothing to record, which is a different case from a killed push.
+		cancelCtx, cancel := context.WithCancel(ctx)
 		defer cancel()
+		watcherDone := make(chan struct{})
+		go func() {
+			defer close(watcherDone)
+			deadline := time.Now().Add(20 * time.Second)
+			for time.Now().Before(deadline) {
+				if _, statErr := os.Stat(marker); statErr == nil {
+					cancel()
+					return
+				}
+				time.Sleep(5 * time.Millisecond)
+			}
+		}()
 
 		err := pg.Pull(cancelCtx)
+		<-watcherDone
+
 		Expect(err).To(HaveOccurred())
 		Expect(pushOperationSamples(fakeMetrics)).To(HaveLen(1))
 	})
