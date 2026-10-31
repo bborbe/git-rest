@@ -110,6 +110,16 @@ spec:
           ports:
             - containerPort: 9090
               name: http
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: 9090
+              scheme: HTTP
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 30      # 10 + 30*10 = ~5 min for the initial clone
+            successThreshold: 1
           livenessProbe:
             httpGet:
               path: /healthz
