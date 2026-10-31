@@ -8,6 +8,10 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 * MINOR version when you add functionality in a backwards-compatible manner, and
 * PATCH version when you make backwards-compatible bug fixes.
 
+## Unreleased
+
+- fix: Bump `golang.org/x/net` v0.61.0 → v0.62.0, clearing GO-2026-6860 and GO-2026-6866. Both were unignored findings that failed `make vulncheck` on a clean master and so blocked every precommit-gated run, including the dark-factory daemon.
+
 ## v0.37.0
 
 - feat: git-rest now normalizes the documented `in_progress` phase alias to `execution` on every task-file write path — overwrite, create, and all three conflict-resolver writes — matching vault-cli's `NormalizeTaskPhase` alias map; any other phase value passes through unchanged.
