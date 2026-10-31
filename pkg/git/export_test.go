@@ -8,6 +8,8 @@ import (
 	"context"
 	"time"
 
+	libtime "github.com/bborbe/time"
+
 	"github.com/bborbe/git-rest/pkg/metrics"
 )
 
@@ -63,7 +65,12 @@ func NewGitWithClaimOrigin(origin ClaimOrigin) Git {
 // NewGitWithClaimMirrorForTest returns a Git backed by repoPath whose
 // origin-contacting operations go to origin. Test builds only.
 func NewGitWithClaimMirrorForTest(repoPath string, origin ClaimOrigin) Git {
-	return &git{repoPath: repoPath, origin: origin}
+	return &git{
+		repoPath:              repoPath,
+		origin:                origin,
+		metrics:               metrics.NewMetrics(),
+		currentDateTimeGetter: libtime.NewCurrentDateTime(),
+	}
 }
 
 // SetClaimMirrorFreshAtForTest sets the recorded last-claims-fetch time.

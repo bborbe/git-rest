@@ -3322,6 +3322,39 @@ func installPreReceiveRejection(remoteDir string) string {
 	return countFile
 }
 
+// installSlowPreReceiveHook installs a pre-receive hook on the bare remote that
+// sleeps for five seconds and then accepts the push. A marker file makes the
+// hook a no-op after its first run, so its own work cannot re-enter the
+// operation under test. Returns the marker path.
+func installSlowPreReceiveHook(remoteDir string) string {
+	marker := filepath.Join(remoteDir, "slow-hook.marker")
+	hooksDir := filepath.Join(remoteDir, "hooks")
+	Expect(os.MkdirAll(hooksDir, 0o750)).To(Succeed())
+	hook := "#!/bin/sh\n" +
+		"if [ -f " + shellQuote(marker) + " ]; then exit 0; fi\n" +
+		"touch " + shellQuote(marker) + "\n" +
+		"sleep 5\n" +
+		"exit 0\n"
+	Expect(os.WriteFile(filepath.Join(hooksDir, "pre-receive"), []byte(hook), 0o755)).
+		To(Succeed())
+	runGit(remoteDir, "config", "core.hooksPath", "hooks")
+	return marker
+}
+
+// pushOperationSamples returns the durations of every "push" observation
+// recorded by fakeMetrics, ignoring the other operations a Pull records (such as
+// "pull"). Asserting on ObserveGitOperationCallCount() directly would count them.
+func pushOperationSamples(fakeMetrics *mocks.FakeMetrics) []float64 {
+	samples := make([]float64, 0)
+	for i := 0; i < fakeMetrics.ObserveGitOperationCallCount(); i++ {
+		operation, duration := fakeMetrics.ObserveGitOperationArgsForCall(i)
+		if operation == "push" {
+			samples = append(samples, duration)
+		}
+	}
+	return samples
+}
+
 // advanceFileLines returns the shell lines that write the competing commit's
 // file. An empty conflictPath writes a fresh external-<n>.txt; a non-empty one
 // overwrites that path so the retry merge conflicts.
@@ -3553,6 +3586,52 @@ var _ = Describe("Push retry", func() {
 		logStr := logs.String()
 		Expect(logStr).To(ContainSubstring("git-rest: retry merge failed"))
 		Expect(logStr).To(ContainSubstring("Merge conflict in conflict.txt"))
+	})
+
+	It("records one push sample for a plain successful push", func() {
+		writeLocalCommit(workDir, "local.txt", "local\n")
+
+		Expect(pg.Pull(ctx)).To(Succeed())
+
+		samples := pushOperationSamples(fakeMetrics)
+		Expect(samples).To(HaveLen(1))
+		for i := 0; i < fakeMetrics.ObserveGitOperationCallCount(); i++ {
+			operation, _ := fakeMetrics.ObserveGitOperationArgsForCall(i)
+			Expect(operation).To(BeElementOf("push", "pull"))
+		}
+	})
+
+	It("records one push sample for a terminal rejection", func() {
+		remoteDir := strings.TrimSpace(gitOutputStr(workDir, "remote", "get-url", "origin"))
+		installPreReceiveRejection(remoteDir)
+		writeLocalCommit(workDir, "local.txt", "local\n")
+
+		err := pg.Pull(ctx)
+		Expect(err).To(HaveOccurred())
+		Expect(pushOperationSamples(fakeMetrics)).To(HaveLen(1))
+	})
+
+	It("records one push sample per retry attempt", func() {
+		writeLocalCommit(workDir, "local.txt", "local\n")
+		installRemoteAdvanceOnFetch(workDir, true, "")
+
+		Expect(pg.Pull(ctx)).To(Succeed())
+		Expect(fakeMetrics.IncPushRetryCallCount()).To(Equal(1))
+
+		Expect(pushOperationSamples(fakeMetrics)).To(HaveLen(2))
+	})
+
+	It("records a push sample when the push is killed by its context", func() {
+		remoteDir := strings.TrimSpace(gitOutputStr(workDir, "remote", "get-url", "origin"))
+		installSlowPreReceiveHook(remoteDir)
+		writeLocalCommit(workDir, "local.txt", "local\n")
+
+		cancelCtx, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
+		defer cancel()
+
+		err := pg.Pull(cancelCtx)
+		Expect(err).To(HaveOccurred())
+		Expect(pushOperationSamples(fakeMetrics)).To(HaveLen(1))
 	})
 })
 
