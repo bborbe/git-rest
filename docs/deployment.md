@@ -152,7 +152,19 @@ The volume must mount with `mode: 0600` — OpenSSH rejects world-readable priva
 - `livenessProbe` → `/healthz`: restarts the pod if the HTTP server hangs.
 - `readinessProbe` → `/readiness`: removes the pod from the Service only when the served repository path is missing or unreadable. Sync failures — a rejected push, a failed fetch, a merge conflict — do not affect readiness; they stay visible in the pod log and in `git_rest_git_operation_errors_total`.
 
-A `startupProbe` on `/healthz` gives the initial clone about five minutes (`initialDelaySeconds: 10` + `failureThreshold: 30` × `periodSeconds: 10`), and Kubernetes does not run the liveness or readiness probe until it passes — so the liveness `initialDelaySeconds` is not the knob for a slow first clone.
+A `startupProbe` on `/healthz` gives the initial clone a budget, and Kubernetes does not run the liveness or readiness probe until it passes — so the liveness `initialDelaySeconds` is not the knob for a slow first clone.
+
+The budget is configurable and defaults to about five minutes:
+
+```yaml
+startupProbe:
+  initialDelaySeconds: 10
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 30     # budget = 10 + 30*10 = ~5 min
+```
+
+⚠️ **Raise `failureThreshold` for a repository whose first clone cannot finish in five minutes.** A vault repo runs to hundreds of megabytes, and a home uplink will not move that in time. Measured 2026-11-01 on `bborbe/obsidian-openclaw` (~480 MB): the clone was still running at 308 s, the probe gave up, the container was killed, and `git clone` left a partial `.git` that the next start's `cloneIfNeeded` accepted — so the pod reported `1/1 Ready` while serving an **empty working tree**, permanently. A generous budget costs nothing on the failure path: a clone that genuinely fails exits the container immediately, so the threshold only bounds how long a *successful but slow* clone may take.
 
 ### Resources
 

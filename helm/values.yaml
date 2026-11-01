@@ -20,6 +20,27 @@ logLevel: "2"
 # Background puller fetch+rebase interval.
 pullInterval: "30s"
 
+# startupProbe budget for the INITIAL CLONE. git-rest clones before it starts
+# listening, so until the clone finishes there is no HTTP server to probe and
+# nothing suppresses liveness — without this probe a slow clone is killed mid-way
+# and leaves a partial `.git` that `cloneIfNeeded` then accepts forever.
+#
+# The default below is the historical fixed value (~5 min). RAISE IT for any
+# repository whose first clone can exceed that: a vault repo is hundreds of MB and
+# a home uplink will not move it in five minutes. Measured 2026-11-01 on
+# `bborbe/obsidian-openclaw` (~480 MB): the clone was still running at 308 s, the
+# probe gave up, and the container was killed — twice, on fresh volumes.
+#
+# Budget = initialDelaySeconds + failureThreshold * periodSeconds.
+# A failed clone still exits the container immediately, so this only bounds how
+# long a SUCCESSFUL-but-slow clone is allowed to take; a generous value costs
+# nothing but a slow start.
+startupProbe:
+  initialDelaySeconds: 10
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 30
+
 sentry:
   # Sentry proxy cluster URL (SENTRY_PROXY env). Optional.
   proxy: ""
