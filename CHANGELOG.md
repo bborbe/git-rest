@@ -12,6 +12,14 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 
 - feat: `git_rest_git_operation_duration_seconds` now carries `push` and `ls-remote` samples — the claim-ref push, every branch-push attempt (one sample per attempt, including a retried push), and the origin ref listing are all observed, and the histogram gained 30 s and 60 s buckets so a sample above 30 s is readable in a finite bucket.
 
+## v0.37.2
+
+- fix: Give each per-vault StatefulSet a `startupProbe` on `/healthz` that allows the initial clone roughly five minutes (`initialDelaySeconds: 10` + `failureThreshold: 30` × `periodSeconds: 10`) before the container is restarted. Kubernetes withholds the liveness and readiness probes until the startup probe succeeds, so a slow first clone no longer kills the pod mid-clone and no longer strands a partial `.git` that makes every later start skip the clone. The liveness and readiness timings are unchanged.
+
+## v0.37.1
+
+- fix: Bump `golang.org/x/net` v0.61.0 → v0.62.0, clearing GO-2026-6860 and GO-2026-6866. Both were unignored findings that failed `make vulncheck` on a clean master and so blocked every precommit-gated run, including the dark-factory daemon.
+
 ## v0.37.0
 
 - feat: git-rest now normalizes the documented `in_progress` phase alias to `execution` on every task-file write path — overwrite, create, and all three conflict-resolver writes — matching vault-cli's `NormalizeTaskPhase` alias map; any other phase value passes through unchanged.

@@ -9,7 +9,7 @@ agent-task-controller and other services.
 Per vault the chart renders:
 
 - **StatefulSet** — git checkout on a `ReadWriteOnce` PVC (`/data`), the git-rest
-  binary, liveness `/healthz` + readiness `/readiness`, ssh key mounted at `/ssh`.
+  binary, `startupProbe` `/healthz`, liveness `/healthz` + readiness `/readiness`, ssh key mounted at `/ssh`.
 - **Service** — `:9090` (http + admin).
 - **Secret** *(optional)* — only when the vault inlines `secret:` and sets no
   `existingSecret`; keys `ssh-key`, `gateway-secret`, `sentry-dsn`.

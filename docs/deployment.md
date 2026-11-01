@@ -100,6 +100,13 @@ spec:
           ports:
             - containerPort: 9090
               name: http
+          startupProbe:
+            httpGet: { path: /healthz, port: 9090 }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 30  # 10 + 30*10 = ~5 min for the initial clone
+            successThreshold: 1
           livenessProbe:
             httpGet: { path: /healthz, port: 9090 }
             initialDelaySeconds: 30
@@ -145,7 +152,7 @@ The volume must mount with `mode: 0600` — OpenSSH rejects world-readable priva
 - `livenessProbe` → `/healthz`: restarts the pod if the HTTP server hangs.
 - `readinessProbe` → `/readiness`: removes the pod from the Service only when the served repository path is missing or unreadable. Sync failures — a rejected push, a failed fetch, a merge conflict — do not affect readiness; they stay visible in the pod log and in `git_rest_git_operation_errors_total`.
 
-`initialDelaySeconds` on liveness should be generous on first boot to cover the initial `git clone` on large repos.
+A `startupProbe` on `/healthz` gives the initial clone about five minutes (`initialDelaySeconds: 10` + `failureThreshold: 30` × `periodSeconds: 10`), and Kubernetes does not run the liveness or readiness probe until it passes — so the liveness `initialDelaySeconds` is not the knob for a slow first clone.
 
 ### Resources
 
