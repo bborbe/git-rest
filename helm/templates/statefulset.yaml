@@ -115,10 +115,16 @@ spec:
               path: /healthz
               port: 9090
               scheme: HTTP
-            initialDelaySeconds: {{ $.Values.startupProbe.initialDelaySeconds }}
-            periodSeconds: {{ $.Values.startupProbe.periodSeconds }}
-            timeoutSeconds: {{ $.Values.startupProbe.timeoutSeconds }}
-            failureThreshold: {{ $.Values.startupProbe.failureThreshold }}
+            {{- /* `helm upgrade --reuse-values` reuses the previous release's coalesced
+                   values and does NOT pick up this chart's new `startupProbe` block, so
+                   the whole key can be absent. Fall back to an empty dict first — a bare
+                   `.initialDelaySeconds | default 10` still dereferences nil and fails
+                   the render before `default` ever runs. */}}
+            {{- $sp := $.Values.startupProbe | default dict }}
+            initialDelaySeconds: {{ $sp.initialDelaySeconds | default 10 }}
+            periodSeconds: {{ $sp.periodSeconds | default 10 }}
+            timeoutSeconds: {{ $sp.timeoutSeconds | default 5 }}
+            failureThreshold: {{ $sp.failureThreshold | default 30 }}
             successThreshold: 1
           livenessProbe:
             httpGet:

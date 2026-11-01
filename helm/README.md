@@ -19,7 +19,7 @@ Per vault the chart renders:
 ## Install
 
 ```bash
-helm install git-rest oci://registry-1.docker.io/bborbe/git-rest --version 0.1.0 \
+helm install git-rest oci://registry-1.docker.io/bborbe/git-rest --version 0.1.4 \
   --namespace <ns> --values my-values.yaml
 ```
 
@@ -57,6 +57,7 @@ vaults:
 | `image.pullSecrets` | `[]` | private registry pull secrets |
 | `logLevel` | `"2"` | glog `-v` level |
 | `pullInterval` | `"30s"` | puller fetch+rebase interval |
+| `startupProbe.initialDelaySeconds` / `.periodSeconds` / `.timeoutSeconds` / `.failureThreshold` | `10` / `10` / `5` / `30` | budget for the **initial clone** (10 + 30×10 ≈ 5 min). Raise `failureThreshold` for a large repo — a vault repo runs to hundreds of MB and a slow first clone is killed mid-way, leaving a partial `.git` that `cloneIfNeeded` then accepts, so the pod reports Ready while serving an empty tree |
 | `sentry.proxy` | `""` | `SENTRY_PROXY` URL |
 | `affinity` | `{}` | node affinity for every vault STS |
 | `podSecurityContext` / `securityContext` | `{}` | overridable; empty by default |
