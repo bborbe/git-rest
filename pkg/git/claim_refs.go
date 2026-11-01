@@ -15,6 +15,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/bborbe/errors"
 )
@@ -93,7 +94,9 @@ func (o *gitOrigin) ListRefs(ctx context.Context, pattern string) ([]RemoteRef, 
 	if !o.g.hasRemote(ctx) {
 		return nil, errors.Wrap(ctx, ErrNoRemote, "no origin remote configured")
 	}
+	start := o.g.currentDateTimeGetter.Now()
 	out, err := o.g.runCmdOutput(ctx, o.g.repoPath, "ls-remote", "--refs", "origin", pattern)
+	o.g.metrics.ObserveGitOperation("ls-remote", time.Since(time.Time(start)).Seconds())
 	if err != nil {
 		return nil, errors.Wrap(ctx, err, "git ls-remote origin")
 	}
@@ -425,7 +428,9 @@ func (g *git) DeleteClaimRef(ctx context.Context, key string, expectedSHA string
 func (g *git) pushClaimRef(ctx context.Context, key, expectedSHA, sha string) error {
 	ref := "refs/" + key
 	lease := "--force-with-lease=" + ref + ":" + expectedSHA
+	start := g.currentDateTimeGetter.Now()
 	out, err := g.runCmdRaw(ctx, g.repoPath, "push", lease, "origin", sha+":"+ref)
+	g.metrics.ObserveGitOperation("push", time.Since(time.Time(start)).Seconds())
 	if err == nil {
 		return nil
 	}

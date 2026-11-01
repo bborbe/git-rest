@@ -14,11 +14,18 @@ var HTTPRequestsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
 	Help: "Total HTTP requests by method, path template, and status code.",
 }, []string{"method", "path", "status"})
 
+// gitOperationBuckets extends prometheus.DefBuckets with 30 s and 60 s bounds.
+// DefBuckets stops at 10 s, so a push that outlives the executor's 30 s caller
+// cap would land in +Inf only; the two extra bounds make such a sample readable
+// in a finite bucket. DefBuckets is copied rather than modified in place so the
+// shared slice stays untouched.
+var gitOperationBuckets = append(append([]float64{}, prometheus.DefBuckets...), 30, 60)
+
 // GitOperationDuration records the duration of git operations.
 var GitOperationDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 	Name:    "git_rest_git_operation_duration_seconds",
 	Help:    "Duration of git operations.",
-	Buckets: prometheus.DefBuckets,
+	Buckets: gitOperationBuckets,
 }, []string{"operation"})
 
 // GitOperationErrors counts git operation errors by operation type and conflict status.

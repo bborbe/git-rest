@@ -12,6 +12,10 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 
 - fix(helm): **the `startupProbe` budget becomes a chart value, because a fixed five minutes is not enough for a real vault repo.** The probe added in v0.37.2 was hardcoded to `failureThreshold: 30` — about 5 min — and that is shorter than a first clone of `bborbe/obsidian-openclaw` (~480 MB) takes over a home uplink. Measured 2026-11-01 on nuke dev, twice, on freshly provisioned volumes: the clone was still running at 308 s, the startup probe gave up, the container was killed, and `git clone` left a partial `.git` that the next start's `cloneIfNeeded` accepted — so the pod reported `1/1 Ready` while serving an **empty working tree**, and no retry could ever repair it. New `startupProbe.{initialDelaySeconds,periodSeconds,timeoutSeconds,failureThreshold}` values carry the historical timings as defaults, so behaviour is unchanged for anyone who does not set them. A cluster whose vault repo needs longer raises `failureThreshold` instead of patching the template. This costs nothing on the failure path: a clone that genuinely fails still exits the container immediately, so the budget only bounds how long a *successful but slow* clone may take.
 
+## v0.38.0
+
+- feat: `git_rest_git_operation_duration_seconds` now carries `push` and `ls-remote` samples — the claim-ref push, every branch-push attempt (one sample per attempt, including a retried push), and the origin ref listing are all observed, and the histogram gained 30 s and 60 s buckets so a sample above 30 s is readable in a finite bucket.
+
 ## v0.37.2
 
 - fix: Give each per-vault StatefulSet a `startupProbe` on `/healthz` that allows the initial clone roughly five minutes (`initialDelaySeconds: 10` + `failureThreshold: 30` × `periodSeconds: 10`) before the container is restarted. Kubernetes withholds the liveness and readiness probes until the startup probe succeeds, so a slow first clone no longer kills the pod mid-clone and no longer strands a partial `.git` that makes every later start skip the clone. The liveness and readiness timings are unchanged.
