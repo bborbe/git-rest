@@ -414,7 +414,9 @@ func (g *git) pushWithRetry(ctx context.Context, upstream string) error {
 			return errors.Wrap(ctx, ctx.Err(), "push retry cancelled")
 		default:
 		}
+		start := g.currentDateTimeGetter.Now()
 		out, err := g.runCmdRaw(ctx, g.repoPath, args...)
+		g.metrics.ObserveGitOperation("push", time.Since(time.Time(start)).Seconds())
 		if err == nil {
 			if attempt > 1 {
 				g.logPushSucceededAfterRetry(ctx, attempt)

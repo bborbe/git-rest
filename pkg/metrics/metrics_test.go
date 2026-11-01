@@ -8,6 +8,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"github.com/prometheus/client_golang/prometheus"
+	dto "github.com/prometheus/client_model/go"
 
 	"github.com/bborbe/git-rest/pkg/metrics"
 )
@@ -287,5 +288,44 @@ var _ = Describe("PushRetriesTotal", func() {
 		m.IncPushRetry()
 		after := gatherCounter("git_rest_push_retries_total")
 		Expect(after - before).To(Equal(1.0))
+	})
+})
+
+var _ = Describe("GitOperationDuration buckets", func() {
+	It("keeps a sample above 30 s in a finite bucket", func() {
+		// A label value used by no other test in the package keeps this sample
+		// isolated in the process-global registry.
+		const label = "bucket-test-31s"
+		observer, err := metrics.GitOperationDuration.GetMetricWithLabelValues(label)
+		Expect(err).NotTo(HaveOccurred())
+		hist, ok := observer.(prometheus.Histogram)
+		Expect(ok).To(BeTrue(), "the observer must be a prometheus.Histogram")
+
+		hist.Observe(31.0)
+
+		var dtoMetric dto.Metric
+		Expect(hist.Write(&dtoMetric)).To(Succeed())
+
+		var countAt30, countAt60 uint64
+		found10, found30, found60 := false, false, false
+		for _, bucket := range dtoMetric.GetHistogram().GetBucket() {
+			switch bucket.GetUpperBound() {
+			case 10:
+				found10 = true
+			case 30:
+				found30 = true
+				countAt30 = bucket.GetCumulativeCount()
+			case 60:
+				found60 = true
+				countAt60 = bucket.GetCumulativeCount()
+			}
+		}
+		Expect(found10).To(BeTrue(), "the original 10 s boundary must remain")
+		Expect(found30).To(BeTrue(), "the 30 s boundary must be present")
+		Expect(found60).To(BeTrue(), "the 60 s boundary must be present")
+		Expect(countAt30).To(Equal(uint64(0)),
+			"a 31 s sample must not fall in the 30 s bucket")
+		Expect(countAt60).To(Equal(uint64(1)),
+			"a 31 s sample must land inside the finite 60 s bucket")
 	})
 })

@@ -8,6 +8,10 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 * MINOR version when you add functionality in a backwards-compatible manner, and
 * PATCH version when you make backwards-compatible bug fixes.
 
+## Unreleased
+
+- feat: `git_rest_git_operation_duration_seconds` now carries `push` and `ls-remote` samples — the claim-ref push, every branch-push attempt (one sample per attempt, including a retried push), and the origin ref listing are all observed, and the histogram gained 30 s and 60 s buckets so a sample above 30 s is readable in a finite bucket.
+
 ## v0.37.2
 
 - fix: Give each per-vault StatefulSet a `startupProbe` on `/healthz` that allows the initial clone roughly five minutes (`initialDelaySeconds: 10` + `failureThreshold: 30` × `periodSeconds: 10`) before the container is restarted. Kubernetes withholds the liveness and readiness probes until the startup probe succeeds, so a slow first clone no longer kills the pod mid-clone and no longer strands a partial `.git` that makes every later start skip the clone. The liveness and readiness timings are unchanged.
