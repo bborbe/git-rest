@@ -885,15 +885,33 @@ func oneSidedKeyIsAdd(
 	return !inBase
 }
 
+// emittedKeys records the frontmatter keys already written by the resolved
+// regions of one file. A key emitted by two regions would leave a duplicate
+// mapping key that the next yaml.Unmarshal of the frontmatter rejects, so the
+// second occurrence declines the whole file instead of writing invalid YAML.
+type emittedKeys map[string]struct{}
+
+// record returns false when key was already emitted.
+func (e emittedKeys) record(key string) bool {
+	if _, duplicate := e[key]; duplicate {
+		return false
+	}
+	e[key] = struct{}{}
+	return true
+}
+
 // resolveScalarRegion returns the replacement lines for one region. Keys the
 // two sides share go through resolveScalarEntry unchanged; a key only one side
 // carries is kept verbatim when the merge base lacks it. Ordering is the
 // ours-side keys in their original order, then the theirs-only keys in theirs.
+// Every emitted key is recorded in the caller's set, which spans all regions of
+// the file; a key that would be emitted twice declines the whole file.
 // ok is false when the region needs a human.
 func resolveScalarRegion(
 	region scalarRegion,
 	newerTheirs func() (theirsNewer bool, ok bool),
 	loadBase func() (map[string]struct{}, bool),
+	emitted emittedKeys,
 ) ([]string, bool) {
 	theirsByKey := make(map[string]scalarEntry, len(region.theirs))
 	for _, theirsEntry := range region.theirs {
@@ -911,13 +929,13 @@ func resolveScalarRegion(
 				theirsEntry,
 				newerTheirs,
 			)
-			if !ok {
+			if !ok || !emitted.record(oursEntry.key) {
 				return nil, false
 			}
 			resolved = append(resolved, line)
 			continue
 		}
-		if !oneSidedKeyIsAdd(loadBase, oursEntry.key) {
+		if !oneSidedKeyIsAdd(loadBase, oursEntry.key) || !emitted.record(oursEntry.key) {
 			return nil, false
 		}
 		resolved = append(resolved, oursEntry.entry.line)
@@ -927,7 +945,8 @@ func resolveScalarRegion(
 		if _, inOurs := oursKeys[theirsEntry.key]; inOurs {
 			continue
 		}
-		if !oneSidedKeyIsAdd(loadBase, theirsEntry.key) {
+		if !oneSidedKeyIsAdd(loadBase, theirsEntry.key) ||
+			!emitted.record(theirsEntry.key) {
 			return nil, false
 		}
 		resolved = append(resolved, theirsEntry.entry.line)
@@ -1027,8 +1046,10 @@ func (r *yamlMergeResolver) applyFallbackRules(
 // Keys the two sides share follow the counter and newer-side rules. A key only
 // one side carries is resolved to the union of both sides when the merge base is
 // readable and lacks it; otherwise the region declines and the whole file
-// quarantines. A decline is never a partial write: nothing is written or staged
-// and the caller records no_frontmatter.
+// quarantines. A key that would be emitted by two regions is one of the decline
+// shapes, because writing both would produce a duplicate mapping key. A decline
+// is never a partial write: nothing is written or staged and the caller records
+// no_frontmatter.
 func (r *yamlMergeResolver) applyScalarFrontmatterRule(
 	ctx context.Context, path, abs, raw string,
 ) (applied bool, err error) {
@@ -1079,9 +1100,10 @@ func (r *yamlMergeResolver) applyScalarFrontmatterRule(
 		return baseKeys, baseOK
 	}
 
+	emitted := make(emittedKeys, len(regions))
 	replacements := make([][]string, 0, len(regions))
 	for _, region := range regions {
-		resolved, resolvedOK := resolveScalarRegion(region, newerTheirs, loadBase)
+		resolved, resolvedOK := resolveScalarRegion(region, newerTheirs, loadBase, emitted)
 		if !resolvedOK {
 			return false, nil
 		}

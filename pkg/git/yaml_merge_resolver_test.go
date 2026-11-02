@@ -989,8 +989,13 @@ var _ = Describe("YAMLMergeResolver", func() {
 			Entry("flow collection",
 				"---\n<<<<<<< HEAD\ntags: [a, b]\n=======\ntags: [c]\n"+
 					">>>>>>> theirs\ntitle: probe\n---\nbody\n"),
+			// The shared key is a counter so the region resolves it without
+			// merge-parent timestamps; that makes the one-sided key `b` the input
+			// that decides the outcome. With a shared non-counter key the region
+			// declined before `b` was ever examined, and a regression in the
+			// one-sided base guard would have gone unnoticed.
 			Entry("one-sided key",
-				"---\n<<<<<<< HEAD\na: 1\nb: 2\n=======\na: 1\n"+
+				"---\n<<<<<<< HEAD\ntrigger_count: 3\nb: 2\n=======\ntrigger_count: 0\n"+
 					">>>>>>> theirs\ntitle: probe\n---\nbody\n"),
 			Entry("duplicate key",
 				"---\n<<<<<<< HEAD\na: 1\na: 2\n=======\na: 3\n"+
@@ -1194,6 +1199,73 @@ var _ = Describe("YAMLMergeResolver", func() {
 				"---\npr_state: open\nprevious_assignee: someone\ntrigger_count: 3\n---\nbody\n",
 			))
 			Expect(fakeMetrics.IncAutoresolvedCallCount()).To(Equal(1))
+		})
+
+		// The union rule decides each region on its own, so a key one side adds
+		// in one region and the other side adds in a separate region must still
+		// be caught: writing both would leave a duplicate mapping key that the
+		// next yaml.Unmarshal of the frontmatter rejects.
+		It("AC: declines the file when one key would be emitted in two regions", func() {
+			conflicted := "---\n" +
+				"<<<<<<< HEAD\nk: 1\n=======\nn: 1\n>>>>>>> theirs\n" +
+				"title: probe\n" +
+				"<<<<<<< HEAD\nm: 1\n=======\nk: 2\n>>>>>>> theirs\n" +
+				"---\nbody\n"
+			workDir, rel, cleanup := setupHandWrittenConflict("note.md", conflicted)
+			defer cleanup()
+
+			abs := filepath.Join(workDir, rel)
+			before, err := os.ReadFile(abs)
+			Expect(err).NotTo(HaveOccurred())
+
+			r := git.NewYAMLMergeResolverWithBase(
+				workDir,
+				fakeMetrics,
+				"---\ntitle: probe\n---\nbody\n",
+				true,
+			)
+			err = r.Resolve(ctx, []string{rel})
+			Expect(stderrors.Is(err, git.ErrConflictResolutionFailed)).To(BeTrue())
+			Expect(fakeMetrics.IncResolverFailureCallCount()).To(Equal(1))
+			Expect(fakeMetrics.IncResolverFailureArgsForCall(0)).To(Equal("no_frontmatter"))
+			Expect(fakeMetrics.IncAutoresolvedCallCount()).To(Equal(0))
+
+			after, err := os.ReadFile(abs)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(after).To(Equal(before))
+		})
+
+		// The shared-key branch records through the same set. A counter key
+		// resolves without merge-parent timestamps, so the second region reaches
+		// the duplicate check instead of declining on unreadable timestamps.
+		It("AC: declines the file when a shared key appears in two regions", func() {
+			conflicted := "---\n" +
+				"<<<<<<< HEAD\ntrigger_count: 1\n=======\ntrigger_count: 2\n>>>>>>> theirs\n" +
+				"title: probe\n" +
+				"<<<<<<< HEAD\ntrigger_count: 1\n=======\ntrigger_count: 2\n>>>>>>> theirs\n" +
+				"---\nbody\n"
+			workDir, rel, cleanup := setupHandWrittenConflict("note.md", conflicted)
+			defer cleanup()
+
+			abs := filepath.Join(workDir, rel)
+			before, err := os.ReadFile(abs)
+			Expect(err).NotTo(HaveOccurred())
+
+			r := git.NewYAMLMergeResolverWithBase(
+				workDir,
+				fakeMetrics,
+				"---\ntitle: probe\n---\nbody\n",
+				true,
+			)
+			err = r.Resolve(ctx, []string{rel})
+			Expect(stderrors.Is(err, git.ErrConflictResolutionFailed)).To(BeTrue())
+			Expect(fakeMetrics.IncResolverFailureCallCount()).To(Equal(1))
+			Expect(fakeMetrics.IncResolverFailureArgsForCall(0)).To(Equal("no_frontmatter"))
+			Expect(fakeMetrics.IncAutoresolvedCallCount()).To(Equal(0))
+
+			after, err := os.ReadFile(abs)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(after).To(Equal(before))
 		})
 
 		It("reads the merge-base key set from index stage 1", func() {

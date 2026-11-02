@@ -8,6 +8,8 @@ branch: dark-factory/yaml-scalar-conflict-autoresolve
 ---
 
 > **Partly superseded** by `specs/in-progress/024-bug-one-sided-frontmatter-adds-quarantine.md` for the one-sided-add case only: a one-sided key is now kept when the merge base is readable and lacks it. One-sided deletes, non-scalar hunks, hunks outside the frontmatter and duplicate keys keep quarantining exactly as this spec describes.
+>
+> The **mechanism** changed too, so the AC evidence below no longer describes what rejects a one-sided pair: the identical-key-set guard in `parseScalarSide` has been removed, and that fixture (`a: 1`/`b: 2` vs `a: 1`) now declines because its shared non-counter key `a` needs merge-parent timestamps and the hand-written fixture has no `MERGE_HEAD` — not because of a key-set guard. 024's Constraints section records the new reason.
 
 ## Summary
 
