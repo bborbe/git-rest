@@ -8,6 +8,10 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 * MINOR version when you add functionality in a backwards-compatible manner, and
 * PATCH version when you make backwards-compatible bug fixes.
 
+## Unreleased
+
+- fix: Auto-resolve a merge conflict confined to a markdown file's body. A body conflict — one whose hunks lie entirely below the frontmatter's closing `---` — now resolves in place instead of quarantining: an empty side takes the other side verbatim, identical sides are kept once, and two differing non-empty sides are joined as the local body, a blank line, then the incoming body, with every line outside the hunks preserved. Each resolved path increments `git_rest_body_merged_total`. Conflicts crossing the frontmatter boundary, non-markdown paths and markdown files without frontmatter keep quarantining.
+
 ## v0.39.0
 
 - fix: **the `startupProbe` budget becomes a chart value, because a fixed five minutes is not enough for a real vault repo.** The probe added in v0.37.2 was hardcoded to `failureThreshold: 30` — about 5 min — and that is shorter than a first clone of `bborbe/obsidian-openclaw` (~480 MB) takes over a home uplink. Measured 2026-11-01 on nuke dev, twice, on freshly provisioned volumes: the clone was still running at 308 s, the startup probe gave up, the container was killed, and `git clone` left a partial `.git` that the next start's `cloneIfNeeded` accepted — so the pod reported `1/1 Ready` while serving an **empty working tree**, and no retry could ever repair it. New `startupProbe.{initialDelaySeconds,periodSeconds,timeoutSeconds,failureThreshold}` values carry the historical timings as defaults, so behaviour is unchanged for anyone who does not set them. A cluster whose vault repo needs longer raises `failureThreshold` instead of patching the template. This costs nothing on the failure path: a clone that genuinely fails still exits the container immediately, so the budget only bounds how long a *successful but slow* clone may take.

@@ -83,6 +83,8 @@ func (u *unsafeTestMetrics) IncPullRescue() {}
 
 func (u *unsafeTestMetrics) IncAutoresolved() {}
 
+func (u *unsafeTestMetrics) IncBodyMerged() {}
+
 func (u *unsafeTestMetrics) IncRefRequest(_, _ string) {}
 
 func (u *unsafeTestMetrics) IncPushRetry() {}
