@@ -1,8 +1,9 @@
 ---
-status: prompted
+status: verifying
 approved: "2026-11-02T15:22:52Z"
 generating: "2026-11-02T19:16:56Z"
 prompted: "2026-11-02T19:22:23Z"
+verifying: "2026-11-02T19:34:07Z"
 branch: dark-factory/bug-one-sided-frontmatter-adds-quarantine
 ---
 
