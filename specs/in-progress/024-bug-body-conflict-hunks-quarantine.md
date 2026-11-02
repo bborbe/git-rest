@@ -1,8 +1,9 @@
 ---
-status: prompted
+status: verifying
 approved: "2026-11-02T17:42:59Z"
 generating: "2026-11-02T17:56:16Z"
 prompted: "2026-11-02T18:09:39Z"
+verifying: "2026-11-02T19:04:30Z"
 branch: dark-factory/bug-body-conflict-hunks-quarantine
 ---
 
@@ -150,7 +151,9 @@ curl -s localhost:18448/metrics | grep -E '^git_rest_(body_merged_total|autoreso
 kill "$(pgrep -f /tmp/git-rest-body-bin)" 2>/dev/null || true
 ```
 
-Expected: the file keeps `---\npage_type: note\n---\n\n# Heading\n\n` and carries `a\nb\nc\n\na\nb\nc\nd` (the concatenation), the commit subject is `merge: resolved=[tasks/probe.md] quarantined=[]`, `_conflicts/` holds 0 files, `git_rest_body_merged_total 1`, `git_rest_autoresolved_total 0`, `git_rest_quarantined_backlog 0`.
+Expected: the file keeps `---\npage_type: note\n---\n\n# Heading\n\n` and carries `a\nb\nc\nd`, the commit subject is `merge: resolved=[tasks/probe.md] quarantined=[]`, `_conflicts/` holds 0 files, `git_rest_body_merged_total 1`, `git_rest_autoresolved_total 0`, `git_rest_quarantined_backlog 0`.
+
+⚠️ **`a\nb\nc\nd`, not the concatenation** — verified 2026-11-02 against a real `git merge`. Git aligns the shared `a\nb\nc` on both sides and conflicts only on the trailing `d`, so the region is `<<<<<<< HEAD` (empty) `=======` `d` `>>>>>>>`. `combineBodies("", "d")` is the *empty-ours → theirs* rule, so the spliced result is `a\nb\nc` followed by `d`. The whole-region concatenation appears only when both sides genuinely differ inside one hunk — the unit-level `AC-bodyonly-both-differ` fixture, not this one.
 
 On **rungs 2 and 3** — not on this rung-1 recipe — `git_rest_resolver_failures_total{category="vault_api_failed"}` increments on the same pull: vault-api declines a body conflict by policy and the fallback then succeeds. That is expected, not a regression. Rung 1 passes `-vault-write=true` with no vault-api URL, so it wires the bare YAML resolver and that category never moves.
 
