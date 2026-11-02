@@ -1,8 +1,13 @@
 ---
-status: approved
+status: completed
 spec: [024-bug-body-conflict-hunks-quarantine]
+summary: Locked the body-conflict regression surface, documented the body rule in docs/deployment.md, and added one `## Unreleased` fix bullet; make precommit exits 0.
+execution_id: git-rest-body-merge-exec-094-spec-024-regression-docs-changelog
+dark-factory-version: v0.198.7
 created: "2026-11-02T18:50:00Z"
 queued: "2026-11-02T18:46:44Z"
+started: "2026-11-02T19:00:53Z"
+completed: "2026-11-02T19:03:57Z"
 branch: dark-factory/bug-body-conflict-hunks-quarantine
 ---
 
