@@ -8,6 +8,10 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 * MINOR version when you add functionality in a backwards-compatible manner, and
 * PATCH version when you make backwards-compatible bug fixes.
 
+## Unreleased
+
+- fix: Resolve a frontmatter conflict region whose sides add different scalar keys to the union of both sides, when the merge base is readable and carries neither key. A one-sided key is now kept only as a base-confirmed add: when the base carries it (a delete that raced an edit) or the base stage cannot be read, the region still quarantines with `git_rest_resolver_failures_total{category="no_frontmatter"}` and the deleted key is never resurrected. Counters still take the greater value and every other shared scalar still takes the newer merge parent's value. Supersedes spec 016's one-sided-key exclusion for the base-confirmed add case only.
+
 ## v0.39.0
 
 - fix: **the `startupProbe` budget becomes a chart value, because a fixed five minutes is not enough for a real vault repo.** The probe added in v0.37.2 was hardcoded to `failureThreshold: 30` — about 5 min — and that is shorter than a first clone of `bborbe/obsidian-openclaw` (~480 MB) takes over a home uplink. Measured 2026-11-01 on nuke dev, twice, on freshly provisioned volumes: the clone was still running at 308 s, the startup probe gave up, the container was killed, and `git clone` left a partial `.git` that the next start's `cloneIfNeeded` accepted — so the pod reported `1/1 Ready` while serving an **empty working tree**, and no retry could ever repair it. New `startupProbe.{initialDelaySeconds,periodSeconds,timeoutSeconds,failureThreshold}` values carry the historical timings as defaults, so behaviour is unchanged for anyone who does not set them. A cluster whose vault repo needs longer raises `failureThreshold` instead of patching the template. This costs nothing on the failure path: a clone that genuinely fails still exits the container immediately, so the budget only bounds how long a *successful but slow* clone may take.

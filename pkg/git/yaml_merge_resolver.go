@@ -610,7 +610,7 @@ type scalarKeyEntry struct {
 type scalarRegion struct {
 	conflictRegion
 	ours   []scalarKeyEntry // ours-side order
-	theirs map[string]scalarEntry
+	theirs []scalarKeyEntry // theirs-side order
 }
 
 // planScalarRegions decides whether the whole file is eligible for the
@@ -657,11 +657,14 @@ func regionInsideFrontmatter(region conflictRegion, closeIndex, previousEnd int)
 		region.startLine > previousEnd
 }
 
-// parseScalarSide parses both sides of one region and enforces the key-set
-// guards: at least one key per side, no duplicates, identical key sets.
+// parseScalarSide parses both sides of one region and enforces the shape
+// guards: at least one key per side and no duplicate key within a side. The
+// key sets may be disjoint here — whether a one-sided key is an addition or a
+// deletion is decided against the merge base in resolveScalarRegion, which is
+// the only place that may consult the base.
 func parseScalarSide(
 	oursLines, theirsLines []string,
-) ([]scalarKeyEntry, map[string]scalarEntry, bool) {
+) ([]scalarKeyEntry, []scalarKeyEntry, bool) {
 	ours, ok := parseScalarOurs(oursLines)
 	if !ok {
 		return nil, nil, false
@@ -670,13 +673,8 @@ func parseScalarSide(
 	if !ok {
 		return nil, nil, false
 	}
-	if len(ours) == 0 || len(theirs) == 0 || len(ours) != len(theirs) {
+	if len(ours) == 0 || len(theirs) == 0 {
 		return nil, nil, false
-	}
-	for _, oursEntry := range ours {
-		if _, present := theirs[oursEntry.key]; !present {
-			return nil, nil, false
-		}
 	}
 	return ours, theirs, true
 }
@@ -698,17 +696,19 @@ func parseScalarOurs(lines []string) ([]scalarKeyEntry, bool) {
 	return ours, true
 }
 
-func parseScalarTheirs(lines []string) (map[string]scalarEntry, bool) {
-	theirs := make(map[string]scalarEntry, len(lines))
+func parseScalarTheirs(lines []string) ([]scalarKeyEntry, bool) {
+	theirs := make([]scalarKeyEntry, 0, len(lines))
+	seen := make(map[string]struct{}, len(lines))
 	for _, line := range lines {
 		key, entry, ok := parseScalarEntry(line)
 		if !ok {
 			return nil, false
 		}
-		if _, duplicate := theirs[key]; duplicate {
+		if _, duplicate := seen[key]; duplicate {
 			return nil, false
 		}
-		theirs[key] = entry
+		seen[key] = struct{}{}
+		theirs = append(theirs, scalarKeyEntry{key: key, entry: entry})
 	}
 	return theirs, true
 }
@@ -820,9 +820,82 @@ func (r *yamlMergeResolver) baseKeySet(
 	return keys, true
 }
 
+// oneSidedKeyIsAdd reports whether key, present on only one side of a region,
+// is an addition relative to the merge base. It is false when the base cannot
+// be read at all, and false when the base already carries the key — that shape
+// is a delete on one side that raced an edit on the other, and the deleted key
+// must never be resurrected.
+func oneSidedKeyIsAdd(
+	loadBase func() (map[string]struct{}, bool),
+	key string,
+) bool {
+	keys, ok := loadBase()
+	if !ok {
+		return false
+	}
+	_, inBase := keys[key]
+	return !inBase
+}
+
+// resolveScalarRegion returns the replacement lines for one region. Keys the
+// two sides share go through resolveScalarEntry unchanged; a key only one side
+// carries is kept verbatim when the merge base lacks it. Ordering is the
+// ours-side keys in their original order, then the theirs-only keys in theirs.
+// ok is false when the region needs a human.
+func resolveScalarRegion(
+	region scalarRegion,
+	newerTheirs func() (theirsNewer bool, ok bool),
+	loadBase func() (map[string]struct{}, bool),
+) ([]string, bool) {
+	theirsByKey := make(map[string]scalarEntry, len(region.theirs))
+	for _, theirsEntry := range region.theirs {
+		theirsByKey[theirsEntry.key] = theirsEntry.entry
+	}
+
+	oursKeys := make(map[string]struct{}, len(region.ours))
+	resolved := make([]string, 0, len(region.ours)+len(region.theirs))
+	for _, oursEntry := range region.ours {
+		oursKeys[oursEntry.key] = struct{}{}
+		if theirsEntry, shared := theirsByKey[oursEntry.key]; shared {
+			line, ok := resolveScalarEntry(
+				oursEntry.key,
+				oursEntry.entry,
+				theirsEntry,
+				newerTheirs,
+			)
+			if !ok {
+				return nil, false
+			}
+			resolved = append(resolved, line)
+			continue
+		}
+		if !oneSidedKeyIsAdd(loadBase, oursEntry.key) {
+			return nil, false
+		}
+		resolved = append(resolved, oursEntry.entry.line)
+	}
+
+	for _, theirsEntry := range region.theirs {
+		if _, inOurs := oursKeys[theirsEntry.key]; inOurs {
+			continue
+		}
+		if !oneSidedKeyIsAdd(loadBase, theirsEntry.key) {
+			return nil, false
+		}
+		resolved = append(resolved, theirsEntry.entry.line)
+	}
+	return resolved, true
+}
+
 // applyScalarFrontmatterRule attempts the scalar-frontmatter rule on the raw
 // conflicted file. applied reports whether the rule took responsibility for the
 // file; when it did, the file has been written and staged and err is the outcome.
+//
+// Keys the two sides share follow the counter and newer-side rules. A key only
+// one side carries is resolved to the union of both sides when the merge base is
+// readable and lacks it; otherwise the region declines and the whole file
+// quarantines. A decline is never a partial write: nothing is written or staged
+// and the caller records no_frontmatter.
 func (r *yamlMergeResolver) applyScalarFrontmatterRule(
 	ctx context.Context, path, abs, raw string,
 ) (applied bool, err error) {
@@ -860,20 +933,24 @@ func (r *yamlMergeResolver) applyScalarFrontmatterRule(
 		return theirsNewer, timesOK
 	}
 
+	var (
+		baseLoaded bool
+		baseOK     bool
+		baseKeys   map[string]struct{}
+	)
+	loadBase := func() (map[string]struct{}, bool) {
+		if !baseLoaded {
+			baseLoaded = true
+			baseKeys, baseOK = r.baseKeySet(ctx, path)
+		}
+		return baseKeys, baseOK
+	}
+
 	replacements := make([][]string, 0, len(regions))
 	for _, region := range regions {
-		resolved := make([]string, 0, len(region.ours))
-		for _, oursEntry := range region.ours {
-			line, resolvedOK := resolveScalarEntry(
-				oursEntry.key,
-				oursEntry.entry,
-				region.theirs[oursEntry.key],
-				newerTheirs,
-			)
-			if !resolvedOK {
-				return false, nil
-			}
-			resolved = append(resolved, line)
+		resolved, resolvedOK := resolveScalarRegion(region, newerTheirs, loadBase)
+		if !resolvedOK {
+			return false, nil
 		}
 		replacements = append(replacements, resolved)
 	}

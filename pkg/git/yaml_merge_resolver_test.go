@@ -138,6 +138,53 @@ func setupScalarMergeRepo(
 	return dir, relPath, cleanup
 }
 
+// setupScalarAddAddRepo builds a repo where both branches create note.md with
+// different content, so the merge is an add/add conflict with no index stage 1
+// for note.md. Returns workDir, the repo-relative path, and a cleanup func.
+func setupScalarAddAddRepo(ours, theirs string) (workDir, relPath string, cleanup func()) {
+	dir, err := os.MkdirTemp("", "scalar-addadd-test-*")
+	Expect(err).NotTo(HaveOccurred())
+
+	run := func(name string, args ...string) {
+		cmd := exec.Command(name, args...)
+		cmd.Dir = dir
+		out, runErr := cmd.CombinedOutput()
+		Expect(runErr).NotTo(HaveOccurred(), "%s %v: %s", name, args, string(out))
+	}
+
+	run("git", "init", "-q", "-b", "main")
+	run("git", "config", "user.email", "test@example.com")
+	run("git", "config", "user.name", "test")
+
+	relPath = "note.md"
+	abs := filepath.Join(dir, relPath)
+
+	Expect(os.WriteFile(filepath.Join(dir, "README.md"), []byte("base\n"), 0o600)).To(Succeed())
+	run("git", "add", "--", "README.md")
+	run("git", "commit", "-q", "-m", "base")
+
+	run("git", "checkout", "-q", "-b", "theirs")
+	Expect(os.WriteFile(abs, []byte(theirs), 0o600)).To(Succeed())
+	run("git", "add", "--", relPath)
+	run("git", "commit", "-q", "-m", "theirs")
+
+	run("git", "checkout", "-q", "main")
+	Expect(os.WriteFile(abs, []byte(ours), 0o600)).To(Succeed())
+	run("git", "add", "--", relPath)
+	run("git", "commit", "-q", "-m", "ours")
+
+	cmd := exec.Command("git", "merge", "--no-edit", "theirs")
+	cmd.Dir = dir
+	_ = cmd.Run() // non-zero exit expected
+
+	content, readErr := os.ReadFile(abs)
+	Expect(readErr).NotTo(HaveOccurred())
+	Expect(string(content)).To(ContainSubstring("<<<<<<<"))
+
+	cleanup = func() { _ = os.RemoveAll(dir) }
+	return dir, relPath, cleanup
+}
+
 // setupHandWrittenConflict builds a repo with the given repo-relative path
 // committed as a base file and then overwritten with a hand-written conflicted
 // body (staged, not committed), so the resolver sees exactly the bytes given.
@@ -629,6 +676,205 @@ var _ = Describe("YAMLMergeResolver", func() {
 				"---\n<<<<<<< HEAD\na: 1\na: 2\n=======\na: 3\n"+
 					">>>>>>> theirs\ntitle: probe\n---\nbody\n"),
 		)
+
+		It("AC: resolves two one-sided additions to the union of both sides", func() {
+			base := "---\ncreated_date: \"2026-11-02\"\nphase: planning\n---\n\nbody line\n"
+			ours := "---\ncreated_date: \"2026-11-02\"\nphase: planning\npr_state: open\n---\n\nbody line\n"
+			theirs := "---\ncreated_date: \"2026-11-02\"\nphase: planning\n" +
+				"previous_assignee: someone\n---\n\nbody line\n"
+			workDir, rel, cleanup := setupScalarMergeRepo(base, ours, theirs, "", "")
+			defer cleanup()
+
+			r := git.NewYAMLMergeResolver(workDir, fakeMetrics)
+			Expect(r.Resolve(ctx, []string{rel})).To(Succeed())
+
+			written, err := os.ReadFile(filepath.Join(workDir, rel))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(string(written)).To(Equal(
+				"---\ncreated_date: \"2026-11-02\"\nphase: planning\npr_state: open\n" +
+					"previous_assignee: someone\n---\n\nbody line\n",
+			))
+			Expect(string(written)).NotTo(ContainSubstring("<<<<<<<"))
+			Expect(string(written)).NotTo(ContainSubstring(">>>>>>>"))
+			Expect(fakeMetrics.IncAutoresolvedCallCount()).To(Equal(1))
+			Expect(fakeMetrics.IncResolverFailureCallCount()).To(Equal(0))
+		})
+
+		It("AC: orders ours-side keys first, then the theirs-only keys", func() {
+			conflicted := "---\n<<<<<<< HEAD\nzeta: 1\nalpha: 2\n=======\n" +
+				"omega: 3\nbeta: 4\n>>>>>>> theirs\ntitle: probe\n---\nbody\n"
+			workDir, rel, cleanup := setupHandWrittenConflict("note.md", conflicted)
+			defer cleanup()
+
+			r := git.NewYAMLMergeResolverWithBase(
+				workDir,
+				fakeMetrics,
+				"---\ntitle: probe\n---\nbody\n",
+				true,
+			)
+			Expect(r.Resolve(ctx, []string{rel})).To(Succeed())
+
+			written, err := os.ReadFile(filepath.Join(workDir, rel))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(string(written)).To(Equal(
+				"---\nzeta: 1\nalpha: 2\nomega: 3\nbeta: 4\ntitle: probe\n---\nbody\n",
+			))
+		})
+
+		It("AC: a one-sided key the base carries still quarantines", func() {
+			conflicted := "---\n<<<<<<< HEAD\ntrigger_count: 3\n=======\n" +
+				"pr_state: closed\ntrigger_count: 0\n>>>>>>> theirs\n---\nbody\n"
+			workDir, rel, cleanup := setupHandWrittenConflict("note.md", conflicted)
+			defer cleanup()
+
+			abs := filepath.Join(workDir, rel)
+			before, err := os.ReadFile(abs)
+			Expect(err).NotTo(HaveOccurred())
+
+			base := "---\npr_state: open\ntrigger_count: 9\n---\nbody\n"
+			r := git.NewYAMLMergeResolverWithBase(workDir, fakeMetrics, base, true)
+			err = r.Resolve(ctx, []string{rel})
+			Expect(stderrors.Is(err, git.ErrConflictResolutionFailed)).To(BeTrue())
+			Expect(fakeMetrics.IncResolverFailureCallCount()).To(Equal(1))
+			Expect(fakeMetrics.IncResolverFailureArgsForCall(0)).To(Equal("no_frontmatter"))
+			Expect(fakeMetrics.IncAutoresolvedCallCount()).To(Equal(0))
+
+			after, err := os.ReadFile(abs)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(after).To(Equal(before))
+		})
+
+		It("AC: an unreadable merge base keeps the one-sided shape quarantined", func() {
+			conflicted := "---\n<<<<<<< HEAD\npr_state: open\n=======\n" +
+				"previous_assignee: someone\n>>>>>>> theirs\ntitle: probe\n---\nbody\n"
+			workDir, rel, cleanup := setupHandWrittenConflict("note.md", conflicted)
+			defer cleanup()
+
+			abs := filepath.Join(workDir, rel)
+			before, err := os.ReadFile(abs)
+			Expect(err).NotTo(HaveOccurred())
+
+			r := git.NewYAMLMergeResolverWithBase(workDir, fakeMetrics, "", false)
+			err = r.Resolve(ctx, []string{rel})
+			Expect(stderrors.Is(err, git.ErrConflictResolutionFailed)).To(BeTrue())
+			Expect(fakeMetrics.IncResolverFailureArgsForCall(0)).To(Equal("no_frontmatter"))
+			Expect(fakeMetrics.IncAutoresolvedCallCount()).To(Equal(0))
+
+			after, err := os.ReadFile(abs)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(after).To(Equal(before))
+		})
+
+		// git may fold the deletion and the adjacent edit into one region or split
+		// them; either way the region must quarantine, and the assertion is on the
+		// outcome, not on the region count.
+		It("AC: a real merge whose base carries the one-sided key quarantines", func() {
+			base := "---\npr_state: open\nphase: planning\n---\nbody\n"
+			ours := "---\nphase: done\n---\nbody\n"
+			theirs := "---\npr_state: closed\nphase: planning\n---\nbody\n"
+			workDir, rel, cleanup := setupScalarMergeRepo(base, ours, theirs, "", "")
+			defer cleanup()
+
+			abs := filepath.Join(workDir, rel)
+			before, err := os.ReadFile(abs)
+			Expect(err).NotTo(HaveOccurred())
+
+			r := git.NewYAMLMergeResolver(workDir, fakeMetrics)
+			err = r.Resolve(ctx, []string{rel})
+			Expect(stderrors.Is(err, git.ErrConflictResolutionFailed)).To(BeTrue())
+			Expect(fakeMetrics.IncAutoresolvedCallCount()).To(Equal(0))
+
+			after, err := os.ReadFile(abs)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(after).To(Equal(before))
+		})
+
+		It("AC: an add/add conflict with no merge base quarantines", func() {
+			ours := "---\npr_state: open\n---\nbody\n"
+			theirs := "---\nprevious_assignee: someone\n---\nbody\n"
+			workDir, rel, cleanup := setupScalarAddAddRepo(ours, theirs)
+			defer cleanup()
+
+			abs := filepath.Join(workDir, rel)
+			before, err := os.ReadFile(abs)
+			Expect(err).NotTo(HaveOccurred())
+
+			r := git.NewYAMLMergeResolver(workDir, fakeMetrics)
+			err = r.Resolve(ctx, []string{rel})
+			Expect(stderrors.Is(err, git.ErrConflictResolutionFailed)).To(BeTrue())
+			Expect(fakeMetrics.IncResolverFailureArgsForCall(0)).To(Equal("no_frontmatter"))
+			Expect(fakeMetrics.IncAutoresolvedCallCount()).To(Equal(0))
+
+			after, err := os.ReadFile(abs)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(after).To(Equal(before))
+		})
+
+		It("AC: counters and newer-side rules survive a one-sided add in the same region", func() {
+			base := "---\ntrigger_count: 9\ntitle: probe\n---\nbody\n"
+			ours := "---\ntrigger_count: 3\npr_state: open\ntitle: probe\n---\nbody\n"
+			theirs := "---\ntrigger_count: 0\nprevious_assignee: someone\ntitle: probe\n---\nbody\n"
+			workDir, rel, cleanup := setupScalarMergeRepo(base, ours, theirs, "", "")
+			defer cleanup()
+
+			r := git.NewYAMLMergeResolver(workDir, fakeMetrics)
+			Expect(r.Resolve(ctx, []string{rel})).To(Succeed())
+
+			written, err := os.ReadFile(filepath.Join(workDir, rel))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(string(written)).To(ContainSubstring("trigger_count: 3"))
+			Expect(string(written)).To(ContainSubstring("pr_state: open"))
+			Expect(string(written)).To(ContainSubstring("previous_assignee: someone"))
+			Expect(strings.Count(string(written), "trigger_count: 3")).To(Equal(1))
+			Expect(string(written)).NotTo(ContainSubstring("<<<<<<<"))
+			Expect(fakeMetrics.IncAutoresolvedCallCount()).To(Equal(1))
+			Expect(fakeMetrics.IncResolverFailureCallCount()).To(Equal(0))
+		})
+
+		It("AC: the newer side wins a shared key while both one-sided keys are kept", func() {
+			base := "---\nassignee: base\ntitle: probe\n---\nbody\n"
+			ours := "---\nassignee: alice\npr_state: open\ntitle: probe\n---\nbody\n"
+			theirs := "---\nassignee: bob\nprevious_assignee: someone\ntitle: probe\n---\nbody\n"
+			workDir, rel, cleanup := setupScalarMergeRepo(
+				base, ours, theirs,
+				"2026-01-01T00:00:00Z", "2026-01-02T00:00:00Z",
+			)
+			defer cleanup()
+
+			r := git.NewYAMLMergeResolver(workDir, fakeMetrics)
+			Expect(r.Resolve(ctx, []string{rel})).To(Succeed())
+
+			written, err := os.ReadFile(filepath.Join(workDir, rel))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(string(written)).To(ContainSubstring("assignee: bob"))
+			Expect(string(written)).To(ContainSubstring("pr_state: open"))
+			Expect(string(written)).To(ContainSubstring("previous_assignee: someone"))
+			Expect(string(written)).NotTo(ContainSubstring("assignee: alice"))
+		})
+
+		It("resolves a union region and a counter region in the same file", func() {
+			conflicted := "---\n" +
+				"<<<<<<< HEAD\npr_state: open\n=======\nprevious_assignee: someone\n>>>>>>> theirs\n" +
+				"<<<<<<< HEAD\ntrigger_count: 3\n=======\ntrigger_count: 0\n>>>>>>> theirs\n" +
+				"---\nbody\n"
+			workDir, rel, cleanup := setupHandWrittenConflict("note.md", conflicted)
+			defer cleanup()
+
+			r := git.NewYAMLMergeResolverWithBase(
+				workDir,
+				fakeMetrics,
+				"---\ntitle: probe\n---\nbody\n",
+				true,
+			)
+			Expect(r.Resolve(ctx, []string{rel})).To(Succeed())
+
+			written, err := os.ReadFile(filepath.Join(workDir, rel))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(string(written)).To(Equal(
+				"---\npr_state: open\nprevious_assignee: someone\ntrigger_count: 3\n---\nbody\n",
+			))
+			Expect(fakeMetrics.IncAutoresolvedCallCount()).To(Equal(1))
+		})
 
 		It("reads the merge-base key set from index stage 1", func() {
 			base := "---\npr_state: open\nphase: planning\n---\nbody\n"

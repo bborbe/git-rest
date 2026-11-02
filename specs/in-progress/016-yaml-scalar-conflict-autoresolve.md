@@ -7,6 +7,8 @@ verifying: "2026-10-19T21:47:01Z"
 branch: dark-factory/yaml-scalar-conflict-autoresolve
 ---
 
+> **Partly superseded** by `specs/in-progress/024-bug-one-sided-frontmatter-adds-quarantine.md` for the one-sided-add case only: a one-sided key is now kept when the merge base is readable and lacks it. One-sided deletes, non-scalar hunks, hunks outside the frontmatter and duplicate keys keep quarantining exactly as this spec describes.
+
 ## Summary
 
 - A merge conflict whose hunks lie entirely inside a markdown file's YAML frontmatter and whose hunks are single-line scalar `key: value` pairs is resolved in place instead of quarantined.

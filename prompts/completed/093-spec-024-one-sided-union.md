@@ -1,8 +1,13 @@
 ---
-status: approved
+status: completed
 spec: [024-bug-one-sided-frontmatter-adds-quarantine]
+summary: One-sided frontmatter conflict keys now resolve to the union of both sides when the merge base is readable and lacks the key, while base-confirmed deletes, unreadable bases, and other ineligible shapes still quarantine.
+execution_id: git-rest-frontmatter-union-exec-093-spec-024-one-sided-union
+dark-factory-version: v0.198.7
 created: "2026-11-02T19:40:00Z"
 queued: "2026-11-02T19:26:42Z"
+started: "2026-11-02T19:30:20Z"
+completed: "2026-11-02T19:34:07Z"
 branch: dark-factory/bug-one-sided-frontmatter-adds-quarantine
 ---
 
