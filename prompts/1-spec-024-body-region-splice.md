@@ -332,6 +332,7 @@ Every new **resolving** `It` must be distinguishable before vs after this change
    - `git status --porcelain` prints no line beginning with `UU`.
    - The written body is `X\n\nY` (use `bodyOf`).
    The hand-written helpers cannot carry this check: `setupHandWrittenConflict` runs its own `git add` on the conflicted bytes and leaves no merge in progress, so both clauses already pass before `Resolve`.
+7. **Write and `git add` failures (spec Failure Modes row 4).** Two `It` blocks over a body-only fixture from `setupHandWrittenConflict("note.md", conflicted)`. For the write case, `chmod 0400` the conflicted file after setup and assert `stderrors.Is(err, git.ErrConflictResolutionFailed)` plus `fakeMetrics.IncResolverFailureArgsForCall(0) == "write_failed"` (skip under root). For the `git add` case, `Expect(os.RemoveAll(filepath.Join(workDir, ".git"))).To(Succeed())` after setup and assert the sentinel plus `"git_add_failed"`. Mirror the existing scalar-rule cases at `pkg/git/yaml_merge_resolver_test.go:851` and `:1090`.
 
 ## 6. Self-check before finishing
 
@@ -356,6 +357,8 @@ Walk each requirement: the four committed specs pass unedited; each resolving sh
 - Do NOT add per-repository, per-path, or per-key configuration.
 - Do NOT deduplicate a shared prefix or suffix between the two sides. The 3-vs-4 append case deliberately resolves to ours, a blank line, then theirs, which repeats shared lines. That is the specified behaviour.
 - Do NOT auto-resolve a region that crosses the frontmatter/body boundary, a non-markdown path, or a markdown file with no frontmatter block.
+- Do NOT auto-drain, delete, or rewrite existing `_conflicts/` entries.
+- Do NOT add a repeat-guard for two replicas resolving the same divergence (see the spec's concurrency failure-mode row).
 - Do NOT add a scenario file under `scenarios/`.
 - Do NOT run `go mod vendor`, and do NOT write `-mod=vendor` in any command — this repo does not commit `vendor/`.
 - `prealloc` is enabled in `.golangci.yml`: preallocate `regions`, `replacements` and `conflictRegions` with a capacity instead of append-only nil slices.
@@ -364,7 +367,7 @@ Walk each requirement: the four committed specs pass unedited; each resolving sh
 </constraints>
 
 <verification>
-Run from the repo root. The daemon runs with `hideGit=true`, which masks `.git` inside the container — bare `git` commands die with `fatal: not a git repository`, so none appear in this block. `ROOTDIR=/workspace` is the dark-factory convention for that case; this repo's `Makefile` does not itself reference `ROOTDIR`, so the prefix is inert here and harmless.
+Run from the repo root. If the daemon runs with `hideGit=true`, `.git` is masked inside the container and bare `git` commands die with `fatal: not a git repository`; this block uses none either way. `ROOTDIR=/workspace` is the dark-factory convention for that case; this repo's `Makefile` does not itself reference `ROOTDIR`, so the prefix is inert here and harmless.
 
 ```bash
 ROOTDIR=/workspace make precommit
