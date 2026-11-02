@@ -36,7 +36,7 @@ Files to read in full before editing (anchor by symbol name, not line number):
 
 - `pkg/git/yaml_merge_resolver.go` — `resolveOne`, `splitConflictSides`, `splitFrontmatter`, `combineBodies`, `conflictRegion`, `enumerateConflictRegions`, `frontmatterBounds`, `planScalarRegions`, `regionInsideFrontmatter`, `scalarRegion`, `spliceScalarRegions`, `applyScalarFrontmatterRule`, `runGitAdd`, `safePath`, `normalizeTaskPhase` (called on every write path), and the failure-category constants
 - `pkg/git/yaml_merge_resolver_test.go` — `setupYAMLConflictRepo`, `setupHandWrittenConflict`, `parseFrontmatterOf`, `bodyOf`, the top-level `BeforeEach` that sets `ctx` and `fakeMetrics`, and the committed `Describe("Resolve body-only conflict regions")` block whose four `It` names are `AC-bodyonly-ours-empty`, `AC-bodyonly-theirs-empty`, `AC-bodyonly-both-differ`, `AC-bodyonly-nonmarkdown`
-- `pkg/git/task_phase.go` — `normalizeTaskPhase` and `isTaskFilePath` (task directories are `25 Tasks` and `tasks`)
+- `pkg/git/task_phase.go` — `normalizeTaskPhase` (task directories are `25 Tasks` and `tasks`, decided by `isTaskFilePath` in `git.go`)
 - `pkg/git/git.go` — `ErrConflictResolutionFailed` (defined at package scope) and `isTaskFilePath`
 - `pkg/git/conflict_resolver.go` — the `ConflictResolver` interface and its counterfeiter directive; both stay byte-identical
 
@@ -263,7 +263,9 @@ The deep-merge path (`parseYAML` → `deepMergeTheirsWins` → `yaml.Marshal` �
 
 All new specs live in `pkg/git/yaml_merge_resolver_test.go` (`package git_test`, Ginkgo v2 / Gomega). The committed `Describe("Resolve body-only conflict regions")` block must stay byte-identical — do not insert into it. Add a new sibling block `Describe("Body-only conflict regions: extended", …)` immediately after it, inside the same top-level `Describe("YAMLMergeResolver", …)`, so the shared `BeforeEach` (`ctx`, `fakeMetrics`) applies.
 
-Every new `It` must be distinguishable before vs after this change. Use the existing helpers; do not add new repo helpers.
+**One existing spec must change.** `DescribeTable("AC4: rejection shapes keep quarantining")` holds `Entry("outside frontmatter", "---\ntitle: probe\n---\n<<<<<<< HEAD\nbody a\n=======\nbody b\n>>>>>>> theirs\n")`. That fixture is exactly the body-only shape this prompt now resolves, so it fails once the rule lands. Delete that one `Entry` and nothing else — spec 024 supersedes spec 016's body-conflict non-goal for this shape, so the expectation is obsolete rather than a regression. Every other `Entry` in that table (list item, block scalar, nested mapping, flow collection, one-sided key, duplicate key) still quarantines and must stay byte-identical.
+
+Every new **resolving** `It` must be distinguishable before vs after this change; the quarantine `It`s are fail-closed guards that must stay green and must not be weakened. Use the existing helpers; do not add new repo helpers.
 
 1. **Failure counter is zero on the three resolving shapes (spec ACs 1-3).** Three `It` blocks mirroring the committed fixtures: empty ours (98-line theirs), empty theirs, both-differ. Each calls `git.NewYAMLMergeResolver(workDir, fakeMetrics).Resolve(ctx, []string{rel})`, expects success, and asserts `fakeMetrics.IncResolverFailureCallCount() == 0`. Do not assert `IncBodyMergedCallCount` — that accessor does not exist yet.
 2. **Two body regions resolve independently (spec AC 4).** `setupHandWrittenConflict("note.md", conflicted)` with:
@@ -302,7 +304,7 @@ Every new `It` must be distinguishable before vs after this change. Use the exis
    ```
 
    After success, assert the whole file equals the same text with `phase: in_progress` rewritten to `phase: execution` and the region replaced by `ours body\n\ntheirs body`. Every other frontmatter line and both `---` delimiters are unchanged. Do not use a fixture that already carries `phase: execution` — it would not discriminate.
-4. **Two quarantine shapes (spec AC 6).** Two `It` blocks, each asserting `errors.Is(err, git.ErrConflictResolutionFailed)`, `fakeMetrics.IncResolverFailureCallCount() == 1`, `fakeMetrics.IncResolverFailureArgsForCall(0) == "no_frontmatter"`, and the file bytes equal the pre-call bytes:
+4. **Two quarantine shapes (spec AC 6).** Two `It` blocks, each asserting `stderrors.Is(err, git.ErrConflictResolutionFailed)` (the test file aliases the stdlib package as `stderrors`; it does not import `github.com/bborbe/errors`), `fakeMetrics.IncResolverFailureCallCount() == 1`, `fakeMetrics.IncResolverFailureArgsForCall(0) == "no_frontmatter"`, and the file bytes equal the pre-call bytes:
    - `setupHandWrittenConflict("note.txt", conflicted)` where `conflicted` has a frontmatter block and a body region.
    - `setupHandWrittenConflict("note.md", conflicted)` where `conflicted` has no frontmatter block and a body region.
 5. **All-or-nothing with a boundary-crossing region (spec AC 7).** `setupHandWrittenConflict("note.md", conflicted)` with a region that crosses the closing `---` FIRST, then a body region:
@@ -311,8 +313,6 @@ Every new `It` must be distinguishable before vs after this change. Use the exis
    ---
    page_type: note
    <<<<<<< HEAD
-   tags: [a]
-   ---
    body ours
    =======
    tags: [b]
@@ -326,7 +326,7 @@ Every new `It` must be distinguishable before vs after this change. Use the exis
    >>>>>>> theirs
    ```
 
-   Here `frontmatterBounds` returns the `---` that sits inside the first region, so that region starts above the returned close index and `planBodyRegions` rejects the whole file. Assert `errors.Is(err, git.ErrConflictResolutionFailed)`, one `no_frontmatter`, and the file left unmodified. Order matters: a body region placed before the boundary-crossing region would make both regions body-only and the file would resolve, which does not exercise the all-or-nothing gate.
+   The first region's `ours` side must NOT carry a `---` line. If both sides do, `splitConflictSides` extracts two complete frontmatter blocks, `splitFrontmatter` succeeds on both, and `resolveOne` takes the deep-merge path — `Resolve` returns nil and the test fails without ever reaching `planBodyRegions`. With the fixture above, `splitFrontmatter` fails on the ours side, so the resolver reaches `planBodyRegions`, where `frontmatterBounds` returns the `---` that sits inside the first region, that region starts above the returned close index, and the whole file is rejected. Assert `stderrors.Is(err, git.ErrConflictResolutionFailed)`, one `no_frontmatter`, and the file left unmodified. Order matters: a body region placed before the boundary-crossing region would make both regions body-only and the file would resolve, which does not exercise the all-or-nothing gate.
 6. **Staging on a genuine conflicted merge (spec AC 8).** `setupYAMLConflictRepo("a: 1\n", "X", "a: 1\n", "Y")` — identical frontmatter on both sides, differing bodies, so git leaves a real body-only conflict and a real unmerged index entry. After `Resolve` succeeds:
    - `git diff --name-only --diff-filter=U` in `workDir` prints empty.
    - `git status --porcelain` prints no line beginning with `UU`.
@@ -346,7 +346,7 @@ Walk each requirement: the four committed specs pass unedited; each resolving sh
 - Do NOT modify `spliceScalarRegions`; add the generic `spliceConflictRegions` helper alongside it.
 - Do NOT change the scalar-frontmatter rule (spec 016), the deep-merge path, `MarkerResolver`, the quarantine path, `pkg/git/git.go`, or the pull loop.
 - Do NOT change the public `NewYAMLMergeResolver(repoPath string, m metrics.Metrics) ConflictResolver` signature.
-- Do NOT edit any `pkg/git/*_test.go` file other than permitted ADDITIONS to `pkg/git/yaml_merge_resolver_test.go`. The committed `Describe("Resolve body-only conflict regions")` block must stay byte-identical — the fix may only add specs.
+- Do NOT edit any `pkg/git/*_test.go` file other than `pkg/git/yaml_merge_resolver_test.go`. In that file the committed `Describe("Resolve body-only conflict regions")` block must stay byte-identical and you may only add specs — with the single exception of deleting the `Entry("outside frontmatter", …)` from `DescribeTable("AC4: rejection shapes keep quarantining")` (requirement 5), whose fixture this prompt now resolves.
 - Do NOT add a metric in this prompt. `pkg/metrics/metrics.go` and `mocks/metrics.go` stay byte-identical; `git_rest_body_merged_total` lands in prompt 2.
 - Do NOT edit `CHANGELOG.md`, `docs/`, or `docs/deployment.md` in this prompt; they land in prompt 3.
 - The conflict-failure sentinel `ErrConflictResolutionFailed` remains the only failure error; no new exported error types.
