@@ -422,6 +422,229 @@ var _ = Describe("YAMLMergeResolver", func() {
 			})
 		})
 
+		Describe("Body-only conflict regions: extended", func() {
+			It("resolves an empty-ours region without a resolver failure", func() {
+				prefix := "---\npage_type: daily-note\n---\n\n# Daily Plan\n\nintro\n"
+				suffix := "\n\n## Later\n\ntail\n"
+				theirsLines := make([]string, 0, 98)
+				for i := 1; i <= 98; i++ {
+					theirsLines = append(theirsLines, fmt.Sprintf("theirs line %d", i))
+				}
+				theirsBody := strings.Join(theirsLines, "\n")
+				conflicted := prefix + "<<<<<<< HEAD\n=======\n" +
+					theirsBody + "\n>>>>>>> theirs\n" + suffix
+
+				workDir, rel, cleanup := setupHandWrittenConflict("note.md", conflicted)
+				defer cleanup()
+
+				r := git.NewYAMLMergeResolver(workDir, fakeMetrics)
+				Expect(r.Resolve(ctx, []string{rel})).To(Succeed())
+				Expect(fakeMetrics.IncResolverFailureCallCount()).To(Equal(0))
+			})
+
+			It("resolves an empty-theirs region without a resolver failure", func() {
+				prefix := "---\npage_type: note\n---\n\n# Heading\n\n"
+				suffix := "\n\ntail\n"
+				conflicted := prefix + "<<<<<<< HEAD\nkeep me\nand me\n=======\n" +
+					">>>>>>> theirs\n" + suffix
+
+				workDir, rel, cleanup := setupHandWrittenConflict("note.md", conflicted)
+				defer cleanup()
+
+				r := git.NewYAMLMergeResolver(workDir, fakeMetrics)
+				Expect(r.Resolve(ctx, []string{rel})).To(Succeed())
+				Expect(fakeMetrics.IncResolverFailureCallCount()).To(Equal(0))
+			})
+
+			It("resolves a both-differ region without a resolver failure", func() {
+				prefix := "---\npage_type: goal\n---\n\n# Heading\n\n"
+				suffix := "\n\ntail\n"
+				conflicted := prefix + "<<<<<<< HEAD\na\nb\nc\n=======\n" +
+					"a\nb\nc\nd\n>>>>>>> theirs\n" + suffix
+
+				workDir, rel, cleanup := setupHandWrittenConflict("note.md", conflicted)
+				defer cleanup()
+
+				r := git.NewYAMLMergeResolver(workDir, fakeMetrics)
+				Expect(r.Resolve(ctx, []string{rel})).To(Succeed())
+				Expect(fakeMetrics.IncResolverFailureCallCount()).To(Equal(0))
+			})
+
+			It("resolves two body regions independently and preserves the separator", func() {
+				conflicted := "---\npage_type: note\n---\n" +
+					"<<<<<<< HEAD\nfirst ours\n=======\nfirst theirs\n>>>>>>> theirs\n" +
+					"SEPARATOR LINE\n" +
+					"<<<<<<< HEAD\nsecond ours\n=======\nsecond theirs\n>>>>>>> theirs\n"
+
+				workDir, rel, cleanup := setupHandWrittenConflict("note.md", conflicted)
+				defer cleanup()
+
+				r := git.NewYAMLMergeResolver(workDir, fakeMetrics)
+				Expect(r.Resolve(ctx, []string{rel})).To(Succeed())
+
+				written, err := os.ReadFile(filepath.Join(workDir, rel))
+				Expect(err).NotTo(HaveOccurred())
+				Expect(string(written)).To(Equal(
+					"---\npage_type: note\n---\n" +
+						"first ours\n\nfirst theirs\n" +
+						"SEPARATOR LINE\n" +
+						"second ours\n\nsecond theirs\n",
+				))
+				Expect(string(written)).NotTo(ContainSubstring("<<<<<<<"))
+				Expect(string(written)).NotTo(ContainSubstring("======="))
+				Expect(string(written)).NotTo(ContainSubstring(">>>>>>>"))
+			})
+
+			It("normalises the task phase alias on a task-shaped path", func() {
+				conflicted := "---\npage_type: task\nphase: in_progress\ntitle: probe\n---\n" +
+					"<<<<<<< HEAD\nours body\n=======\ntheirs body\n>>>>>>> theirs\n"
+
+				workDir, rel, cleanup := setupHandWrittenConflict("25 Tasks/note.md", conflicted)
+				defer cleanup()
+
+				r := git.NewYAMLMergeResolver(workDir, fakeMetrics)
+				Expect(r.Resolve(ctx, []string{rel})).To(Succeed())
+
+				written, err := os.ReadFile(filepath.Join(workDir, rel))
+				Expect(err).NotTo(HaveOccurred())
+				Expect(string(written)).To(Equal(
+					"---\npage_type: task\nphase: execution\ntitle: probe\n---\n" +
+						"ours body\n\ntheirs body\n",
+				))
+			})
+
+			It("quarantines a non-markdown path with a frontmatter block", func() {
+				conflicted := "---\npage_type: note\n---\n" +
+					"<<<<<<< HEAD\nbody a\n=======\nbody b\n>>>>>>> theirs\n"
+
+				workDir, rel, cleanup := setupHandWrittenConflict("note.txt", conflicted)
+				defer cleanup()
+
+				abs := filepath.Join(workDir, rel)
+				before, err := os.ReadFile(abs)
+				Expect(err).NotTo(HaveOccurred())
+
+				r := git.NewYAMLMergeResolver(workDir, fakeMetrics)
+				err = r.Resolve(ctx, []string{rel})
+				Expect(stderrors.Is(err, git.ErrConflictResolutionFailed)).To(BeTrue())
+				Expect(fakeMetrics.IncResolverFailureCallCount()).To(Equal(1))
+				Expect(fakeMetrics.IncResolverFailureArgsForCall(0)).To(Equal("no_frontmatter"))
+
+				after, err := os.ReadFile(abs)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(after).To(Equal(before))
+			})
+
+			It("quarantines a markdown file with no frontmatter block", func() {
+				conflicted := "header\n\n" +
+					"<<<<<<< HEAD\nbody a\n=======\nbody b\n>>>>>>> theirs\n"
+
+				workDir, rel, cleanup := setupHandWrittenConflict("note.md", conflicted)
+				defer cleanup()
+
+				abs := filepath.Join(workDir, rel)
+				before, err := os.ReadFile(abs)
+				Expect(err).NotTo(HaveOccurred())
+
+				r := git.NewYAMLMergeResolver(workDir, fakeMetrics)
+				err = r.Resolve(ctx, []string{rel})
+				Expect(stderrors.Is(err, git.ErrConflictResolutionFailed)).To(BeTrue())
+				Expect(fakeMetrics.IncResolverFailureCallCount()).To(Equal(1))
+				Expect(fakeMetrics.IncResolverFailureArgsForCall(0)).To(Equal("no_frontmatter"))
+
+				after, err := os.ReadFile(abs)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(after).To(Equal(before))
+			})
+
+			It("rejects the whole file when a region crosses the boundary", func() {
+				conflicted := "---\npage_type: note\n" +
+					"<<<<<<< HEAD\nbody ours\n=======\ntags: [b]\n---\nbody theirs\n>>>>>>> theirs\n" +
+					"<<<<<<< HEAD\ntail ours\n=======\ntail theirs\n>>>>>>> theirs\n"
+
+				workDir, rel, cleanup := setupHandWrittenConflict("note.md", conflicted)
+				defer cleanup()
+
+				abs := filepath.Join(workDir, rel)
+				before, err := os.ReadFile(abs)
+				Expect(err).NotTo(HaveOccurred())
+
+				r := git.NewYAMLMergeResolver(workDir, fakeMetrics)
+				err = r.Resolve(ctx, []string{rel})
+				Expect(stderrors.Is(err, git.ErrConflictResolutionFailed)).To(BeTrue())
+				Expect(fakeMetrics.IncResolverFailureCallCount()).To(Equal(1))
+				Expect(fakeMetrics.IncResolverFailureArgsForCall(0)).To(Equal("no_frontmatter"))
+
+				after, err := os.ReadFile(abs)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(after).To(Equal(before))
+			})
+
+			It("stages a body-only region in a genuine conflicted merge", func() {
+				workDir, rel, cleanup := setupYAMLConflictRepo(
+					"a: 1\n", "X",
+					"a: 1\n", "Y",
+				)
+				defer cleanup()
+
+				r := git.NewYAMLMergeResolver(workDir, fakeMetrics)
+				Expect(r.Resolve(ctx, []string{rel})).To(Succeed())
+
+				diffCmd := exec.Command("git", "diff", "--name-only", "--diff-filter=U")
+				diffCmd.Dir = workDir
+				diffOut, err := diffCmd.CombinedOutput()
+				Expect(err).NotTo(HaveOccurred())
+				Expect(strings.TrimSpace(string(diffOut))).To(BeEmpty())
+
+				statusCmd := exec.Command("git", "status", "--porcelain")
+				statusCmd.Dir = workDir
+				statusOut, err := statusCmd.CombinedOutput()
+				Expect(err).NotTo(HaveOccurred())
+				for _, line := range strings.Split(string(statusOut), "\n") {
+					Expect(strings.HasPrefix(line, "UU")).To(BeFalse(), "unmerged entry: %q", line)
+				}
+
+				Expect(bodyOf(filepath.Join(workDir, rel))).To(Equal("X\n\nY"))
+			})
+
+			It("reports write_failed when the body-resolved file cannot be written", func() {
+				if os.Geteuid() == 0 {
+					Skip("requires a non-root user")
+				}
+				conflicted := "---\npage_type: note\n---\n" +
+					"<<<<<<< HEAD\nbody a\n=======\nbody b\n>>>>>>> theirs\n"
+				workDir, rel, cleanup := setupHandWrittenConflict("note.md", conflicted)
+				defer cleanup()
+
+				abs := filepath.Join(workDir, rel)
+				before, err := os.ReadFile(abs)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(os.Chmod(abs, 0o400)).To(Succeed())
+
+				r := git.NewYAMLMergeResolver(workDir, fakeMetrics)
+				err = r.Resolve(ctx, []string{rel})
+				Expect(stderrors.Is(err, git.ErrConflictResolutionFailed)).To(BeTrue())
+				Expect(fakeMetrics.IncResolverFailureArgsForCall(0)).To(Equal("write_failed"))
+
+				after, err := os.ReadFile(abs)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(after).To(Equal(before))
+			})
+
+			It("reports git_add_failed when staging the body-resolved file fails", func() {
+				conflicted := "---\npage_type: note\n---\n" +
+					"<<<<<<< HEAD\nbody a\n=======\nbody b\n>>>>>>> theirs\n"
+				workDir, rel, cleanup := setupHandWrittenConflict("note.md", conflicted)
+				defer cleanup()
+				Expect(os.RemoveAll(filepath.Join(workDir, ".git"))).To(Succeed())
+
+				r := git.NewYAMLMergeResolver(workDir, fakeMetrics)
+				err := r.Resolve(ctx, []string{rel})
+				Expect(stderrors.Is(err, git.ErrConflictResolutionFailed)).To(BeTrue())
+				Expect(fakeMetrics.IncResolverFailureArgsForCall(0)).To(Equal("git_add_failed"))
+			})
+		})
+
 		It("AC-staged: file is staged (no longer unmerged) after Resolve", func() {
 			workDir, rel, cleanup := setupYAMLConflictRepo(
 				"a: 1\n", "X",
@@ -719,8 +942,6 @@ var _ = Describe("YAMLMergeResolver", func() {
 			Entry("flow collection",
 				"---\n<<<<<<< HEAD\ntags: [a, b]\n=======\ntags: [c]\n"+
 					">>>>>>> theirs\ntitle: probe\n---\nbody\n"),
-			Entry("outside frontmatter",
-				"---\ntitle: probe\n---\n<<<<<<< HEAD\nbody a\n=======\nbody b\n>>>>>>> theirs\n"),
 			Entry("one-sided key",
 				"---\n<<<<<<< HEAD\na: 1\nb: 2\n=======\na: 1\n"+
 					">>>>>>> theirs\ntitle: probe\n---\nbody\n"),

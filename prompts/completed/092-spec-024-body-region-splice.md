@@ -1,7 +1,13 @@
 ---
-status: draft
+status: completed
 spec: [024-bug-body-conflict-hunks-quarantine]
+summary: Added in-place resolution of markdown body-only conflict regions via planBodyRegions/spliceConflictRegions/applyBodyRule, wired scalar-then-body fallbacks, and added extended specs.
+execution_id: git-rest-body-merge-exec-092-spec-024-body-region-splice
+dark-factory-version: v0.198.7
 created: "2026-11-02T18:50:00Z"
+queued: "2026-11-02T18:46:44Z"
+started: "2026-11-02T18:46:49Z"
+completed: "2026-11-02T18:54:02Z"
 branch: dark-factory/bug-body-conflict-hunks-quarantine
 ---
 

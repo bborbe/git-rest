@@ -1,7 +1,8 @@
 ---
-status: draft
+status: approved
 spec: [024-bug-body-conflict-hunks-quarantine]
 created: "2026-11-02T18:50:00Z"
+queued: "2026-11-02T18:46:44Z"
 branch: dark-factory/bug-body-conflict-hunks-quarantine
 ---
 
