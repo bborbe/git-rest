@@ -95,6 +95,9 @@ func (r *yamlMergeResolver) resolveOne(ctx context.Context, path string) error {
 
 	ours, theirs, ok := splitConflictSides(string(raw))
 	if !ok {
+		if applied, ruleErr := r.applyFallbackRules(ctx, path, abs, string(raw)); applied {
+			return ruleErr
+		}
 		r.metrics.IncResolverFailure(resolverFailureNoFront)
 		glog.Warningf("yaml-merge-resolver: %q has no parseable conflict region", path)
 		return errors.Wrap(ctx, ErrConflictResolutionFailed, "no conflict region")
@@ -103,13 +106,12 @@ func (r *yamlMergeResolver) resolveOne(ctx context.Context, path string) error {
 	oursFM, oursBody, oursOK := splitFrontmatter(ours)
 	theirsFM, theirsBody, theirsOK := splitFrontmatter(theirs)
 	if !oursOK || !theirsOK {
-		applied, ruleErr := r.applyScalarFrontmatterRule(ctx, path, abs, string(raw))
-		if applied {
+		if applied, ruleErr := r.applyFallbackRules(ctx, path, abs, string(raw)); applied {
 			return ruleErr
 		}
 		r.metrics.IncResolverFailure(resolverFailureNoFront)
 		glog.Warningf(
-			"yaml-merge-resolver: %q has no frontmatter delimiter pair on one side and the scalar-frontmatter rule does not apply",
+			"yaml-merge-resolver: %q has no frontmatter delimiter pair on one side and the scalar-frontmatter and body rules do not apply",
 			path,
 		)
 		return errors.Wrap(ctx, ErrConflictResolutionFailed, "no frontmatter delimiter pair")
@@ -613,6 +615,52 @@ type scalarRegion struct {
 	theirs []scalarKeyEntry // theirs-side order
 }
 
+// bodyRegion is one eligible body-only conflict region with both sides extracted.
+type bodyRegion struct {
+	conflictRegion
+	oursBody   string
+	theirsBody string
+}
+
+// planBodyRegions decides whether the whole file is eligible for the body rule.
+// Every conflict region must lie entirely below the closing frontmatter delimiter,
+// and regions must not overlap. It inspects shape only: no I/O.
+func planBodyRegions(lines []string) ([]bodyRegion, bool) {
+	closeIndex, ok := frontmatterBounds(lines)
+	if !ok {
+		return nil, false
+	}
+	conflicts, ok := enumerateConflictRegions(lines)
+	if !ok {
+		return nil, false
+	}
+
+	regions := make([]bodyRegion, 0, len(conflicts))
+	previousEnd := 0
+	for _, region := range conflicts {
+		if !regionInsideBody(region, closeIndex, previousEnd) {
+			return nil, false
+		}
+		regions = append(regions, bodyRegion{
+			conflictRegion: region,
+			oursBody:       strings.Join(region.oursLines, "\n"),
+			theirsBody:     strings.Join(region.theirsLines, "\n"),
+		})
+		previousEnd = region.endLine
+	}
+
+	if len(regions) == 0 {
+		return nil, false
+	}
+	return regions, true
+}
+
+// regionInsideBody reports whether region lies strictly below the closing
+// frontmatter delimiter and does not overlap the previous region.
+func regionInsideBody(region conflictRegion, closeIndex, previousEnd int) bool {
+	return region.startLine > closeIndex && region.startLine > previousEnd
+}
+
 // planScalarRegions decides whether the whole file is eligible for the
 // scalar-frontmatter rule. It inspects shape only: no timestamps, no I/O.
 func planScalarRegions(lines []string) ([]scalarRegion, bool) {
@@ -885,6 +933,91 @@ func resolveScalarRegion(
 		resolved = append(resolved, theirsEntry.entry.line)
 	}
 	return resolved, true
+}
+
+// spliceConflictRegions returns the original file with each conflict region
+// replaced by its resolved lines. Every line outside a region is copied
+// verbatim, so the frontmatter and both delimiters stay byte-identical.
+func spliceConflictRegions(
+	lines []string,
+	regions []conflictRegion,
+	replacements [][]string,
+) string {
+	out := make([]string, 0, len(lines))
+	cursor := 0
+	for i, region := range regions {
+		out = append(out, lines[cursor:region.startLine]...)
+		out = append(out, replacements[i]...)
+		cursor = region.endLine + 1
+	}
+	out = append(out, lines[cursor:]...)
+	return strings.Join(out, "\n")
+}
+
+// resolvedBodyLines splits a combined body into lines. An empty body yields no
+// lines, so the region disappears rather than leaving a blank line.
+func resolvedBodyLines(combined string) []string {
+	if combined == "" {
+		return nil
+	}
+	return strings.Split(combined, "\n")
+}
+
+// applyBodyRule attempts the body-only rule on the raw conflicted file. applied
+// reports whether the rule took responsibility for the file; when it did, the
+// file has been written and staged and err is the outcome.
+func (r *yamlMergeResolver) applyBodyRule(
+	ctx context.Context, path, abs, raw string,
+) (applied bool, err error) {
+	if !strings.EqualFold(filepath.Ext(path), ".md") {
+		return false, nil
+	}
+
+	lines := strings.Split(raw, "\n")
+	regions, ok := planBodyRegions(lines)
+	if !ok {
+		return false, nil
+	}
+
+	replacements := make([][]string, 0, len(regions))
+	conflictRegions := make([]conflictRegion, 0, len(regions))
+	for _, region := range regions {
+		combined := combineBodies(region.oursBody, region.theirsBody)
+		replacements = append(replacements, resolvedBodyLines(combined))
+		conflictRegions = append(conflictRegions, region.conflictRegion)
+	}
+
+	final := spliceConflictRegions(lines, conflictRegions, replacements)
+
+	select {
+	case <-ctx.Done():
+		return true, errors.Wrap(ctx, ctx.Err(), "body resolve cancelled")
+	default:
+	}
+
+	// #nosec G703 -- path validated by safePath
+	if writeErr := os.WriteFile(abs, normalizeTaskPhase(path, []byte(final)), 0o600); writeErr != nil {
+		r.metrics.IncResolverFailure(resolverFailureWrite)
+		glog.Warningf("yaml-merge-resolver: write body-resolved %q: %v", path, writeErr)
+		return true, errors.Wrap(ctx, ErrConflictResolutionFailed, "write body-resolved file")
+	}
+
+	if err := r.runGitAdd(ctx, path); err != nil {
+		return true, err
+	}
+	r.metrics.IncBodyMerged()
+	return true, nil
+}
+
+// applyFallbackRules tries the scalar-frontmatter rule, then the body rule.
+// applied reports whether either rule took responsibility for the file.
+func (r *yamlMergeResolver) applyFallbackRules(
+	ctx context.Context, path, abs, raw string,
+) (applied bool, err error) {
+	if applied, err := r.applyScalarFrontmatterRule(ctx, path, abs, raw); applied {
+		return true, err
+	}
+	return r.applyBodyRule(ctx, path, abs, raw)
 }
 
 // applyScalarFrontmatterRule attempts the scalar-frontmatter rule on the raw

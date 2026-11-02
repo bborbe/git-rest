@@ -428,6 +428,77 @@ The StatefulSet renders `image: '{{"IMAGE_PREFIX" | env}}/git-rest:{{"BRANCH" | 
 
 Rung 3 (prod promotion and verifying the prod symptom) is a separate task for this spec and is deliberately not covered here.
 
+### Rung 2/3 recipe: body-conflict auto-resolution (personal vault)
+
+This is the probe for the body-only conflict rule (spec 024). Rung 2 runs it on dev, rung 3 on prod, and the probe is identical apart from the kubectl wrapper and namespace. It requires the release carrying the body rule to be deployed: on dev, bump `VERSION` in `~/Documents/workspaces/nuke/git-rest/Makefile` and run `BRANCH=dev make apply`; on prod, the same with `BRANCH=master make apply` after promotion. The deploy gate below must be run from a tree whose HEAD contains the released tag carrying the fix — the main checkout after `git fetch --tags`, or the fix worktree after merging the released master into it. `git describe --tags --abbrev=0` resolves only tags reachable from HEAD, so a fix branch forked before the release prints the previous tag and the gate aborts against a correct deploy. Confirm the tag contains the fix commit with `git tag --contains <fix-commit>` before running.
+
+**Fail-loud deploy gate.** Run this before the recipe touches the vault. A mismatch aborts with a non-zero exit and a message naming both versions:
+
+```bash
+set -e
+DEPLOYED=$(kubectlnukedev -n dev get --raw "/api/v1/namespaces/dev/pods/vault-obsidian-personal-0:9090/proxy/metrics" \
+  | grep -m1 '^git_rest_build_info' | sed -E 's/.*version="([^"]+)".*/\1/' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$')
+TARGET=$(git describe --tags --abbrev=0)
+[ "$DEPLOYED" = "$TARGET" ] || { echo "deploy gate failed: deployed=$DEPLOYED target=$TARGET" >&2; exit 1; }
+```
+
+For rung 3 the wrapper becomes `kubectlnukeprod -n prod` and the raw path's namespace becomes `prod`. The trailing `grep -E` is what makes a missing or malformed metric fail the gate rather than pass it falsely.
+
+**Baseline.** Read all three readings before the probe so the deltas are meaningful. `CLONE` is a dedicated scratch clone of `bborbe/obsidian-personal` — never the live Personal vault, which obsidian-git autocommits and pushes:
+
+```bash
+set -e
+CLONE=${CLONE:-/tmp/obsidian-personal-probe}
+POD=vault-obsidian-personal-0
+NS=dev
+rm -rf "$CLONE" && git clone git@github.com:bborbe/obsidian-personal.git "$CLONE"
+BEFORE_BODY=$(kubectlnukedev -n "$NS" exec "$POD" -- wget -qO- http://localhost:9090/metrics \
+  | grep -m1 '^git_rest_body_merged_total' | awk '{print $NF}')
+BEFORE_BACKLOG=$(kubectlnukedev -n "$NS" exec "$POD" -- wget -qO- http://localhost:9090/metrics \
+  | grep -m1 '^git_rest_quarantined_backlog' | awk '{print $NF}')
+BEFORE_CONFLICTS=$(find "$CLONE/_conflicts" -type f 2>/dev/null | wc -l)
+```
+
+Busybox `wget` is the only HTTP client in the image — there is no `curl` in the pod.
+
+**Probe setup.** Write the probe on the pod's side through the files API so the pod's HEAD advances with a body the remote does not have. Every `/api/v1/*` route on these vault pods sits behind the gateway-secret middleware (`GATEWAY_SECRET` is set from the vault Secret's `gateway-secret` key, so it is never empty), so the write must carry both `X-Gateway-Initator` and `X-Gateway-Secret`; `/metrics` and `/healthz` are unauthenticated and need neither. `kubectl exec` inherits the container env, so `$GATEWAY_SECRET` expands inside the pod and the secret never reaches the operator's shell history. A non-200 response means the probe was never written. The request only writes and stages; the next pull tick flushes the commit and push.
+
+```bash
+set -e
+PROBE='00 Inbox/body-probe.md'
+
+# 1. Write the probe through the pod's files API (busybox wget; no curl in the image).
+kubectlnukedev -n "$NS" exec "$POD" -- sh -c 'printf %s "$1" > /tmp/probe.md && wget -qO- --timeout=30 --header="X-Gateway-Initator: probe" --header="X-Gateway-Secret: $GATEWAY_SECRET" --post-file=/tmp/probe.md "http://localhost:9090/api/v1/files/00%20Inbox/body-probe.md"' _ $'---\npage_type: note\n---\n\n# Heading\n\nlocal body\n'
+
+# 2. Advance the remote with a different body on the same path, from the local clone.
+git -C "$CLONE" pull --rebase
+printf -- '---\npage_type: note\n---\n\n# Heading\n\nremote body\n' > "$CLONE/$PROBE"
+git -C "$CLONE" add -- "$PROBE"
+git -C "$CLONE" commit -m 'probe: remote body'
+git -C "$CLONE" push
+
+# 3. Wait one pull interval plus a margin, then refresh the clone before reading anything.
+sleep 45
+git -C "$CLONE" pull --ff-only
+kubectlnukedev -n "$NS" exec "$POD" -- git -C /data log -1 --format=%s
+find "$CLONE/_conflicts" -type f 2>/dev/null | wc -l
+kubectlnukedev -n "$NS" exec "$POD" -- wget -qO- http://localhost:9090/metrics \
+  | grep -E '^git_rest_(body_merged_total|quarantined_backlog|resolver_failures_total\{category="vault_api_failed"\})'
+```
+
+The clone's push must land **immediately after the write and before the pod's next pull tick** (the pull interval is `30s`), so that when the pod's pull flushes the pending write the commit is made on the old base and its push is rejected as non-fast-forward; the pull then merges the diverged remote and conflicts. If the pod's flush reaches the remote first, the pod's pull is a plain fast-forward — no merge, no conflict — and the probe must be re-run with the clone's push issued inside the same window. The refresh in step 3 matters: a stale clone makes the `_conflicts/` zero-delta assertion pass vacuously.
+
+Assertions:
+
+- **Merge commit subject:** `kubectlnukedev -n "$NS" exec "$POD" -- git -C /data log -1 --format=%s` prints `merge: resolved=[$PROBE] quarantined=[]` (i.e. `merge: resolved=[00 Inbox/body-probe.md] quarantined=[]`).
+- **Body joined in order:** the file keeps the frontmatter and both `---` delimiters, and its body is `local body`, a blank line, then `remote body`.
+- **No quarantine:** after `git -C "$CLONE" pull --ff-only`, `find "$CLONE/_conflicts" -type f 2>/dev/null | wc -l` shows a delta of 0 against `BEFORE_CONFLICTS`.
+- **Counted once:** `git_rest_body_merged_total` equals `BEFORE_BODY + 1`.
+- **Backlog unchanged:** `git_rest_quarantined_backlog` does not increase from `BEFORE_BACKLOG`.
+- **Expected fallback on rungs 2 and 3:** `git_rest_resolver_failures_total{category="vault_api_failed"}` increments on the same pull. This is the normal path — vault-api declines a body conflict by policy and the YAML fallback then succeeds — and it is not a regression. Rung 1 does not show this increment because it wires the bare YAML resolver with no vault-api URL.
+
+The follow-up task `[[git-rest Merges Body-Conflict Hunks Instead of Quarantining Them]]` owns the dev/prod probe evidence and the 24 h watch; this recipe is its replayable form. A run against a pod whose deploy gate fails is not evidence, and the recipe must be re-run after the correct release is deployed.
+
 ## Rung 3: prod cluster e2e
 
 Promote immediately after rung 2 passes. Same shape as rung 2 but the `nuke/git-rest` apply with `BRANCH=master` and `kubectlnukeprod -n prod`: `cd ~/Documents/workspaces/nuke && git pull && cd git-rest && BRANCH=master make apply`. Reference: `[[git-rest - Deploy New Version]]` runbook for the dev→prod promotion pattern (mirror image, apply manifests, watch one full task-controller poll cycle).

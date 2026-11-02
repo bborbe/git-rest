@@ -63,6 +63,8 @@ func (n *noopMetrics) IncPullRescue() {}
 
 func (n *noopMetrics) IncAutoresolved() {}
 
+func (n *noopMetrics) IncBodyMerged() {}
+
 func (n *noopMetrics) IncRefRequest(_, _ string) {}
 
 func (n *noopMetrics) IncPushRetry() {}
