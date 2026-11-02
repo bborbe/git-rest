@@ -111,5 +111,16 @@ func NewYAMLMergeResolverWithSideTimes(
 		sideTimes: func(context.Context) (int64, int64, error) {
 			return ours, theirs, nil
 		},
+		baseContent: gitBaseContent(repoPath),
 	}
+}
+
+// YAMLBaseKeySetForTest exposes the merge-base key reader to the external test
+// package. Test builds only.
+func YAMLBaseKeySetForTest(
+	ctx context.Context, repoPath, path string,
+) (map[string]struct{}, bool) {
+	r := &yamlMergeResolver{repoPath: repoPath}
+	r.baseContent = gitBaseContent(repoPath)
+	return r.baseKeySet(ctx, path)
 }

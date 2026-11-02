@@ -46,16 +46,18 @@ const (
 // The caller (the puller) runs `git merge --abort` and surfaces the sentinel.
 func NewYAMLMergeResolver(repoPath string, m metrics.Metrics) ConflictResolver {
 	return &yamlMergeResolver{
-		repoPath:  repoPath,
-		metrics:   m,
-		sideTimes: gitMergeSideTimes(repoPath),
+		repoPath:    repoPath,
+		metrics:     m,
+		sideTimes:   gitMergeSideTimes(repoPath),
+		baseContent: gitBaseContent(repoPath),
 	}
 }
 
 type yamlMergeResolver struct {
-	repoPath  string
-	metrics   metrics.Metrics
-	sideTimes func(ctx context.Context) (ours int64, theirs int64, err error)
+	repoPath    string
+	metrics     metrics.Metrics
+	sideTimes   func(ctx context.Context) (ours int64, theirs int64, err error)
+	baseContent func(ctx context.Context, path string) (string, error)
 }
 
 // Resolve handles each conflicted path in order. The first path that cannot be resolved
@@ -201,6 +203,17 @@ func gitMergeSideTimes(repoPath string) func(
 			return 0, 0, err
 		}
 		return oursTime, theirsTime, nil
+	}
+}
+
+// gitBaseContent returns a function that reads the merge-base version of a
+// conflicted path out of the merge's index stage 1. Stage 1 exists only for a
+// path the merge actually conflicted against a common ancestor; an add/add
+// conflict has no stage 1 and the read fails, which callers must treat as
+// "no base to consult" rather than as an empty base.
+func gitBaseContent(repoPath string) func(ctx context.Context, path string) (string, error) {
+	return func(ctx context.Context, path string) (string, error) {
+		return runGitOutput(ctx, repoPath, "show", ":1:"+path)
 	}
 }
 
@@ -767,6 +780,44 @@ func spliceScalarRegions(
 	}
 	out = append(out, lines[cursor:]...)
 	return strings.Join(out, "\n")
+}
+
+// baseKeySet returns the top-level frontmatter keys of the merge-base version of
+// path. ok is false when the base cannot be read at all (no index stage 1, for
+// example an add/add conflict) or when its frontmatter is not parseable YAML.
+// Callers that need the base to decide something MUST decline when ok is false:
+// an unreadable base is indistinguishable from an unknown one, and guessing
+// there would resurrect a deleted key.
+//
+// The keys are taken from a full YAML unmarshal rather than from single-line
+// scalar entries, so a base key whose value is a nested mapping, a list or a
+// block scalar still counts as present.
+func (r *yamlMergeResolver) baseKeySet(
+	ctx context.Context, path string,
+) (map[string]struct{}, bool) {
+	content, err := r.baseContent(ctx, path)
+	if err != nil {
+		glog.Warningf("yaml-merge-resolver: %q merge-base stage unreadable: %v", path, err)
+		return nil, false
+	}
+	frontmatter, _, ok := splitFrontmatter(content)
+	if !ok {
+		return nil, false
+	}
+	parsed := map[string]interface{}{}
+	if err := yaml.Unmarshal([]byte(frontmatter), &parsed); err != nil {
+		glog.Warningf(
+			"yaml-merge-resolver: %q merge-base frontmatter parse failed: %v",
+			path,
+			err,
+		)
+		return nil, false
+	}
+	keys := make(map[string]struct{}, len(parsed))
+	for key := range parsed {
+		keys[key] = struct{}{}
+	}
+	return keys, true
 }
 
 // applyScalarFrontmatterRule attempts the scalar-frontmatter rule on the raw

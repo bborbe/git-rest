@@ -1,6 +1,8 @@
 ---
-status: approved
+status: prompted
 approved: "2026-11-02T15:22:52Z"
+generating: "2026-11-02T19:16:56Z"
+prompted: "2026-11-02T19:22:23Z"
 branch: dark-factory/bug-one-sided-frontmatter-adds-quarantine
 ---
 
@@ -99,7 +101,7 @@ The tag is cut by the maintainer releaser on merge to master (`.maintainer.yaml`
 - No **new** `context.Background()` in non-test `pkg/` code; timestamps come from the injected `libtime` getter, never `time.Now()`.
 - The existing counter rule (`trigger_count`, `retry_count`, integer `metrics_*` → max) and the newer-side rule must not regress.
 - The resolver remains fail-closed: a region it cannot decide aborts resolution with `ErrConflictResolutionFailed`.
-- **The `Entry("one-sided key", …)` case at `pkg/git/yaml_merge_resolver_test.go:625` keeps expecting `ErrConflictResolutionFailed`.** Its fixture is hand-written (`setupHandWrittenConflict` writes the markers directly, with no `MERGE_HEAD` and no index stages), so there is no base to read and Desired Behavior 2 leaves it quarantining. Add a sibling case with a real merge base for the add path; do not delete or weaken the existing entry.
+- **The `Entry("one-sided key", …)` case at `pkg/git/yaml_merge_resolver_test.go:625` keeps expecting `ErrConflictResolutionFailed`.** Its fixture (`a: 1`/`b: 2` vs `a: 1`) is hand-written — `setupHandWrittenConflict` writes the markers directly, with no `MERGE_HEAD` and no index stages. The region declines on the shared non-counter key `a` because the merge-parent timestamps are unavailable, which happens before any base is read; the one-sided key `b` would independently decline on the unreadable base. Add a sibling case with a real merge base for the add path; do not delete or weaken the existing entry.
 - This spec supersedes `specs/in-progress/016-yaml-scalar-conflict-autoresolve.md` Non-goal 2 **for one-sided adds only**. That spec's AC pinning one-sided keys to quarantine (its line 46) is superseded for the base-confirmed add case and unchanged everywhere else. Record the supersession in 016's own file as a one-line note; do not rewrite its acceptance evidence.
 - `docs/deployment.md` line 234 currently lists "one-sided keys" among the shapes that keep the quarantine path; it must describe the base-confirmed union instead.
 - `CHANGELOG.md` gains a new `## Unreleased` section above `## v0.39.0` with a bullet describing the base-confirmed union. The repo is auto-release, so a merge with no `## Unreleased` bullet cuts no tag and the deploy ladder has nothing to pin.
@@ -191,7 +193,7 @@ Keeping 016's exclusion means every Mac-vs-cluster frontmatter collision keeps p
 
 | # | Prompt focus | Covers DBs | Covers ACs | Depends on |
 |---|---|---|---|---|
-| 1 | Base-read plumbing: read index stage 1 for the conflicted path, expose it to the region planner, decline when unreadable | 2 | 4 | — |
+| 1 | Base-read plumbing: read index stage 1 for the conflicted path, expose it to the region planner, decline when unreadable | 2 | — (behaviour-preserving; no AC closes here) | — |
 | 2 | Union rule and ordering in `parseScalarSide` / `applyScalarFrontmatterRule`, plus the regression cases and the docs update | 1, 3, 4, 5, 6 | 2, 3, 5, 6, 9 | prompt 1 |
 
 Rationale: prompt 1 is the seam that makes the rule safe and is independently testable (base readable / base carries / base unreadable); prompt 2 builds the union on it. ACs 1 and 7 are the verification ladder and produce no code.

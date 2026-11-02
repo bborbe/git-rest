@@ -630,6 +630,42 @@ var _ = Describe("YAMLMergeResolver", func() {
 					">>>>>>> theirs\ntitle: probe\n---\nbody\n"),
 		)
 
+		It("reads the merge-base key set from index stage 1", func() {
+			base := "---\npr_state: open\nphase: planning\n---\nbody\n"
+			ours := "---\npr_state: open\nphase: done\n---\nbody\n"
+			theirs := "---\npr_state: closed\nphase: planning\n---\nbody\n"
+			workDir, rel, cleanup := setupScalarMergeRepo(base, ours, theirs, "", "")
+			defer cleanup()
+
+			keys, ok := git.YAMLBaseKeySetForTest(ctx, workDir, rel)
+			Expect(ok).To(BeTrue())
+			Expect(keys).To(HaveKey("pr_state"))
+			Expect(keys).To(HaveKey("phase"))
+		})
+
+		It("reports the base as unreadable when the index has no stage 1", func() {
+			workDir, rel, cleanup := setupHandWrittenConflict(
+				"note.md",
+				"---\n<<<<<<< HEAD\npr_state: open\n=======\nprevious_assignee: someone\n"+
+					">>>>>>> theirs\ntitle: probe\n---\nbody\n",
+			)
+			defer cleanup()
+
+			_, ok := git.YAMLBaseKeySetForTest(ctx, workDir, rel)
+			Expect(ok).To(BeFalse())
+		})
+
+		It("reports the base as unreadable when its frontmatter is not YAML", func() {
+			base := "---\ntitle: [unclosed\n---\nbody\n"
+			ours := "---\ntitle: a\n---\nbody\n"
+			theirs := "---\ntitle: b\n---\nbody\n"
+			workDir, rel, cleanup := setupScalarMergeRepo(base, ours, theirs, "", "")
+			defer cleanup()
+
+			_, ok := git.YAMLBaseKeySetForTest(ctx, workDir, rel)
+			Expect(ok).To(BeFalse())
+		})
+
 		It("AC5: one bad region makes the whole file quarantine", func() {
 			conflicted := "---\n" +
 				"<<<<<<< HEAD\ntrigger_count: 3\n=======\ntrigger_count: 0\n>>>>>>> theirs\n" +
