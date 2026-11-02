@@ -12,6 +12,11 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 
 - fix: Resolve a frontmatter conflict region whose sides add different scalar keys to the union of both sides, when the merge base is readable, its frontmatter parses, and it carries neither key. A one-sided key is now kept only as a base-confirmed add: when the base carries it (a delete that raced an edit) or the base stage cannot be read, the region still quarantines with `git_rest_resolver_failures_total{category="no_frontmatter"}` and the deleted key is never resurrected. A key that would be emitted in two separate conflict regions also quarantines the whole file, because a repeated mapping key makes the frontmatter unreadable. Counters still take the greater value and every other shared scalar still takes the newer merge parent's value. Supersedes spec 016's one-sided-key exclusion for the base-confirmed add case only.
 
+## v0.40.0
+
+- feat: build the image on a Kubernetes cluster with `make build BUILD_TARGET=<cluster> REF=<sha> VERSION=<tag>`, keeping the default local arm unchanged. `hack/build-cluster.sh`, `hack/cluster-alias.sh` and `hack/build-job.yaml` are vendored from `bborbe/agent-task-executor`; `check-version-tag` and `check-go-mod` stay local-arm prerequisites, since they describe the local HEAD rather than the commit the cluster builds
+- fix: the Dockerfile builds in module mode instead of `-mod=vendor`. `vendor/` is gitignored, so a bare clone — which is what the cluster Job builds — has none and a vendor-mode build fails there. With no explicit flag Go still uses `vendor/` locally, so the local arm is unchanged
+
 ## v0.39.1
 
 - fix: Auto-resolve a merge conflict confined to a markdown file's body. A body conflict — one whose hunks lie entirely below the frontmatter's closing `---` — now resolves in place instead of quarantining: an empty side takes the other side verbatim, identical sides are kept once, and two differing non-empty sides are joined as the local body, a blank line, then the incoming body, with every line outside the hunks preserved. Each resolved path increments `git_rest_body_merged_total`. Conflicts crossing the frontmatter boundary, non-markdown paths and markdown files without frontmatter keep quarantining.
