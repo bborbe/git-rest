@@ -60,16 +60,16 @@ git diff --name-only 69008a1 -- 'pkg/git/*_test.go'
 # must print exactly: pkg/git/yaml_merge_resolver_test.go
 
 git diff --numstat 69008a1 -- pkg/git/yaml_merge_resolver_test.go | awk '{s+=$2} END{print s+0}'
-# must print: 0
+# must print: 2
 ```
 
 Do not attempt to run these in the container, and do not edit tests to make a check pass.
 
 ## 2. Deployment guide
 
-In `docs/deployment.md`, extend the `**Vault-write mode**` bullet. That bullet already contains the sentence `Every other shape — non-scalar hunks, hunks outside the frontmatter, one-sided keys, duplicate keys — keeps the quarantine path described below.` The clause `hunks outside the frontmatter` now contradicts the body rule, because a body-only hunk is exactly that. **First** replace `non-scalar hunks, hunks outside the frontmatter` with `non-scalar hunks that cross the frontmatter boundary`, **then** insert one sentence immediately after that amended sentence and before `On YAML parse failure or missing frontmatter delimiters, …`:
+In `docs/deployment.md`, extend the `**Vault-write mode**` bullet. That bullet already contains the sentence `Every other shape — non-scalar hunks, hunks outside the frontmatter, one-sided keys, duplicate keys — keeps the quarantine path described below.` The clause `hunks outside the frontmatter` now contradicts the body rule, because a body-only hunk is exactly that. **First** replace `non-scalar hunks, hunks outside the frontmatter` with `non-scalar frontmatter hunks` (which keeps the sentence true for the block-scalar, nested-mapping and flow-collection rows that still quarantine), **then** insert one sentence immediately after that amended sentence and before `On YAML parse failure or missing frontmatter delimiters, …`:
 
-> A **body conflict** — one whose hunks lie entirely below the frontmatter's closing `---` — is also auto-resolved in place instead of quarantined: an empty side is replaced by the other side verbatim, identical sides are kept once, and two differing non-empty sides are joined as the local body, a blank line, then the incoming (theirs) body. Every line outside the hunks, including the whole frontmatter block and both `---` delimiters, is preserved, and `git_rest_body_merged_total` increments once per resolved path.
+> A **body conflict** — one whose hunks lie entirely below the frontmatter's closing `---` — is also auto-resolved in place instead of quarantined: an empty side is replaced by the other side verbatim, identical sides are kept once, and two differing non-empty sides are joined as the local body, a blank line, then the incoming (theirs) body. Every line outside the hunks, including the whole frontmatter block and both `---` delimiters, is preserved (a task-shaped path's `phase: in_progress` alias is normalised to `phase: execution`, as on every write path), and `git_rest_body_merged_total` increments once per resolved path.
 
 Requirements on the text:
 
@@ -136,7 +136,7 @@ The deployment guide documents the rule (each `grep -n` must print at least one 
 ```bash
 grep -n 'body conflict' docs/deployment.md
 sed -n '/body conflict/,/^$/p' docs/deployment.md | grep -c 'blank line'
-sed -n '/body conflict/,/^$/p' docs/deployment.md | grep -c 'theirs'
+grep -c 'incoming (theirs) body' docs/deployment.md
 ! grep -q 'combineBodies' docs/deployment.md
 ! grep -q 'hunks outside the frontmatter' docs/deployment.md
 ```
