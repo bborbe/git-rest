@@ -7,6 +7,7 @@ package git_test
 import (
 	"context"
 	stderrors "errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -321,6 +322,102 @@ var _ = Describe("YAMLMergeResolver", func() {
 			r := git.NewYAMLMergeResolver(workDir, fakeMetrics)
 			Expect(r.Resolve(ctx, []string{rel})).To(Succeed())
 			Expect(bodyOf(filepath.Join(workDir, rel))).To(Equal("Y"))
+		})
+
+		// A conflict region that lies entirely below the frontmatter. Every shape
+		// here quarantines today, through one of two gates: splitConflictSides
+		// returns ok=false when either side is empty (:374), and for a
+		// both-non-empty body region it prepends "---\n", so splitFrontmatter
+		// finds no closing delimiter (:113).
+		Describe("Resolve body-only conflict regions", func() {
+			It("AC-bodyonly-ours-empty: theirs body replaces the region verbatim", func() {
+				prefix := "---\npage_type: daily-note\n---\n\n# Daily Plan\n\nintro\n"
+				suffix := "\n\n## Later\n\ntail\n"
+
+				theirsLines := make([]string, 0, 98)
+				for i := 1; i <= 98; i++ {
+					theirsLines = append(theirsLines, fmt.Sprintf("theirs line %d", i))
+				}
+				theirsBody := strings.Join(theirsLines, "\n")
+
+				conflicted := prefix + "<<<<<<< HEAD\n=======\n" +
+					theirsBody + "\n>>>>>>> theirs\n" + suffix
+
+				workDir, rel, cleanup := setupHandWrittenConflict("note.md", conflicted)
+				defer cleanup()
+
+				r := git.NewYAMLMergeResolver(workDir, fakeMetrics)
+				Expect(r.Resolve(ctx, []string{rel})).To(Succeed())
+
+				written, err := os.ReadFile(filepath.Join(workDir, rel))
+				Expect(err).NotTo(HaveOccurred())
+				// Every byte outside the region is unchanged, and the region is
+				// replaced by the theirs body verbatim — the empty-ours -> theirs rule.
+				Expect(string(written)).To(Equal(prefix + theirsBody + "\n" + suffix))
+				Expect(string(written)).NotTo(ContainSubstring("<<<<<<<"))
+				Expect(string(written)).NotTo(ContainSubstring(">>>>>>>"))
+				Expect(string(written)).NotTo(ContainSubstring("======="))
+			})
+
+			It("AC-bodyonly-theirs-empty: ours body kept verbatim", func() {
+				prefix := "---\npage_type: note\n---\n\n# Heading\n\n"
+				suffix := "\n\ntail\n"
+				oursBody := "keep me\nand me"
+
+				conflicted := prefix + "<<<<<<< HEAD\n" + oursBody + "\n=======\n" +
+					">>>>>>> theirs\n" + suffix
+
+				workDir, rel, cleanup := setupHandWrittenConflict("note.md", conflicted)
+				defer cleanup()
+
+				r := git.NewYAMLMergeResolver(workDir, fakeMetrics)
+				Expect(r.Resolve(ctx, []string{rel})).To(Succeed())
+
+				written, err := os.ReadFile(filepath.Join(workDir, rel))
+				Expect(err).NotTo(HaveOccurred())
+				Expect(string(written)).To(Equal(prefix + oursBody + "\n" + suffix))
+			})
+
+			It("AC-bodyonly-both-differ: ours + blank line + theirs", func() {
+				prefix := "---\npage_type: goal\n---\n\n# Heading\n\n"
+				suffix := "\n\ntail\n"
+				oursBody := "a\nb\nc"
+				theirsBody := "a\nb\nc\nd"
+
+				conflicted := prefix + "<<<<<<< HEAD\n" + oursBody + "\n=======\n" +
+					theirsBody + "\n>>>>>>> theirs\n" + suffix
+
+				workDir, rel, cleanup := setupHandWrittenConflict("note.md", conflicted)
+				defer cleanup()
+
+				r := git.NewYAMLMergeResolver(workDir, fakeMetrics)
+				Expect(r.Resolve(ctx, []string{rel})).To(Succeed())
+
+				written, err := os.ReadFile(filepath.Join(workDir, rel))
+				Expect(err).NotTo(HaveOccurred())
+				Expect(string(written)).To(Equal(prefix + oursBody + "\n\n" + theirsBody + "\n" + suffix))
+			})
+
+			It("AC-bodyonly-nonmarkdown: a .txt body conflict still quarantines", func() {
+				prefix := "header\n\n"
+				suffix := "\n\ntail\n"
+				oursBody := "a\nb\nc"
+				theirsBody := "a\nb\nc\nd"
+
+				conflicted := prefix + "<<<<<<< HEAD\n" + oursBody + "\n=======\n" +
+					theirsBody + "\n>>>>>>> theirs\n" + suffix
+
+				workDir, rel, cleanup := setupHandWrittenConflict("note.txt", conflicted)
+				defer cleanup()
+
+				r := git.NewYAMLMergeResolver(workDir, fakeMetrics)
+				err := r.Resolve(ctx, []string{rel})
+				Expect(stderrors.Is(err, git.ErrConflictResolutionFailed)).To(BeTrue())
+
+				after, readErr := os.ReadFile(filepath.Join(workDir, rel))
+				Expect(readErr).NotTo(HaveOccurred())
+				Expect(string(after)).To(Equal(conflicted))
+			})
 		})
 
 		It("AC-staged: file is staged (no longer unmerged) after Resolve", func() {
