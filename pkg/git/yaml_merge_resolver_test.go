@@ -395,7 +395,9 @@ var _ = Describe("YAMLMergeResolver", func() {
 
 				written, err := os.ReadFile(filepath.Join(workDir, rel))
 				Expect(err).NotTo(HaveOccurred())
-				Expect(string(written)).To(Equal(prefix + oursBody + "\n\n" + theirsBody + "\n" + suffix))
+				Expect(
+					string(written),
+				).To(Equal(prefix + oursBody + "\n\n" + theirsBody + "\n" + suffix))
 			})
 
 			It("AC-bodyonly-nonmarkdown: a .txt body conflict still quarantines", func() {

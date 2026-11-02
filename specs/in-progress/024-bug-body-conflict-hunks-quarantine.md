@@ -1,6 +1,7 @@
 ---
-status: draft
-kind: bug
+status: approved
+approved: "2026-11-02T17:42:59Z"
+branch: dark-factory/bug-body-conflict-hunks-quarantine
 ---
 
 ## Summary
