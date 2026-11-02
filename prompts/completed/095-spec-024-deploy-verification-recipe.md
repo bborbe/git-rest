@@ -1,8 +1,13 @@
 ---
-status: approved
+status: completed
 spec: [024-bug-body-conflict-hunks-quarantine]
+summary: Added the replayable rung-2/rung-3 body-conflict probe recipe to docs/verifying-specs.md with a fail-loud deploy gate, baselines, probe setup, and assertions.
+execution_id: git-rest-body-merge-exec-095-spec-024-deploy-verification-recipe
+dark-factory-version: v0.198.7
 created: "2026-11-02T18:50:00Z"
 queued: "2026-11-02T18:46:44Z"
+started: "2026-11-02T19:03:58Z"
+completed: "2026-11-02T19:04:29Z"
 branch: dark-factory/bug-body-conflict-hunks-quarantine
 ---
 
