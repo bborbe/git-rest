@@ -1268,6 +1268,41 @@ var _ = Describe("YAMLMergeResolver", func() {
 			Expect(after).To(Equal(before))
 		})
 
+		// A key added by ours in a clean hunk outside every region and added
+		// again by theirs inside a region is the shape the region-spanning guard
+		// alone cannot see: spliceScalarRegions copies the outside line verbatim,
+		// so seeding the emitted set with the outside keys is what catches it.
+		It("AC: declines the file when a region re-emits a key already outside it", func() {
+			base := "---\ncreated_date: \"2026-11-02\"\nphase: planning\n" +
+				"title: probe\nassignee: base\n---\nbody\n"
+			ours := "---\npr_state: open\ncreated_date: \"2026-11-02\"\nphase: planning\n" +
+				"title: probe\nassignee: alice\n---\nbody\n"
+			theirs := "---\ncreated_date: \"2026-11-02\"\nphase: planning\n" +
+				"title: probe\nassignee: bob\npr_state: closed\n---\nbody\n"
+			workDir, rel, cleanup := setupScalarMergeRepo(
+				base, ours, theirs,
+				"2026-01-01T00:00:00Z", "2026-01-02T00:00:00Z",
+			)
+			defer cleanup()
+
+			abs := filepath.Join(workDir, rel)
+			before, err := os.ReadFile(abs)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(string(before)).To(ContainSubstring("pr_state: open\ncreated_date:"))
+			Expect(string(before)).To(ContainSubstring("pr_state: closed\n>>>>>>> theirs"))
+
+			r := git.NewYAMLMergeResolver(workDir, fakeMetrics)
+			err = r.Resolve(ctx, []string{rel})
+			Expect(stderrors.Is(err, git.ErrConflictResolutionFailed)).To(BeTrue())
+			Expect(fakeMetrics.IncResolverFailureCallCount()).To(Equal(1))
+			Expect(fakeMetrics.IncResolverFailureArgsForCall(0)).To(Equal("no_frontmatter"))
+			Expect(fakeMetrics.IncAutoresolvedCallCount()).To(Equal(0))
+
+			after, err := os.ReadFile(abs)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(after).To(Equal(before))
+		})
+
 		It("reads the merge-base key set from index stage 1", func() {
 			base := "---\npr_state: open\nphase: planning\n---\nbody\n"
 			ours := "---\npr_state: open\nphase: done\n---\nbody\n"
