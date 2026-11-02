@@ -1,8 +1,13 @@
 ---
-status: approved
+status: completed
 spec: [024-bug-body-conflict-hunks-quarantine]
+summary: Added pre-initialised git_rest_body_merged_total counter, IncBodyMerged on the metrics interface, a single increment per body-resolved path after write+git add, regenerated the mock, and added positive/negative FakeMetrics assertions.
+execution_id: git-rest-body-merge-exec-093-spec-024-body-merged-counter
+dark-factory-version: v0.198.7
 created: "2026-11-02T18:50:00Z"
 queued: "2026-11-02T18:46:44Z"
+started: "2026-11-02T18:54:04Z"
+completed: "2026-11-02T19:00:51Z"
 branch: dark-factory/bug-body-conflict-hunks-quarantine
 ---
 

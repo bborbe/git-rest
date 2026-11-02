@@ -74,6 +74,14 @@ var AutoresolvedTotal = prometheus.NewCounter(prometheus.CounterOpts{
 	Help: "Total conflicted paths auto-resolved by the scalar-frontmatter rule during pull.",
 })
 
+// BodyMergedTotal counts conflicted paths resolved by the body-only rule (a
+// conflict confined to the markdown body below the closing frontmatter
+// delimiter) during pull.
+var BodyMergedTotal = prometheus.NewCounter(prometheus.CounterOpts{
+	Name: "git_rest_body_merged_total",
+	Help: "Total conflicted paths auto-resolved by the body-only rule during pull.",
+})
+
 // RefRequestsTotal counts claim-ref requests by operation and HTTP status code.
 // op is "get", "put" or "delete"; result is the status code returned as a string.
 var RefRequestsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
@@ -131,6 +139,7 @@ func init() {
 		QuarantinedBacklog,
 		PullRescuesTotal,
 		AutoresolvedTotal,
+		BodyMergedTotal,
 		RefRequestsTotal,
 		PushRetriesTotal,
 		WriteFlushesTotal,
@@ -174,6 +183,10 @@ func init() {
 	// QuarantinedFilesTotal: the series is registered at init() time so /metrics
 	// exposes it as 0 before the first auto-resolution has ever happened.
 	AutoresolvedTotal.Add(0)
+	// Explicit .Add(0) on the unlabeled body-merged counter, mirroring
+	// QuarantinedFilesTotal: the series is registered at init() time so /metrics
+	// exposes it as 0 before the first body-only resolution has ever happened.
+	BodyMergedTotal.Add(0)
 	// Explicit .Add(0) on the unlabeled push-retry counter, mirroring
 	// PullRescuesTotal: the series is registered at init() time so /metrics
 	// exposes it as 0 before the first retry has ever happened.
@@ -235,6 +248,9 @@ type Metrics interface {
 	// scalar-frontmatter rule. Called once per path, after the file is written and
 	// staged.
 	IncAutoresolved()
+	// IncBodyMerged records one conflicted path auto-resolved by the body-only
+	// rule. Called once per path, after the file is written and staged.
+	IncBodyMerged()
 	// IncRefRequest records one claim-ref request by operation ("get", "put",
 	// "delete") and the HTTP status code returned as a string.
 	IncRefRequest(op, result string)
@@ -300,6 +316,10 @@ func (p *prometheusMetrics) IncPullRescue() {
 
 func (p *prometheusMetrics) IncAutoresolved() {
 	AutoresolvedTotal.Inc()
+}
+
+func (p *prometheusMetrics) IncBodyMerged() {
+	BodyMergedTotal.Inc()
 }
 
 func (p *prometheusMetrics) IncRefRequest(op, result string) {

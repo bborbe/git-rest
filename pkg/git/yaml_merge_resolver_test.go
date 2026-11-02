@@ -1336,6 +1336,79 @@ var _ = Describe("YAMLMergeResolver", func() {
 		})
 	})
 
+	Describe("Body merge metric", func() {
+		bodyConflict := "---\npage_type: note\n---\n\n# Heading\n\nintro\n" +
+			"<<<<<<< HEAD\n=======\ntheirs line\n>>>>>>> theirs\n"
+
+		It("increments once per body-resolved path and not the scalar or failure counters", func() {
+			workDir, rel, cleanup := setupHandWrittenConflict("note.md", bodyConflict)
+			defer cleanup()
+
+			r := git.NewYAMLMergeResolver(workDir, fakeMetrics)
+			Expect(r.Resolve(ctx, []string{rel})).To(Succeed())
+
+			Expect(fakeMetrics.IncBodyMergedCallCount()).To(Equal(1))
+			Expect(fakeMetrics.IncAutoresolvedCallCount()).To(Equal(0))
+			Expect(fakeMetrics.IncResolverFailureCallCount()).To(Equal(0))
+		})
+
+		It("increments once per path across two body-resolved paths", func() {
+			workDir, rel, cleanup := setupHandWrittenConflict("note.md", bodyConflict)
+			defer cleanup()
+			Expect(os.WriteFile(
+				filepath.Join(workDir, "note2.md"),
+				[]byte(bodyConflict),
+				0o600,
+			)).To(Succeed())
+
+			r := git.NewYAMLMergeResolver(workDir, fakeMetrics)
+			Expect(r.Resolve(ctx, []string{rel, "note2.md"})).To(Succeed())
+
+			Expect(fakeMetrics.IncBodyMergedCallCount()).To(Equal(2))
+		})
+
+		It("does not increment on the deep-merge path", func() {
+			workDir, rel, cleanup := setupYAMLConflictRepo(
+				"a: 1\n", "X",
+				"b: 2\n", "Y",
+			)
+			defer cleanup()
+
+			r := git.NewYAMLMergeResolver(workDir, fakeMetrics)
+			Expect(r.Resolve(ctx, []string{rel})).To(Succeed())
+
+			Expect(fakeMetrics.IncBodyMergedCallCount()).To(Equal(0))
+		})
+
+		It("does not increment on the scalar-frontmatter path", func() {
+			conflicted := "---\n<<<<<<< HEAD\ntrigger_count: 3\n=======\n" +
+				"trigger_count: 0\n>>>>>>> theirs\ntitle: probe\n---\nbody\n"
+			workDir, rel, cleanup := setupHandWrittenConflict("note.md", conflicted)
+			defer cleanup()
+
+			r := git.NewYAMLMergeResolver(workDir, fakeMetrics)
+			Expect(r.Resolve(ctx, []string{rel})).To(Succeed())
+
+			Expect(fakeMetrics.IncAutoresolvedCallCount()).To(Equal(1))
+			Expect(fakeMetrics.IncBodyMergedCallCount()).To(Equal(0))
+		})
+
+		It("does not increment when the body shape is rejected", func() {
+			conflicted := "---\npage_type: note\n" +
+				"<<<<<<< HEAD\nbody ours\n=======\ntags: [b]\n---\nbody theirs\n>>>>>>> theirs\n" +
+				"<<<<<<< HEAD\ntail ours\n=======\ntail theirs\n>>>>>>> theirs\n"
+			workDir, rel, cleanup := setupHandWrittenConflict("note.md", conflicted)
+			defer cleanup()
+
+			r := git.NewYAMLMergeResolver(workDir, fakeMetrics)
+			err := r.Resolve(ctx, []string{rel})
+			Expect(stderrors.Is(err, git.ErrConflictResolutionFailed)).To(BeTrue())
+
+			Expect(fakeMetrics.IncBodyMergedCallCount()).To(Equal(0))
+			Expect(fakeMetrics.IncResolverFailureArgsForCall(0)).To(Equal("no_frontmatter"))
+		})
+	})
+
 	Describe("Metric pre-initialisation (spec AC: zero-init labels)", func() {
 		It("exposes all four failure categories pre-initialised to zero", func() {
 			// Gather from the prometheus default registry; the labels are pre-initialised

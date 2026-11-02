@@ -12,6 +12,10 @@ type FakeMetrics struct {
 	incAutoresolvedMutex       sync.RWMutex
 	incAutoresolvedArgsForCall []struct {
 	}
+	IncBodyMergedStub        func()
+	incBodyMergedMutex       sync.RWMutex
+	incBodyMergedArgsForCall []struct {
+	}
 	IncConflictPathsStub        func(int)
 	incConflictPathsMutex       sync.RWMutex
 	incConflictPathsArgsForCall []struct {
@@ -112,6 +116,30 @@ func (fake *FakeMetrics) IncAutoresolvedCalls(stub func()) {
 	fake.incAutoresolvedMutex.Lock()
 	defer fake.incAutoresolvedMutex.Unlock()
 	fake.IncAutoresolvedStub = stub
+}
+
+func (fake *FakeMetrics) IncBodyMerged() {
+	fake.incBodyMergedMutex.Lock()
+	fake.incBodyMergedArgsForCall = append(fake.incBodyMergedArgsForCall, struct {
+	}{})
+	stub := fake.IncBodyMergedStub
+	fake.recordInvocation("IncBodyMerged", []interface{}{})
+	fake.incBodyMergedMutex.Unlock()
+	if stub != nil {
+		fake.IncBodyMergedStub()
+	}
+}
+
+func (fake *FakeMetrics) IncBodyMergedCallCount() int {
+	fake.incBodyMergedMutex.RLock()
+	defer fake.incBodyMergedMutex.RUnlock()
+	return len(fake.incBodyMergedArgsForCall)
+}
+
+func (fake *FakeMetrics) IncBodyMergedCalls(stub func()) {
+	fake.incBodyMergedMutex.Lock()
+	defer fake.incBodyMergedMutex.Unlock()
+	fake.IncBodyMergedStub = stub
 }
 
 func (fake *FakeMetrics) IncConflictPaths(arg1 int) {

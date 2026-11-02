@@ -887,6 +887,7 @@ func (r *yamlMergeResolver) applyBodyRule(
 	if err := r.runGitAdd(ctx, path); err != nil {
 		return true, err
 	}
+	r.metrics.IncBodyMerged()
 	return true, nil
 }
 
