@@ -1,5 +1,6 @@
 ---
-status: failed
+status: rejected
+originalStatus: failed
 execution_id: git-rest-exec-082-widen-push-retry-backoff
 dark-factory-version: v0.198.7
 created: "2026-10-23T18:05:39Z"
@@ -7,6 +8,8 @@ queued: "2026-10-23T18:05:39Z"
 started: "2026-10-23T19:10:50Z"
 completed: "2026-10-23T19:23:15Z"
 lastFailReason: 'validate completion report: completion report status: failed'
+rejected: "2026-11-02T15:38:55Z"
+rejectedReason: Work shipped in v0.34.3 (CHANGELOG line 59); the file failed completion-report validation and was never moved out of prompts/in-progress, where it blocks the cluster dark-factory candidate gate for every PR in this repo (hasInFlightPrompts).
 ---
 
 # Widen the push-retry backoff exponentially
