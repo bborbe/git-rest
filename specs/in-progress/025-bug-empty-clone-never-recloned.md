@@ -1,8 +1,9 @@
 ---
-status: prompted
+status: verifying
 approved: "2026-11-03T15:06:25Z"
 generating: "2026-11-03T15:44:28Z"
 prompted: "2026-11-03T15:55:26Z"
+verifying: "2026-11-03T16:17:39Z"
 branch: dark-factory/bug-empty-clone-never-recloned
 ---
 
