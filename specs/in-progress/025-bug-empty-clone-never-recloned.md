@@ -1,6 +1,8 @@
 ---
-status: approved
+status: prompted
 approved: "2026-11-03T15:06:25Z"
+generating: "2026-11-03T15:44:28Z"
+prompted: "2026-11-03T15:55:26Z"
 branch: dark-factory/bug-empty-clone-never-recloned
 ---
 
@@ -63,9 +65,19 @@ Minimal local reproduction, no cluster needed, and the form the fix must replay:
 
 ```
 mkdir -p /tmp/empty-clone/repo && git -C /tmp/empty-clone/repo init   # .git exists, zero commits
-git init --bare /tmp/empty-clone/remote.git
+git init --bare --initial-branch=main /tmp/empty-clone/remote.git
+# Seed the remote with one commit: a bare remote with NO commits also leaves
+# HEAD unborn after a successful clone, so it could never satisfy the
+# post-fix assertion. The bug is the *local* directory being HEAD-less while
+# the remote is cloneable.
+git -C /tmp/empty-clone/seed init --initial-branch=main
+git -C /tmp/empty-clone/seed -c user.email=t@e -c user.name=T commit --allow-empty -m seed
+git -C /tmp/empty-clone/seed remote add origin /tmp/empty-clone/remote.git
+git -C /tmp/empty-clone/seed push origin main
+git -C /tmp/empty-clone/remote.git symbolic-ref HEAD refs/heads/main
+
 <git-rest binary> --repo /tmp/empty-clone/repo --git-remote-url /tmp/empty-clone/remote.git
-git -C /tmp/empty-clone/repo rev-parse HEAD      # pre-fix: exit 128; post-fix: exit 0
+git -C /tmp/empty-clone/repo rev-parse --abbrev-ref HEAD   # pre-fix: exit 128; post-fix: main
 ```
 
 ## Expected vs Actual
