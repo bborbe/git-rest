@@ -10,6 +10,7 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 
 ## Unreleased
 
+- fix: Return `ErrRepoUnrecoverable` from `Pull` when the repository HEAD cannot be resolved, instead of a misleading `no upstream configured` error
 - fix: Re-clone a repository whose `.git` cannot resolve HEAD at startup instead of treating it as already cloned, naming every local-only path discarded first, so a partially failed clone no longer leaves the pod serving an empty working tree forever
 
 ## v0.40.2

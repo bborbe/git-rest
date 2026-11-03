@@ -1,8 +1,13 @@
 ---
-status: approved
+status: completed
 spec: [025-bug-empty-clone-never-recloned]
+summary: Pull now returns an error wrapping ErrRepoUnrecoverable when the repository HEAD cannot be resolved, with a regression test and changelog entry.
+execution_id: git-rest-empty-clone-recovery-exec-098-spec-025-pull-unresolvable-head
+dark-factory-version: v0.198.7
 created: "2026-11-03T15:46:47Z"
 queued: "2026-11-03T16:10:56Z"
+started: "2026-11-03T16:15:10Z"
+completed: "2026-11-03T16:17:39Z"
 branch: dark-factory/bug-empty-clone-never-recloned
 ---
 

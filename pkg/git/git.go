@@ -1983,7 +1983,7 @@ func (g *git) recoverRepoState(ctx context.Context) error {
 	// Check if HEAD is detached (no rebase in progress).
 	headOut, err := g.runCmdOutput(ctx, g.repoPath, "rev-parse", "--abbrev-ref", "HEAD")
 	if err != nil {
-		// Cannot determine HEAD state — let Pull's @{u} resolution surface the error.
+		// Cannot determine HEAD state — Pull's HEAD probe reports it as ErrRepoUnrecoverable.
 		return nil
 	}
 	if strings.TrimSpace(string(headOut)) != "HEAD" {
@@ -2309,6 +2309,17 @@ func (g *git) Pull(ctx context.Context) error {
 	if err := g.recoverRepoState(ctx); err != nil {
 		g.metrics.IncGitOperationError("pull")
 		return err
+	}
+
+	// An unresolvable HEAD means there is no usable repository. Without this
+	// check the @{u} lookup below reports "HEAD does not point to a branch",
+	// which reads as a repository-state problem rather than the missing-clone
+	// problem it is. Surface it as unrecoverable instead.
+	if _, err := g.runCmdOutput(
+		ctx, g.repoPath, "rev-parse", "--verify", "--quiet", "HEAD",
+	); err != nil {
+		g.metrics.IncGitOperationError("pull")
+		return errors.Wrap(ctx, ErrRepoUnrecoverable, "HEAD cannot be resolved")
 	}
 
 	upstreamOut, err := g.runCmdOutput(

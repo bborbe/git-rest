@@ -1949,6 +1949,30 @@ var _ = Describe("Entry-state recovery", func() {
 		})
 	})
 
+	Context("unresolvable HEAD", func() {
+		It("returns ErrRepoUnrecoverable instead of an untyped upstream error", func() {
+			workDir, _, cleanup := setupPullFixture()
+			defer cleanup()
+
+			// A repository whose HEAD cannot be resolved has no usable HEAD ref.
+			Expect(os.Remove(filepath.Join(workDir, ".git", "HEAD"))).To(Succeed())
+
+			pg := git.New(
+				workDir,
+				&noopMetrics{},
+				libtime.NewCurrentDateTime(),
+				"",
+				git.NewMarkerResolver(workDir),
+			)
+			pullErr := pg.Pull(ctx)
+
+			Expect(pullErr).To(HaveOccurred())
+			Expect(errors.Is(pullErr, git.ErrRepoUnrecoverable)).To(BeTrue(),
+				"expected ErrRepoUnrecoverable, got: %v", pullErr)
+			Expect(pullErr.Error()).NotTo(ContainSubstring("no upstream configured"))
+		})
+	})
+
 	Context("AC4a: healthy repo — state check is a no-op", func() {
 		It(
 			"Pull succeeds twice; HEAD stays on a branch, no side effects, no recovery logs",
