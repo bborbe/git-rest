@@ -46,16 +46,18 @@ const (
 // The caller (the puller) runs `git merge --abort` and surfaces the sentinel.
 func NewYAMLMergeResolver(repoPath string, m metrics.Metrics) ConflictResolver {
 	return &yamlMergeResolver{
-		repoPath:  repoPath,
-		metrics:   m,
-		sideTimes: gitMergeSideTimes(repoPath),
+		repoPath:    repoPath,
+		metrics:     m,
+		sideTimes:   gitMergeSideTimes(repoPath),
+		baseContent: gitBaseContent(repoPath),
 	}
 }
 
 type yamlMergeResolver struct {
-	repoPath  string
-	metrics   metrics.Metrics
-	sideTimes func(ctx context.Context) (ours int64, theirs int64, err error)
+	repoPath    string
+	metrics     metrics.Metrics
+	sideTimes   func(ctx context.Context) (ours int64, theirs int64, err error)
+	baseContent func(ctx context.Context, path string) (string, error)
 }
 
 // Resolve handles each conflicted path in order. The first path that cannot be resolved
@@ -203,6 +205,17 @@ func gitMergeSideTimes(repoPath string) func(
 			return 0, 0, err
 		}
 		return oursTime, theirsTime, nil
+	}
+}
+
+// gitBaseContent returns a function that reads the merge-base version of a
+// conflicted path out of the merge's index stage 1. Stage 1 exists only for a
+// path the merge actually conflicted against a common ancestor; an add/add
+// conflict has no stage 1 and the read fails, which callers must treat as
+// "no base to consult" rather than as an empty base.
+func gitBaseContent(repoPath string) func(ctx context.Context, path string) (string, error) {
+	return func(ctx context.Context, path string) (string, error) {
+		return runGitOutput(ctx, repoPath, "show", ":1:"+path)
 	}
 }
 
@@ -599,7 +612,7 @@ type scalarKeyEntry struct {
 type scalarRegion struct {
 	conflictRegion
 	ours   []scalarKeyEntry // ours-side order
-	theirs map[string]scalarEntry
+	theirs []scalarKeyEntry // theirs-side order
 }
 
 // bodyRegion is one eligible body-only conflict region with both sides extracted.
@@ -692,11 +705,14 @@ func regionInsideFrontmatter(region conflictRegion, closeIndex, previousEnd int)
 		region.startLine > previousEnd
 }
 
-// parseScalarSide parses both sides of one region and enforces the key-set
-// guards: at least one key per side, no duplicates, identical key sets.
+// parseScalarSide parses both sides of one region and enforces the shape
+// guards: at least one key per side and no duplicate key within a side. The
+// key sets may be disjoint here — whether a one-sided key is an addition or a
+// deletion is decided against the merge base in resolveScalarRegion, which is
+// the only place that may consult the base.
 func parseScalarSide(
 	oursLines, theirsLines []string,
-) ([]scalarKeyEntry, map[string]scalarEntry, bool) {
+) ([]scalarKeyEntry, []scalarKeyEntry, bool) {
 	ours, ok := parseScalarOurs(oursLines)
 	if !ok {
 		return nil, nil, false
@@ -705,13 +721,8 @@ func parseScalarSide(
 	if !ok {
 		return nil, nil, false
 	}
-	if len(ours) == 0 || len(theirs) == 0 || len(ours) != len(theirs) {
+	if len(ours) == 0 || len(theirs) == 0 {
 		return nil, nil, false
-	}
-	for _, oursEntry := range ours {
-		if _, present := theirs[oursEntry.key]; !present {
-			return nil, nil, false
-		}
 	}
 	return ours, theirs, true
 }
@@ -733,17 +744,19 @@ func parseScalarOurs(lines []string) ([]scalarKeyEntry, bool) {
 	return ours, true
 }
 
-func parseScalarTheirs(lines []string) (map[string]scalarEntry, bool) {
-	theirs := make(map[string]scalarEntry, len(lines))
+func parseScalarTheirs(lines []string) ([]scalarKeyEntry, bool) {
+	theirs := make([]scalarKeyEntry, 0, len(lines))
+	seen := make(map[string]struct{}, len(lines))
 	for _, line := range lines {
 		key, entry, ok := parseScalarEntry(line)
 		if !ok {
 			return nil, false
 		}
-		if _, duplicate := theirs[key]; duplicate {
+		if _, duplicate := seen[key]; duplicate {
 			return nil, false
 		}
-		theirs[key] = entry
+		seen[key] = struct{}{}
+		theirs = append(theirs, scalarKeyEntry{key: key, entry: entry})
 	}
 	return theirs, true
 }
@@ -815,6 +828,187 @@ func spliceScalarRegions(
 	}
 	out = append(out, lines[cursor:]...)
 	return strings.Join(out, "\n")
+}
+
+// baseKeySet returns the top-level frontmatter keys of the merge-base version of
+// path. ok is false when the base cannot be read at all (no index stage 1, for
+// example an add/add conflict), when the base carries no frontmatter delimiter
+// pair, or when its frontmatter is not parseable YAML. Callers that need the base
+// to decide something MUST decline when ok is false:
+// an unreadable base is indistinguishable from an unknown one, and guessing
+// there would resurrect a deleted key.
+//
+// The keys are taken from a full YAML unmarshal rather than from single-line
+// scalar entries, so a base key whose value is a nested mapping, a list or a
+// block scalar still counts as present.
+func (r *yamlMergeResolver) baseKeySet(
+	ctx context.Context, path string,
+) (map[string]struct{}, bool) {
+	content, err := r.baseContent(ctx, path)
+	if err != nil {
+		glog.Warningf("yaml-merge-resolver: %q merge-base stage unreadable: %v", path, err)
+		return nil, false
+	}
+	frontmatter, _, ok := splitFrontmatter(content)
+	if !ok {
+		return nil, false
+	}
+	parsed := map[string]interface{}{}
+	if err := yaml.Unmarshal([]byte(frontmatter), &parsed); err != nil {
+		glog.Warningf(
+			"yaml-merge-resolver: %q merge-base frontmatter parse failed: %v",
+			path,
+			err,
+		)
+		return nil, false
+	}
+	keys := make(map[string]struct{}, len(parsed))
+	for key := range parsed {
+		keys[key] = struct{}{}
+	}
+	return keys, true
+}
+
+// oneSidedKeyIsAdd reports whether key, present on only one side of a region,
+// is an addition relative to the merge base. It is false when the base cannot
+// be read at all, and false when the base already carries the key — that shape
+// is a delete on one side that raced an edit on the other, and the deleted key
+// must never be resurrected.
+func oneSidedKeyIsAdd(
+	loadBase func() (map[string]struct{}, bool),
+	key string,
+) bool {
+	keys, ok := loadBase()
+	if !ok {
+		return false
+	}
+	_, inBase := keys[key]
+	return !inBase
+}
+
+// emittedKeys records the frontmatter keys already present in one file: the keys
+// that live outside every conflict region, seeded before any region resolves,
+// plus the keys the resolved regions emit. A key emitted twice — by two regions,
+// or by a region when an untouched line already carries it — would leave a
+// duplicate mapping key that the next yaml.Unmarshal of the frontmatter rejects,
+// so the second occurrence declines the whole file instead of writing invalid
+// YAML.
+type emittedKeys map[string]struct{}
+
+// record returns false when key was already emitted.
+func (e emittedKeys) record(key string) bool {
+	if _, duplicate := e[key]; duplicate {
+		return false
+	}
+	e[key] = struct{}{}
+	return true
+}
+
+// seedEmittedOutsideRegions records the frontmatter keys that sit outside every
+// conflict region. spliceScalarRegions copies those lines verbatim, so a region
+// that emits one of them would leave a duplicate mapping key; seeding the set
+// makes the existing duplicate guard see them.
+func seedEmittedOutsideRegions(lines []string, regions []scalarRegion) emittedKeys {
+	closeIndex, ok := frontmatterBounds(lines)
+	if !ok {
+		return emittedKeys{}
+	}
+	insideRegion := make([]bool, len(lines))
+	for _, region := range regions {
+		for i := region.startLine; i <= region.endLine; i++ {
+			insideRegion[i] = true
+		}
+	}
+	emitted := make(emittedKeys, closeIndex)
+	for i := 1; i < closeIndex; i++ {
+		if insideRegion[i] {
+			continue
+		}
+		if key, ok := topLevelKey(lines[i]); ok {
+			emitted[key] = struct{}{}
+		}
+	}
+	return emitted
+}
+
+// topLevelKey returns the key of a top-level `key: value` frontmatter line, for
+// any value shape — plain scalar, flow collection, block scalar or anchored
+// value. It is deliberately looser than parseScalarEntry: a key that a region
+// emits as a plain scalar still collides with an untouched `tags: [a]` or
+// `desc: |` line, and a collision there produces a duplicate mapping key just
+// as surely.
+func topLevelKey(line string) (string, bool) {
+	trimmed := strings.TrimRight(line, "\r")
+	if trimmed == "" || trimmed[0] == ' ' || trimmed[0] == '\t' {
+		return "", false
+	}
+	if trimmed == "-" || strings.HasPrefix(trimmed, "- ") || strings.HasPrefix(trimmed, "#") {
+		return "", false
+	}
+	key, _, found := strings.Cut(trimmed, ":")
+	if !found {
+		return "", false
+	}
+	key = strings.TrimSpace(key)
+	key = strings.Trim(key, `"'`)
+	if key == "" {
+		return "", false
+	}
+	return key, true
+}
+
+// resolveScalarRegion returns the replacement lines for one region. Keys the
+// two sides share go through resolveScalarEntry unchanged; a key only one side
+// carries is kept verbatim when the merge base lacks it. Ordering is the
+// ours-side keys in their original order, then the theirs-only keys in theirs.
+// Every emitted key is recorded in the caller's set, which spans all regions of
+// the file; a key that would be emitted twice declines the whole file.
+// ok is false when the region needs a human.
+func resolveScalarRegion(
+	region scalarRegion,
+	newerTheirs func() (theirsNewer bool, ok bool),
+	loadBase func() (map[string]struct{}, bool),
+	emitted emittedKeys,
+) ([]string, bool) {
+	theirsByKey := make(map[string]scalarEntry, len(region.theirs))
+	for _, theirsEntry := range region.theirs {
+		theirsByKey[theirsEntry.key] = theirsEntry.entry
+	}
+
+	oursKeys := make(map[string]struct{}, len(region.ours))
+	resolved := make([]string, 0, len(region.ours)+len(region.theirs))
+	for _, oursEntry := range region.ours {
+		oursKeys[oursEntry.key] = struct{}{}
+		if theirsEntry, shared := theirsByKey[oursEntry.key]; shared {
+			line, ok := resolveScalarEntry(
+				oursEntry.key,
+				oursEntry.entry,
+				theirsEntry,
+				newerTheirs,
+			)
+			if !ok || !emitted.record(oursEntry.key) {
+				return nil, false
+			}
+			resolved = append(resolved, line)
+			continue
+		}
+		if !oneSidedKeyIsAdd(loadBase, oursEntry.key) || !emitted.record(oursEntry.key) {
+			return nil, false
+		}
+		resolved = append(resolved, oursEntry.entry.line)
+	}
+
+	for _, theirsEntry := range region.theirs {
+		if _, inOurs := oursKeys[theirsEntry.key]; inOurs {
+			continue
+		}
+		if !oneSidedKeyIsAdd(loadBase, theirsEntry.key) ||
+			!emitted.record(theirsEntry.key) {
+			return nil, false
+		}
+		resolved = append(resolved, theirsEntry.entry.line)
+	}
+	return resolved, true
 }
 
 // spliceConflictRegions returns the original file with each conflict region
@@ -905,6 +1099,16 @@ func (r *yamlMergeResolver) applyFallbackRules(
 // applyScalarFrontmatterRule attempts the scalar-frontmatter rule on the raw
 // conflicted file. applied reports whether the rule took responsibility for the
 // file; when it did, the file has been written and staged and err is the outcome.
+//
+// Keys the two sides share follow the counter and newer-side rules. A key only
+// one side carries is resolved to the union of both sides when the merge base is
+// readable and lacks it; otherwise the region declines and the whole file
+// quarantines. The keys already present outside every region are seeded into the
+// same set before any region resolves. A key that would be emitted by two
+// regions, or emitted by a region when an untouched line already carries it, is
+// one of the decline shapes, because writing both would produce a duplicate
+// mapping key. A decline is never a partial write: nothing is written or staged
+// and the caller records no_frontmatter.
 func (r *yamlMergeResolver) applyScalarFrontmatterRule(
 	ctx context.Context, path, abs, raw string,
 ) (applied bool, err error) {
@@ -942,20 +1146,25 @@ func (r *yamlMergeResolver) applyScalarFrontmatterRule(
 		return theirsNewer, timesOK
 	}
 
+	var (
+		baseLoaded bool
+		baseOK     bool
+		baseKeys   map[string]struct{}
+	)
+	loadBase := func() (map[string]struct{}, bool) {
+		if !baseLoaded {
+			baseLoaded = true
+			baseKeys, baseOK = r.baseKeySet(ctx, path)
+		}
+		return baseKeys, baseOK
+	}
+
+	emitted := seedEmittedOutsideRegions(lines, regions)
 	replacements := make([][]string, 0, len(regions))
 	for _, region := range regions {
-		resolved := make([]string, 0, len(region.ours))
-		for _, oursEntry := range region.ours {
-			line, resolvedOK := resolveScalarEntry(
-				oursEntry.key,
-				oursEntry.entry,
-				region.theirs[oursEntry.key],
-				newerTheirs,
-			)
-			if !resolvedOK {
-				return false, nil
-			}
-			resolved = append(resolved, line)
+		resolved, resolvedOK := resolveScalarRegion(region, newerTheirs, loadBase, emitted)
+		if !resolvedOK {
+			return false, nil
 		}
 		replacements = append(replacements, resolved)
 	}
