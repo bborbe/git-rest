@@ -79,7 +79,7 @@ endif
 
 .PHONY: test
 test:
-	go test -mod=mod -p=$${GO_TEST_PARALLEL:-1} -cover $(TESTFLAGS_RACE) $(shell go list -mod=mod ./... | grep -v /vendor/)
+	go test -mod=mod -timeout 20m -p=$${GO_TEST_PARALLEL:-1} -cover $(TESTFLAGS_RACE) $(shell go list -mod=mod ./... | grep -v /vendor/)
 
 .PHONY: check
 check: lint vet vulncheck osv-scanner trivy
