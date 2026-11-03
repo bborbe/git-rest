@@ -8,6 +8,9 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 * MINOR version when you add functionality in a backwards-compatible manner, and
 * PATCH version when you make backwards-compatible bug fixes.
 
+## Unreleased
+
+- fix: keep the rootless BuildKit build container startable. `allowPrivilegeEscalation: false` and `capabilities.drop: ["ALL"]` on that container stop `rootlesskit` from installing its uid/gid map (`newuidmap: operation not permitted`), so every cluster build died at startup; both are removed and the reason is recorded in `hack/build-job.yaml`. Also hardened the clone path: the token is scoped to its origin host, deleted on the error path as well as the success path, and refused over a non-https URL; `REF` can no longer be read as a git option; and `__CONTEXT__` is listed in the template's token table
 ## v0.40.1
 
 - fix: Resolve a frontmatter conflict region whose sides add different scalar keys to the union of both sides, when the merge base is readable, its frontmatter parses, and it carries neither key. A one-sided key is now kept only as a base-confirmed add: when the base carries it (a delete that raced an edit) or the base stage cannot be read, the region still quarantines with `git_rest_resolver_failures_total{category="no_frontmatter"}` and the deleted key is never resurrected. A key that would be emitted in two separate conflict regions also quarantines the whole file, because a repeated mapping key makes the frontmatter unreadable. Counters still take the greater value and every other shared scalar still takes the newer merge parent's value. Supersedes spec 016's one-sided-key exclusion for the base-confirmed add case only.

@@ -4,7 +4,8 @@
 # Called from `make build BUILD_TARGET=<sun|nukedev|nukeprod|kubectl-context>`
 # (Makefile.docker) with
 # BUILD_TARGET, NAMESPACE, REPO_URL, REF, TAG, DOCKERFILE, IMAGE, PUSH,
-# PUSH_SECRET and TIMEOUT in the environment. Not intended to be run by hand.
+# PUSH_SECRET, TIMEOUT and the optional SUBDIR in the environment. Not intended
+# to be run by hand.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -26,8 +27,31 @@ require() {
 	[ -n "${!name:-}" ] || die "${name} is required; pass it on the make command line"
 }
 
+# The build context is the repository root by default. A repo whose image lives in
+# a subdirectory (website: blog/, gateway/) sets SUBDIR so BuildKit's context
+# becomes /src/<subdir>; without it `COPY package.json` in a nested Dockerfile
+# resolves against the repo root and fails. Defined here, not above, because it
+# calls die().
+#
+# SUBDIR moves the CONTEXT only. DOCKERFILE stays relative to the repository
+# root, so a nested Dockerfile is passed as `blog/Dockerfile` even with
+# SUBDIR=blog — the default `Dockerfile` means /src/Dockerfile, which is the
+# repo root, not the subdirectory.
+SUBDIR="${SUBDIR:-}"
+if [ -n "${SUBDIR}" ]; then
+	printf '%s' "${SUBDIR}" | grep -qE '^[A-Za-z0-9._/-]+$' ||
+		die "SUBDIR '${SUBDIR}' contains characters outside [A-Za-z0-9._/-]"
+	case "/${SUBDIR}/" in
+	*/../*) die "SUBDIR '${SUBDIR}' must not contain '..'" ;;
+	esac
+	BUILD_CONTEXT="/src/${SUBDIR}"
+else
+	BUILD_CONTEXT="/src"
+fi
+
 # BUILD_TARGET is resolved to a kubeconfig file and context by cluster-alias.sh,
 # which also defines the kc() helper every kubectl call goes through.
+# shellcheck disable=SC1091  # cluster-alias.sh is linted as its own input
 source "${SCRIPT_DIR}/cluster-alias.sh"
 
 # The equivalent invocation for messages the operator has to retype.
@@ -46,6 +70,12 @@ require PUSH_SECRET
 # outside the whitelist is rejected, never escaped.
 printf '%s' "${REF}" | grep -qE '^[A-Za-z0-9._/-]+$' ||
 	die "REF '${REF}' contains characters outside [A-Za-z0-9._/-]"
+# A leading dash would be parsed as a git option rather than a refspec. The
+# template passes `--` before the refspec as well; this rejects it outright so
+# the failure is a clear message instead of an argument-parsing surprise.
+case "${REF}" in
+-*) die "REF '${REF}' must not start with '-'" ;;
+esac
 printf '%s' "${TAG}" | grep -qE '^[A-Za-z0-9._-]+$' ||
 	die "TAG '${TAG}' contains characters outside [A-Za-z0-9._-]"
 printf '%s' "${IMAGE}" | grep -qE '^[A-Za-z0-9._/:-]+$' ||
@@ -71,7 +101,7 @@ esac
 # passes the whitelist on its first line and its remaining lines are injected
 # verbatim by sed into the YAML and the embedded `sh -c` script. Reject embedded
 # newlines for every value before rendering.
-for _var in REF TAG IMAGE REPO_URL DOCKERFILE PUSH_SECRET DOCKER_REGISTRY TIMEOUT NAMESPACE; do
+for _var in REF TAG IMAGE REPO_URL DOCKERFILE SUBDIR PUSH_SECRET DOCKER_REGISTRY TIMEOUT NAMESPACE; do
 	case "${!_var}" in
 	*$'\n'*) die "${_var} contains a newline, which is not allowed" ;;
 	esac
@@ -117,6 +147,7 @@ sed \
 	-e "s|__REF__|${REF}|g" \
 	-e "s|__TAG__|${TAG}|g" \
 	-e "s|__DOCKERFILE__|${DOCKERFILE}|g" \
+	-e "s|__CONTEXT__|${BUILD_CONTEXT}|g" \
 	-e "s|__IMAGE__|${IMAGE}|g" \
 	-e "s|__PUSH__|${PUSH}|g" \
 	-e "s|__PUSH_SECRET__|${PUSH_SECRET}|g" \
