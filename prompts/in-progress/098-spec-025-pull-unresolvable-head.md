@@ -1,7 +1,8 @@
 ---
-status: draft
+status: approved
 spec: [025-bug-empty-clone-never-recloned]
 created: "2026-11-03T15:46:47Z"
+queued: "2026-11-03T16:10:56Z"
 branch: dark-factory/bug-empty-clone-never-recloned
 ---
 

@@ -264,6 +264,176 @@ var _ = Describe("RecoverUntracked", func() {
 	})
 })
 
+var _ = Describe("CloneIfNeeded", func() {
+	var ctx context.Context
+
+	BeforeEach(func() {
+		ctx = context.Background()
+	})
+
+	gitRun := func(dir string, args ...string) {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		out, err := cmd.CombinedOutput()
+		Expect(err).NotTo(HaveOccurred(), string(out))
+	}
+
+	// seedRemote creates a bare remote whose default branch is main and whose
+	// HEAD carries one commit and one tracked file, remote.md.
+	seedRemote := func() string {
+		remoteDir := GinkgoT().TempDir()
+		gitRun(remoteDir, "init", "--bare", "--initial-branch=main")
+
+		seedDir := GinkgoT().TempDir()
+		gitRun(seedDir, "init", "--initial-branch=main")
+		gitRun(seedDir, "config", "user.email", "test@example.com")
+		gitRun(seedDir, "config", "user.name", "Test")
+		Expect(os.WriteFile(
+			filepath.Join(seedDir, "remote.md"), []byte("remote"), 0o600,
+		)).To(Succeed())
+		gitRun(seedDir, "add", "remote.md")
+		gitRun(seedDir, "commit", "-m", "seed")
+		gitRun(seedDir, "remote", "add", "origin", remoteDir)
+		gitRun(seedDir, "push", "origin", "main")
+		gitRun(remoteDir, "symbolic-ref", "HEAD", "refs/heads/main")
+		return remoteDir
+	}
+
+	captureLogs := func() (*bytes.Buffer, func()) {
+		buf := &bytes.Buffer{}
+		prev := slog.Default()
+		slog.SetDefault(slog.New(slog.NewTextHandler(
+			buf, &slog.HandlerOptions{Level: slog.LevelInfo},
+		)))
+		return buf, func() { slog.SetDefault(prev) }
+	}
+
+	It("clones a HEAD-less repository and resolves the default branch", func() {
+		remoteDir := seedRemote()
+		repoDir := GinkgoT().TempDir()
+		gitRun(repoDir, "init", "--initial-branch=main")
+
+		buf, restore := captureLogs()
+		defer restore()
+
+		Expect(main.CloneIfNeeded(ctx, repoDir, git.RemoteURL(remoteDir), "")).To(Succeed())
+
+		out, err := exec.Command("git", "-C", repoDir, "rev-parse", "--abbrev-ref", "HEAD").Output()
+		Expect(err).NotTo(HaveOccurred())
+		Expect(strings.TrimSpace(string(out))).To(Equal("main"))
+		Expect(buf.String()).To(ContainSubstring("re-cloned repository with unresolvable HEAD"))
+		Expect(buf.String()).To(ContainSubstring(remoteDir))
+	})
+
+	It("returns an error naming the remote when the clone fails", func() {
+		repoDir := GinkgoT().TempDir()
+		gitRun(repoDir, "init", "--initial-branch=main")
+		missing := filepath.Join(GinkgoT().TempDir(), "missing.git")
+
+		err := main.CloneIfNeeded(ctx, repoDir, git.RemoteURL(missing), "")
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring(missing))
+	})
+
+	It("leaves a healthy repository untouched", func() {
+		remoteDir := seedRemote()
+		repoDir := GinkgoT().TempDir()
+		gitRun(repoDir, "init", "--initial-branch=main")
+		Expect(main.CloneIfNeeded(ctx, repoDir, git.RemoteURL(remoteDir), "")).To(Succeed())
+
+		before, err := exec.Command("git", "-C", repoDir, "rev-parse", "HEAD").Output()
+		Expect(err).NotTo(HaveOccurred())
+
+		buf, restore := captureLogs()
+		defer restore()
+
+		Expect(main.CloneIfNeeded(ctx, repoDir, git.RemoteURL(remoteDir), "")).To(Succeed())
+
+		after, err := exec.Command("git", "-C", repoDir, "rev-parse", "HEAD").Output()
+		Expect(err).NotTo(HaveOccurred())
+		Expect(after).To(Equal(before))
+
+		status, err := exec.Command("git", "-C", repoDir, "status", "--short").Output()
+		Expect(err).NotTo(HaveOccurred())
+		Expect(strings.TrimSpace(string(status))).To(BeEmpty())
+		Expect(buf.String()).NotTo(ContainSubstring("re-cloned repository"))
+	})
+
+	It("names only local-only paths before discarding them", func() {
+		remoteDir := seedRemote()
+		repoDir := GinkgoT().TempDir()
+		gitRun(repoDir, "init", "--initial-branch=main")
+		Expect(os.WriteFile(
+			filepath.Join(repoDir, "remote.md"), []byte("remote"), 0o600,
+		)).To(Succeed())
+		Expect(os.WriteFile(
+			filepath.Join(repoDir, "local-only.md"), []byte("local"), 0o600,
+		)).To(Succeed())
+
+		buf, restore := captureLogs()
+		defer restore()
+
+		Expect(main.CloneIfNeeded(ctx, repoDir, git.RemoteURL(remoteDir), "")).To(Succeed())
+
+		logStr := buf.String()
+		Expect(logStr).To(MatchRegexp(`level=WARN[^\n]*local-only\.md`))
+		Expect(logStr).NotTo(MatchRegexp(`level=WARN[^\n]*remote\.md`))
+		// DB4: the successful re-clone reports how many paths it discarded.
+		Expect(logStr).To(MatchRegexp(`level=INFO[^\n]*discarded_paths=1`))
+
+		_, statErr := os.Stat(filepath.Join(repoDir, "local-only.md"))
+		Expect(os.IsNotExist(statErr)).To(BeTrue())
+
+		content, err := os.ReadFile(filepath.Join(repoDir, "remote.md"))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(string(content)).To(Equal("remote"))
+	})
+
+	It("unlinks a symlink instead of following it out of the repository", func() {
+		remoteDir := seedRemote()
+		repoDir := GinkgoT().TempDir()
+		gitRun(repoDir, "init", "--initial-branch=main")
+
+		outside := GinkgoT().TempDir()
+		outsideFile := filepath.Join(outside, "keep.md")
+		Expect(os.WriteFile(outsideFile, []byte("outside"), 0o600)).To(Succeed())
+		Expect(os.Symlink(outsideFile, filepath.Join(repoDir, "link.md"))).To(Succeed())
+
+		buf, restore := captureLogs()
+		defer restore()
+
+		Expect(main.CloneIfNeeded(ctx, repoDir, git.RemoteURL(remoteDir), "")).To(Succeed())
+
+		// The symlink is gone, the file it pointed at is untouched.
+		_, linkErr := os.Lstat(filepath.Join(repoDir, "link.md"))
+		Expect(os.IsNotExist(linkErr)).To(BeTrue())
+		content, err := os.ReadFile(outsideFile)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(string(content)).To(Equal("outside"))
+		Expect(buf.String()).To(MatchRegexp(`level=WARN[^\n]*link\.md`))
+	})
+
+	It("clones over a non-empty directory that has no .git", func() {
+		remoteDir := seedRemote()
+		repoDir := GinkgoT().TempDir()
+		Expect(os.WriteFile(
+			filepath.Join(repoDir, "stray.md"), []byte("stray"), 0o600,
+		)).To(Succeed())
+
+		buf, restore := captureLogs()
+		defer restore()
+
+		Expect(main.CloneIfNeeded(ctx, repoDir, git.RemoteURL(remoteDir), "")).To(Succeed())
+
+		out, err := exec.Command("git", "-C", repoDir, "rev-parse", "--abbrev-ref", "HEAD").Output()
+		Expect(err).NotTo(HaveOccurred())
+		Expect(strings.TrimSpace(string(out))).To(Equal("main"))
+		_, statErr := os.Stat(filepath.Join(repoDir, "stray.md"))
+		Expect(os.IsNotExist(statErr)).To(BeTrue())
+		Expect(buf.String()).To(MatchRegexp(`level=WARN[^\n]*stray\.md`))
+	})
+})
+
 var _ = Describe("SyncOnStartup", func() {
 	var (
 		ctx     context.Context

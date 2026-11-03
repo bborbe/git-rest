@@ -1,7 +1,13 @@
 ---
-status: draft
+status: completed
 spec: [025-bug-empty-clone-never-recloned]
+summary: Startup cloning now treats a repository whose .git cannot resolve HEAD (or a non-empty directory without .git) as not cloned, builds the replacement clone in a scratch directory, logs local-only paths before discarding them, and leaves healthy repositories untouched.
+execution_id: git-rest-empty-clone-recovery-exec-097-spec-025-reclone-headless-repo
+dark-factory-version: v0.198.7
 created: "2026-11-03T15:46:47Z"
+queued: "2026-11-03T16:10:56Z"
+started: "2026-11-03T16:10:58Z"
+completed: "2026-11-03T16:15:08Z"
 branch: dark-factory/bug-empty-clone-never-recloned
 ---
 
