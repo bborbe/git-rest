@@ -1,7 +1,7 @@
 ---
-status: draft
-kind: bug
-created: 2026-11-03
+status: approved
+approved: "2026-11-03T15:06:25Z"
+branch: dark-factory/bug-empty-clone-never-recloned
 ---
 
 ## Summary
