@@ -8,6 +8,10 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 * MINOR version when you add functionality in a backwards-compatible manner, and
 * PATCH version when you make backwards-compatible bug fixes.
 
+## Unreleased
+
+- fix: Resolve a frontmatter conflict region whose sides add different scalar keys to the union of both sides, when the merge base is readable, its frontmatter parses, and it carries neither key. A one-sided key is now kept only as a base-confirmed add: when the base carries it (a delete that raced an edit) or the base stage cannot be read, the region still quarantines with `git_rest_resolver_failures_total{category="no_frontmatter"}` and the deleted key is never resurrected. A key that would be emitted in two separate conflict regions also quarantines the whole file, because a repeated mapping key makes the frontmatter unreadable. Counters still take the greater value and every other shared scalar still takes the newer merge parent's value. Supersedes spec 016's one-sided-key exclusion for the base-confirmed add case only.
+
 ## v0.40.0
 
 - feat: build the image on a Kubernetes cluster with `make build BUILD_TARGET=<cluster> REF=<sha> VERSION=<tag>`, keeping the default local arm unchanged. `hack/build-cluster.sh`, `hack/cluster-alias.sh` and `hack/build-job.yaml` are vendored from `bborbe/agent-task-executor`; `check-version-tag` and `check-go-mod` stay local-arm prerequisites, since they describe the local HEAD rather than the commit the cluster builds

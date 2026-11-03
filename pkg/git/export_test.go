@@ -6,6 +6,7 @@ package git
 
 import (
 	"context"
+	stderrors "errors"
 	"time"
 
 	libtime "github.com/bborbe/time"
@@ -111,5 +112,43 @@ func NewYAMLMergeResolverWithSideTimes(
 		sideTimes: func(context.Context) (int64, int64, error) {
 			return ours, theirs, nil
 		},
+		baseContent: gitBaseContent(repoPath),
 	}
+}
+
+// NewYAMLMergeResolverWithBase exposes a resolver whose merge-base content is
+// stubbed, so external tests can drive the union rule without a real index
+// stage 1. baseOK=false makes the base read fail. The merge-parent timestamps
+// are stubbed to fail as well, so a test that accidentally needs them declines
+// instead of silently picking a side. Test builds only.
+func NewYAMLMergeResolverWithBase(
+	repoPath string,
+	m metrics.Metrics,
+	base string,
+	baseOK bool,
+) ConflictResolver {
+	baseContent := func(context.Context, string) (string, error) {
+		if !baseOK {
+			return "", stderrors.New("stubbed merge base unavailable")
+		}
+		return base, nil
+	}
+	return &yamlMergeResolver{
+		repoPath:    repoPath,
+		metrics:     m,
+		baseContent: baseContent,
+		sideTimes: func(context.Context) (int64, int64, error) {
+			return 0, 0, stderrors.New("stubbed merge-parent timestamps unavailable")
+		},
+	}
+}
+
+// YAMLBaseKeySetForTest exposes the merge-base key reader to the external test
+// package. Test builds only.
+func YAMLBaseKeySetForTest(
+	ctx context.Context, repoPath, path string,
+) (map[string]struct{}, bool) {
+	r := &yamlMergeResolver{repoPath: repoPath}
+	r.baseContent = gitBaseContent(repoPath)
+	return r.baseKeySet(ctx, path)
 }
