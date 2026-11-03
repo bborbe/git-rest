@@ -8,6 +8,11 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 * MINOR version when you add functionality in a backwards-compatible manner, and
 * PATCH version when you make backwards-compatible bug fixes.
 
+## Unreleased
+
+- fix: Return `ErrRepoUnrecoverable` from `Pull` when the repository HEAD cannot be resolved, instead of a misleading `no upstream configured` error
+- fix: Re-clone a repository whose `.git` cannot resolve HEAD at startup instead of treating it as already cloned, naming every local-only path discarded first, so a partially failed clone no longer leaves the pod serving an empty working tree forever
+
 ## v0.40.2
 
 - fix: keep the rootless BuildKit build container startable. `allowPrivilegeEscalation: false` and `capabilities.drop: ["ALL"]` on that container stop `rootlesskit` from installing its uid/gid map (`newuidmap: operation not permitted`), so every cluster build died at startup; both are removed and the reason is recorded in `hack/build-job.yaml`. Also hardened the clone path: the token is scoped to its origin host, deleted on the error path as well as the success path, and refused over a non-https URL; `REF` can no longer be read as a git option; and `__CONTEXT__` is listed in the template's token table

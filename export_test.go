@@ -31,6 +31,21 @@ var SyncOnStartup = syncOnStartup
 // ResolveGitSSHCommand is exported for testing via the main_test package.
 var ResolveGitSSHCommand = resolveGitSSHCommand
 
+// CloneIfNeeded is exported for testing via the main_test package.
+func CloneIfNeeded(
+	ctx context.Context,
+	repo string,
+	remoteURL git.RemoteURL,
+	sshKey git.SSHKeyPath,
+) error {
+	a := &application{
+		Repo:         repo,
+		GitRemoteURL: remoteURL,
+		GitSSHKey:    sshKey,
+	}
+	return a.cloneIfNeeded(ctx)
+}
+
 // NewRouter is exported for testing via the main_test package.
 var NewRouter = newRouter
 

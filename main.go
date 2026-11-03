@@ -339,13 +339,28 @@ func (a *application) initIfNeeded(ctx context.Context) error {
 	return nil
 }
 
+// cloneIfNeeded ensures a repository exists at a.Repo before the puller runs.
+//
+// A directory whose .git exists but cannot resolve HEAD is not a usable
+// repository: git reports "No commits yet", every pull fails at @{u}, and the
+// state lives on the volume, so no restart changes anything. Such a directory
+// is treated as absent and re-cloned from a.GitRemoteURL.
 func (a *application) cloneIfNeeded(ctx context.Context) error {
 	if a.GitRemoteURL == "" {
 		return nil
 	}
 	gitDir := filepath.Join(a.Repo, ".git")
 	if _, err := os.Stat(gitDir); err == nil {
-		return nil
+		if headResolvable(ctx, a.Repo) {
+			return nil
+		}
+		return a.recloneHeadless(ctx)
+	}
+	// A non-empty directory without .git is the residue of a swap interrupted
+	// after .git was removed. git clone refuses a non-empty destination, so it
+	// takes the same scratch-clone-then-swap path as the HEAD-less case.
+	if repoHasEntries(a.Repo) {
+		return a.recloneHeadless(ctx)
 	}
 	if err := os.MkdirAll(a.Repo, 0o750); err != nil { //nolint:gosec
 		return errors.Wrapf(ctx, err, "create repo directory %s", a.Repo)
@@ -360,6 +375,195 @@ func (a *application) cloneIfNeeded(ctx context.Context) error {
 	)
 	if err := tmpGit.Clone(ctx, a.GitRemoteURL); err != nil {
 		return errors.Wrapf(ctx, err, "clone %s", a.GitRemoteURL)
+	}
+	return nil
+}
+
+// repoHasEntries reports whether repoDir exists and holds at least one entry.
+func repoHasEntries(repoDir string) bool {
+	entries, err := os.ReadDir(repoDir)
+	if err != nil {
+		return false
+	}
+	return len(entries) > 0
+}
+
+// headResolvable reports whether repoDir holds a repository whose HEAD points
+// at a commit. An unborn HEAD — a freshly `git init`ed directory, or the
+// residue of a clone that died before any ref arrived — reports false.
+func headResolvable(ctx context.Context, repoDir string) bool {
+	_, err := runGitCmd(ctx, repoDir, "", "rev-parse", "--verify", "--quiet", "HEAD")
+	return err == nil
+}
+
+// recloneHeadless replaces a repository directory whose .git cannot resolve
+// HEAD with a fresh clone of a.GitRemoteURL.
+//
+// The clone is built inside a scratch directory under a.Repo first, so a failed
+// clone discards nothing: the remote being unreachable, or the disk filling up,
+// leaves the existing residue exactly where it was. Only after the clone
+// succeeds are the local-only paths logged and the residue removed.
+func (a *application) recloneHeadless(ctx context.Context) error {
+	localPaths := repoPathsExceptGit(a.Repo)
+
+	tmpDir, err := os.MkdirTemp(a.Repo, ".git-rest-reclone-")
+	if err != nil {
+		return errors.Wrapf(ctx, err, "create re-clone directory in %s", a.Repo)
+	}
+	defer func() {
+		if rmErr := os.RemoveAll(tmpDir); rmErr != nil {
+			slog.WarnContext(
+				ctx,
+				"remove re-clone directory failed",
+				"path",
+				tmpDir,
+				"error",
+				rmErr,
+			)
+		}
+	}()
+
+	m := metrics.NewMetrics()
+	tmpGit := factory.CreateGitClient(
+		tmpDir,
+		m,
+		libtime.NewCurrentDateTime(),
+		a.GitSSHKey,
+		a.selectResolver(m),
+	)
+	if err := tmpGit.Clone(ctx, a.GitRemoteURL); err != nil {
+		return errors.Wrapf(ctx, err, "clone %s", a.GitRemoteURL)
+	}
+
+	out, err := runGitCmd(ctx, tmpDir, "", "ls-tree", "-r", "--name-only", "HEAD")
+	if err != nil {
+		return errors.Wrapf(ctx, err, "list remote paths for %s", a.GitRemoteURL)
+	}
+	remotePaths := parsePathSet(out)
+
+	discarded := 0
+	for _, path := range localPaths {
+		if _, ok := remotePaths[path]; ok {
+			continue
+		}
+		discarded++
+		slog.WarnContext(
+			ctx,
+			"git-rest: discarding local-only path before re-clone",
+			"path", path,
+			"remote", string(a.GitRemoteURL),
+		)
+	}
+
+	if err := removeRepoEntries(ctx, a.Repo, filepath.Base(tmpDir)); err != nil {
+		return err
+	}
+	if err := moveEntriesInto(ctx, tmpDir, a.Repo); err != nil {
+		return err
+	}
+
+	slog.InfoContext(
+		ctx,
+		"git-rest: re-cloned repository with unresolvable HEAD",
+		"remote", string(a.GitRemoteURL),
+		"discarded_paths", discarded,
+	)
+	return nil
+}
+
+// repoPathsExceptGit returns the slash-separated relative paths of every
+// non-directory entry under repoDir, excluding the top-level .git directory.
+// Symlinks are reported as paths and never followed.
+func repoPathsExceptGit(repoDir string) []string {
+	var paths []string
+	_ = filepath.WalkDir(repoDir, func(path string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return nil
+		}
+		if path == repoDir {
+			return nil
+		}
+		rel, relErr := filepath.Rel(repoDir, path)
+		if relErr != nil {
+			return nil
+		}
+		if d.IsDir() {
+			if rel == ".git" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		paths = append(paths, filepath.ToSlash(rel))
+		return nil
+	})
+	return paths
+}
+
+// parsePathSet turns newline-separated git path output into a set of
+// slash-separated paths.
+func parsePathSet(output string) map[string]struct{} {
+	set := make(map[string]struct{})
+	for _, line := range strings.Split(output, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		set[filepath.ToSlash(line)] = struct{}{}
+	}
+	return set
+}
+
+// removeRepoEntries deletes every entry in repoDir except keepName. Removal is
+// confined to repoDir and never follows a symlink: os.RemoveAll unlinks a
+// symlinked entry rather than traversing it.
+func removeRepoEntries(ctx context.Context, repoDir, keepName string) error {
+	entries, err := os.ReadDir(repoDir)
+	if err != nil {
+		return errors.Wrapf(ctx, err, "read %s", repoDir)
+	}
+	for _, entry := range entries {
+		if entry.Name() == keepName {
+			continue
+		}
+		target := filepath.Join(repoDir, entry.Name())
+		if err := os.RemoveAll(target); err != nil {
+			return errors.Wrapf(ctx, err, "remove %s", target)
+		}
+	}
+	return nil
+}
+
+// moveEntriesInto moves every entry of srcDir into dstDir. The .git directory is
+// moved last, so an interrupted swap leaves dstDir without a resolvable HEAD and
+// the next start re-clones instead of serving a partial working tree.
+func moveEntriesInto(ctx context.Context, srcDir, dstDir string) error {
+	entries, err := os.ReadDir(srcDir)
+	if err != nil {
+		return errors.Wrapf(ctx, err, "read %s", srcDir)
+	}
+	move := func(entry os.DirEntry) error {
+		from := filepath.Join(srcDir, entry.Name())
+		to := filepath.Join(dstDir, entry.Name())
+		if err := os.Rename(from, to); err != nil {
+			return errors.Wrapf(ctx, err, "move %s to %s", from, to)
+		}
+		return nil
+	}
+	for _, entry := range entries {
+		if entry.Name() == ".git" {
+			continue
+		}
+		if err := move(entry); err != nil {
+			return err
+		}
+	}
+	for _, entry := range entries {
+		if entry.Name() != ".git" {
+			continue
+		}
+		if err := move(entry); err != nil {
+			return err
+		}
 	}
 	return nil
 }
