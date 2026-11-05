@@ -1270,7 +1270,7 @@ var _ = Describe("YAMLMergeResolver", func() {
 
 		// A key added by ours in a clean hunk outside every region and added
 		// again by theirs inside a region is the shape the region-spanning guard
-		// alone cannot see: spliceScalarRegions copies the outside line verbatim,
+		// alone cannot see: spliceConflictRegions copies the outside line verbatim,
 		// so seeding the emitted set with the outside keys is what catches it.
 		It("AC: declines the file when a region re-emits a key already outside it", func() {
 			base := "---\ncreated_date: \"2026-11-02\"\nphase: planning\n" +
@@ -1795,6 +1795,116 @@ var _ = Describe("YAMLMergeResolver", func() {
 
 			Expect(fakeMetrics.IncBodyMergedCallCount()).To(Equal(0))
 			Expect(fakeMetrics.IncResolverFailureArgsForCall(0)).To(Equal("no_frontmatter"))
+		})
+	})
+
+	Describe("Mixed frontmatter and body conflict regions", func() {
+		It("resolves a counter region in the frontmatter and a prose region in the body", func() {
+			conflicted := "---\n" +
+				"title: probe\n" +
+				"<<<<<<< HEAD\n" +
+				"trigger_count: 8\n" +
+				"=======\n" +
+				"trigger_count: 1\n" +
+				">>>>>>> theirs\n" +
+				"status: in_progress\n" +
+				"---\n" +
+				"\n" +
+				"# Heading\n" +
+				"\n" +
+				"<<<<<<< HEAD\n" +
+				"ours body\n" +
+				"=======\n" +
+				"theirs body\n" +
+				">>>>>>> theirs\n" +
+				"\n" +
+				"tail\n"
+
+			workDir, rel, cleanup := setupHandWrittenConflict("note.md", conflicted)
+			defer cleanup()
+
+			r := git.NewYAMLMergeResolver(workDir, fakeMetrics)
+			Expect(r.Resolve(ctx, []string{rel})).To(Succeed())
+
+			raw, err := os.ReadFile(filepath.Join(workDir, rel))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(string(raw)).To(Equal(
+				"---\ntitle: probe\ntrigger_count: 8\nstatus: in_progress\n---\n\n# Heading\n\n" +
+					"ours body\n\ntheirs body\n\ntail\n",
+			))
+
+			diffCmd := exec.Command("git", "diff", "--name-only")
+			diffCmd.Dir = workDir
+			diffOut, err := diffCmd.CombinedOutput()
+			Expect(err).NotTo(HaveOccurred())
+			Expect(strings.TrimSpace(string(diffOut))).To(BeEmpty())
+		})
+
+		It("increments both counters once and no failure counter", func() {
+			conflicted := "---\n" +
+				"title: probe\n" +
+				"<<<<<<< HEAD\n" +
+				"trigger_count: 8\n" +
+				"=======\n" +
+				"trigger_count: 1\n" +
+				">>>>>>> theirs\n" +
+				"status: in_progress\n" +
+				"---\n" +
+				"\n" +
+				"# Heading\n" +
+				"\n" +
+				"<<<<<<< HEAD\n" +
+				"ours body\n" +
+				"=======\n" +
+				"theirs body\n" +
+				">>>>>>> theirs\n" +
+				"\n" +
+				"tail\n"
+
+			workDir, rel, cleanup := setupHandWrittenConflict("note.md", conflicted)
+			defer cleanup()
+
+			r := git.NewYAMLMergeResolver(workDir, fakeMetrics)
+			Expect(r.Resolve(ctx, []string{rel})).To(Succeed())
+
+			Expect(fakeMetrics.IncAutoresolvedCallCount()).To(Equal(1))
+			Expect(fakeMetrics.IncBodyMergedCallCount()).To(Equal(1))
+			Expect(fakeMetrics.IncResolverFailureCallCount()).To(Equal(0))
+		})
+
+		It("aborts the whole file when the frontmatter half declines", func() {
+			conflicted := "---\n" +
+				"title: probe\n" +
+				"<<<<<<< HEAD\n" +
+				"assignee: alice\n" +
+				"=======\n" +
+				"assignee: bob\n" +
+				">>>>>>> theirs\n" +
+				"status: in_progress\n" +
+				"---\n" +
+				"\n" +
+				"<<<<<<< HEAD\n" +
+				"ours body\n" +
+				"=======\n" +
+				"theirs body\n" +
+				">>>>>>> theirs\n"
+
+			workDir, rel, cleanup := setupHandWrittenConflict("note.md", conflicted)
+			defer cleanup()
+
+			abs := filepath.Join(workDir, rel)
+			before, err := os.ReadFile(abs)
+			Expect(err).NotTo(HaveOccurred())
+
+			r := git.NewYAMLMergeResolver(workDir, fakeMetrics)
+			err = r.Resolve(ctx, []string{rel})
+			Expect(stderrors.Is(err, git.ErrConflictResolutionFailed)).To(BeTrue())
+			Expect(fakeMetrics.IncResolverFailureArgsForCall(0)).To(Equal("no_frontmatter"))
+			Expect(fakeMetrics.IncBodyMergedCallCount()).To(Equal(0))
+
+			after, err := os.ReadFile(abs)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(after).To(Equal(before))
 		})
 	})
 

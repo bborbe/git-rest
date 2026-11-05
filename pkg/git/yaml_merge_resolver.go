@@ -95,7 +95,7 @@ func (r *yamlMergeResolver) resolveOne(ctx context.Context, path string) error {
 
 	ours, theirs, ok := splitConflictSides(string(raw))
 	if !ok {
-		if applied, ruleErr := r.applyFallbackRules(ctx, path, abs, string(raw)); applied {
+		if applied, ruleErr := r.applyPartitionedRules(ctx, path, abs, string(raw)); applied {
 			return ruleErr
 		}
 		r.metrics.IncResolverFailure(resolverFailureNoFront)
@@ -106,7 +106,7 @@ func (r *yamlMergeResolver) resolveOne(ctx context.Context, path string) error {
 	oursFM, oursBody, oursOK := splitFrontmatter(ours)
 	theirsFM, theirsBody, theirsOK := splitFrontmatter(theirs)
 	if !oursOK || !theirsOK {
-		if applied, ruleErr := r.applyFallbackRules(ctx, path, abs, string(raw)); applied {
+		if applied, ruleErr := r.applyPartitionedRules(ctx, path, abs, string(raw)); applied {
 			return ruleErr
 		}
 		r.metrics.IncResolverFailure(resolverFailureNoFront)
@@ -615,94 +615,35 @@ type scalarRegion struct {
 	theirs []scalarKeyEntry // theirs-side order
 }
 
-// bodyRegion is one eligible body-only conflict region with both sides extracted.
-type bodyRegion struct {
-	conflictRegion
-	oursBody   string
-	theirsBody string
-}
-
-// planBodyRegions decides whether the whole file is eligible for the body rule.
-// Every conflict region must lie entirely below the closing frontmatter delimiter,
-// and regions must not overlap. It inspects shape only: no I/O.
-func planBodyRegions(lines []string) ([]bodyRegion, bool) {
+// planConflictPartitions splits every conflict region in lines into the ones
+// that lie entirely inside the frontmatter and the ones that lie entirely in
+// the body, keeping file order within each slice. A region that straddles the
+// closing delimiter makes the whole call return ok=false: its ours-side mixes a
+// frontmatter key with body text and no rule can split it. It inspects shape
+// only: no I/O, no timestamps.
+func planConflictPartitions(lines []string) (frontmatter, body []conflictRegion, ok bool) {
 	closeIndex, ok := frontmatterBounds(lines)
 	if !ok {
-		return nil, false
+		return nil, nil, false
 	}
 	conflicts, ok := enumerateConflictRegions(lines)
 	if !ok {
-		return nil, false
+		return nil, nil, false
 	}
 
-	regions := make([]bodyRegion, 0, len(conflicts))
-	previousEnd := 0
+	frontmatter = make([]conflictRegion, 0, len(conflicts))
+	body = make([]conflictRegion, 0, len(conflicts))
 	for _, region := range conflicts {
-		if !regionInsideBody(region, closeIndex, previousEnd) {
-			return nil, false
+		switch {
+		case region.endLine < closeIndex:
+			frontmatter = append(frontmatter, region)
+		case region.startLine > closeIndex:
+			body = append(body, region)
+		default:
+			return nil, nil, false
 		}
-		regions = append(regions, bodyRegion{
-			conflictRegion: region,
-			oursBody:       strings.Join(region.oursLines, "\n"),
-			theirsBody:     strings.Join(region.theirsLines, "\n"),
-		})
-		previousEnd = region.endLine
 	}
-
-	if len(regions) == 0 {
-		return nil, false
-	}
-	return regions, true
-}
-
-// regionInsideBody reports whether region lies strictly below the closing
-// frontmatter delimiter and does not overlap the previous region.
-func regionInsideBody(region conflictRegion, closeIndex, previousEnd int) bool {
-	return region.startLine > closeIndex && region.startLine > previousEnd
-}
-
-// planScalarRegions decides whether the whole file is eligible for the
-// scalar-frontmatter rule. It inspects shape only: no timestamps, no I/O.
-func planScalarRegions(lines []string) ([]scalarRegion, bool) {
-	closeIndex, ok := frontmatterBounds(lines)
-	if !ok {
-		return nil, false
-	}
-	conflicts, ok := enumerateConflictRegions(lines)
-	if !ok {
-		return nil, false
-	}
-
-	regions := make([]scalarRegion, 0, len(conflicts))
-	previousEnd := 0
-	for _, region := range conflicts {
-		if !regionInsideFrontmatter(region, closeIndex, previousEnd) {
-			return nil, false
-		}
-		ours, theirs, parsed := parseScalarSide(region.oursLines, region.theirsLines)
-		if !parsed {
-			return nil, false
-		}
-		regions = append(regions, scalarRegion{
-			conflictRegion: region,
-			ours:           ours,
-			theirs:         theirs,
-		})
-		previousEnd = region.endLine
-	}
-
-	if len(regions) == 0 {
-		return nil, false
-	}
-	return regions, true
-}
-
-// regionInsideFrontmatter reports whether region lies strictly between the
-// opening and closing delimiters and does not overlap the previous region.
-func regionInsideFrontmatter(region conflictRegion, closeIndex, previousEnd int) bool {
-	return region.startLine > 0 &&
-		region.endLine < closeIndex &&
-		region.startLine > previousEnd
+	return frontmatter, body, true
 }
 
 // parseScalarSide parses both sides of one region and enforces the shape
@@ -811,25 +752,6 @@ func resolveScalarEntry(
 	return ours.line, true
 }
 
-// spliceScalarRegions returns the original file with each conflict region
-// replaced by its resolved lines. Every line outside a region is copied
-// verbatim, so the closing "---" and the body are byte-identical.
-func spliceScalarRegions(
-	lines []string,
-	regions []scalarRegion,
-	replacements [][]string,
-) string {
-	out := make([]string, 0, len(lines))
-	cursor := 0
-	for i, region := range regions {
-		out = append(out, lines[cursor:region.startLine]...)
-		out = append(out, replacements[i]...)
-		cursor = region.endLine + 1
-	}
-	out = append(out, lines[cursor:]...)
-	return strings.Join(out, "\n")
-}
-
 // baseKeySet returns the top-level frontmatter keys of the merge-base version of
 // path. ok is false when the base cannot be read at all (no index stage 1, for
 // example an add/add conflict), when the base carries no frontmatter delimiter
@@ -905,7 +827,7 @@ func (e emittedKeys) record(key string) bool {
 }
 
 // seedEmittedOutsideRegions records the frontmatter keys that sit outside every
-// conflict region. spliceScalarRegions copies those lines verbatim, so a region
+// conflict region. spliceConflictRegions copies those lines verbatim, so a region
 // that emits one of them would leave a duplicate mapping key; seeding the set
 // makes the existing duplicate guard see them.
 func seedEmittedOutsideRegions(lines []string, regions []scalarRegion) emittedKeys {
@@ -1039,87 +961,28 @@ func resolvedBodyLines(combined string) []string {
 	return strings.Split(combined, "\n")
 }
 
-// applyBodyRule attempts the body-only rule on the raw conflicted file. applied
-// reports whether the rule took responsibility for the file; when it did, the
-// file has been written and staged and err is the outcome.
-func (r *yamlMergeResolver) applyBodyRule(
-	ctx context.Context, path, abs, raw string,
-) (applied bool, err error) {
-	if !strings.EqualFold(filepath.Ext(path), ".md") {
-		return false, nil
-	}
-
-	lines := strings.Split(raw, "\n")
-	regions, ok := planBodyRegions(lines)
-	if !ok {
-		return false, nil
-	}
-
-	replacements := make([][]string, 0, len(regions))
-	conflictRegions := make([]conflictRegion, 0, len(regions))
-	for _, region := range regions {
-		combined := combineBodies(region.oursBody, region.theirsBody)
-		replacements = append(replacements, resolvedBodyLines(combined))
-		conflictRegions = append(conflictRegions, region.conflictRegion)
-	}
-
-	final := spliceConflictRegions(lines, conflictRegions, replacements)
-
-	select {
-	case <-ctx.Done():
-		return true, errors.Wrap(ctx, ctx.Err(), "body resolve cancelled")
-	default:
-	}
-
-	// #nosec G703 -- path validated by safePath
-	if writeErr := os.WriteFile(abs, normalizeTaskPhase(path, []byte(final)), 0o600); writeErr != nil {
-		r.metrics.IncResolverFailure(resolverFailureWrite)
-		glog.Warningf("yaml-merge-resolver: write body-resolved %q: %v", path, writeErr)
-		return true, errors.Wrap(ctx, ErrConflictResolutionFailed, "write body-resolved file")
-	}
-
-	if err := r.runGitAdd(ctx, path); err != nil {
-		return true, err
-	}
-	r.metrics.IncBodyMerged()
-	return true, nil
-}
-
-// applyFallbackRules tries the scalar-frontmatter rule, then the body rule.
-// applied reports whether either rule took responsibility for the file.
-func (r *yamlMergeResolver) applyFallbackRules(
-	ctx context.Context, path, abs, raw string,
-) (applied bool, err error) {
-	if applied, err := r.applyScalarFrontmatterRule(ctx, path, abs, raw); applied {
-		return true, err
-	}
-	return r.applyBodyRule(ctx, path, abs, raw)
-}
-
-// applyScalarFrontmatterRule attempts the scalar-frontmatter rule on the raw
-// conflicted file. applied reports whether the rule took responsibility for the
-// file; when it did, the file has been written and staged and err is the outcome.
+// resolveScalarRegions resolves every frontmatter conflict region in order and
+// returns one replacement line slice per input region. ok is false on any
+// decline, and nothing is written: an unparseable side, a side with no key, a
+// duplicate key within a side, an undecidable merge-parent timestamp, an
+// unreadable merge base for a one-sided key, or a key emitted twice.
 //
-// Keys the two sides share follow the counter and newer-side rules. A key only
-// one side carries is resolved to the union of both sides when the merge base is
-// readable and lacks it; otherwise the region declines and the whole file
-// quarantines. The keys already present outside every region are seeded into the
-// same set before any region resolves. A key that would be emitted by two
-// regions, or emitted by a region when an untouched line already carries it, is
-// one of the decline shapes, because writing both would produce a duplicate
-// mapping key. A decline is never a partial write: nothing is written or staged
-// and the caller records no_frontmatter.
-func (r *yamlMergeResolver) applyScalarFrontmatterRule(
-	ctx context.Context, path, abs, raw string,
-) (applied bool, err error) {
-	if !strings.EqualFold(filepath.Ext(path), ".md") {
-		return false, nil
-	}
-
-	lines := strings.Split(raw, "\n")
-	regions, ok := planScalarRegions(lines)
-	if !ok {
-		return false, nil
+// The newerTheirs and loadBase closures are lazily initialised, so a file whose
+// regions all resolve without needing the merge base never reads it.
+func (r *yamlMergeResolver) resolveScalarRegions(
+	ctx context.Context, path string, lines []string, regions []conflictRegion,
+) ([][]string, bool) {
+	parsed := make([]scalarRegion, 0, len(regions))
+	for _, region := range regions {
+		ours, theirs, ok := parseScalarSide(region.oursLines, region.theirsLines)
+		if !ok {
+			return nil, false
+		}
+		parsed = append(parsed, scalarRegion{
+			conflictRegion: region,
+			ours:           ours,
+			theirs:         theirs,
+		})
 	}
 
 	var (
@@ -1159,34 +1022,93 @@ func (r *yamlMergeResolver) applyScalarFrontmatterRule(
 		return baseKeys, baseOK
 	}
 
-	emitted := seedEmittedOutsideRegions(lines, regions)
-	replacements := make([][]string, 0, len(regions))
-	for _, region := range regions {
-		resolved, resolvedOK := resolveScalarRegion(region, newerTheirs, loadBase, emitted)
-		if !resolvedOK {
-			return false, nil
+	emitted := seedEmittedOutsideRegions(lines, parsed)
+	replacements := make([][]string, 0, len(parsed))
+	for _, region := range parsed {
+		resolved, ok := resolveScalarRegion(region, newerTheirs, loadBase, emitted)
+		if !ok {
+			return nil, false
 		}
 		replacements = append(replacements, resolved)
 	}
+	return replacements, true
+}
 
-	final := spliceScalarRegions(lines, regions, replacements)
+// bodyReplacements returns one replacement line slice per body region.
+func bodyReplacements(regions []conflictRegion) [][]string {
+	replacements := make([][]string, 0, len(regions))
+	for _, region := range regions {
+		combined := combineBodies(
+			strings.Join(region.oursLines, "\n"),
+			strings.Join(region.theirsLines, "\n"),
+		)
+		replacements = append(replacements, resolvedBodyLines(combined))
+	}
+	return replacements
+}
+
+// applyPartitionedRules resolves every conflict region of the raw conflicted
+// file on its own position: frontmatter regions follow the scalar rules, body
+// regions keep both sides. applied reports whether the rules took responsibility
+// for the file; when they did, the file has been written and staged exactly once
+// and err is the outcome. A frontmatter decline aborts the whole file, so a
+// partial file is never produced.
+func (r *yamlMergeResolver) applyPartitionedRules(
+	ctx context.Context, path, abs, raw string,
+) (applied bool, err error) {
+	if !strings.EqualFold(filepath.Ext(path), ".md") {
+		return false, nil
+	}
+
+	lines := strings.Split(raw, "\n")
+	frontmatterRegions, bodyRegions, ok := planConflictPartitions(lines)
+	if !ok {
+		return false, nil
+	}
+
+	var scalarReplacements [][]string
+	if len(frontmatterRegions) > 0 {
+		scalarReplacements, ok = r.resolveScalarRegions(ctx, path, lines, frontmatterRegions)
+		if !ok {
+			return false, nil
+		}
+	}
+
+	conflictRegions := make([]conflictRegion, 0, len(frontmatterRegions)+len(bodyRegions))
+	conflictRegions = append(conflictRegions, frontmatterRegions...)
+	conflictRegions = append(conflictRegions, bodyRegions...)
+
+	replacements := make([][]string, 0, len(conflictRegions))
+	replacements = append(replacements, scalarReplacements...)
+	replacements = append(replacements, bodyReplacements(bodyRegions)...)
+
+	final := spliceConflictRegions(lines, conflictRegions, replacements)
 
 	select {
 	case <-ctx.Done():
-		return true, errors.Wrap(ctx, ctx.Err(), "scalar resolve cancelled")
+		return true, errors.Wrap(ctx, ctx.Err(), "partitioned resolve cancelled")
 	default:
 	}
 
 	// #nosec G703 -- path validated by safePath
 	if writeErr := os.WriteFile(abs, normalizeTaskPhase(path, []byte(final)), 0o600); writeErr != nil {
 		r.metrics.IncResolverFailure(resolverFailureWrite)
-		glog.Warningf("yaml-merge-resolver: write scalar-resolved %q: %v", path, writeErr)
-		return true, errors.Wrap(ctx, ErrConflictResolutionFailed, "write scalar-resolved file")
+		glog.Warningf("yaml-merge-resolver: write partitioned-resolved %q: %v", path, writeErr)
+		return true, errors.Wrap(
+			ctx,
+			ErrConflictResolutionFailed,
+			"write partitioned-resolved file",
+		)
 	}
 
 	if err := r.runGitAdd(ctx, path); err != nil {
 		return true, err
 	}
-	r.metrics.IncAutoresolved()
+	if len(frontmatterRegions) > 0 {
+		r.metrics.IncAutoresolved()
+	}
+	if len(bodyRegions) > 0 {
+		r.metrics.IncBodyMerged()
+	}
 	return true, nil
 }
