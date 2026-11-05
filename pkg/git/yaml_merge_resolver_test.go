@@ -1920,4 +1920,127 @@ var _ = Describe("YAMLMergeResolver", func() {
 			Expect(gatherer).To(ContainElement("unsafe_path"))
 		})
 	})
+
+	// Regression: the primary path (splitConflictSides → splitFrontmatter →
+	// deepMergeTheirsWins → combineBodies) rebuilt the whole file from the two
+	// sides of the conflict regions and dropped every line outside them, so a
+	// file whose first conflict region did not span the file came back truncated.
+	// The fixtures below are the only shape that reaches that path: the first
+	// conflict region must carry a complete `---` pair on each side so
+	// splitFrontmatter succeeds. Otherwise the file falls to the line-preserving
+	// fallback (applyPartitionedRules) and the defect never fires.
+	Describe("Line preservation when the first conflict region does not span the file", func() {
+		lineCount := func(s string) int {
+			return len(strings.Split(strings.TrimSuffix(s, "\n"), "\n"))
+		}
+
+		// containsInOrder asserts every non-empty line in want appears in out's
+		// lines, in the same order. Combined with an exact line count this catches
+		// a dropped line, a reordered block and duplicated content.
+		containsInOrder := func(out string, want []string) {
+			outLines := strings.Split(strings.TrimSuffix(out, "\n"), "\n")
+			i := 0
+			for _, w := range want {
+				if w == "" {
+					continue
+				}
+				for i < len(outLines) && outLines[i] != w {
+					i++
+				}
+				Expect(i).To(BeNumerically("<", len(outLines)), "line %q missing or out of order in:\n%s", w, out)
+				i++
+			}
+		}
+
+		// expectResolved asserts the exact written line count. A correct resolve
+		// deletes the conflict markers and the duplicated frontmatter, so the
+		// result is SHORTER than the conflicted input: a floor at the input's own
+		// line count is unsatisfiable, and a floor below the correct count cannot
+		// catch a truncation.
+		expectResolved := func(out string, wantLines int, outside []string) {
+			Expect(out).NotTo(ContainSubstring("<<<<<<<"))
+			Expect(out).NotTo(ContainSubstring("======="))
+			Expect(out).NotTo(ContainSubstring(">>>>>>>"))
+			Expect(lineCount(out)).To(Equal(wantLines),
+				"written file has %d lines, want %d\n--- output ---\n%s", lineCount(out), wantLines, out)
+			containsInOrder(out, outside)
+		}
+
+		It("preserves every line outside a single non-spanning conflict region", func() {
+			oursBody := make([]string, 0, 14)
+			theirsBody := make([]string, 0, 14)
+			for i := 1; i <= 14; i++ {
+				oursBody = append(oursBody, fmt.Sprintf("ours body line %d", i))
+				theirsBody = append(theirsBody, fmt.Sprintf("theirs body line %d", i))
+			}
+			outside := []string{
+				"", "## Tail heading", "", "tail paragraph one",
+				"", "tail paragraph two", "", "tail paragraph three",
+			}
+
+			lines := []string{"<<<<<<< HEAD", "---", "title: ours", "trigger_count: 8", "status: in_progress", "---"}
+			lines = append(lines, oursBody...)
+			lines = append(lines, "=======", "---", "title: theirs", "trigger_count: 1", "status: in_progress", "---")
+			lines = append(lines, theirsBody...)
+			lines = append(lines, ">>>>>>> theirs")
+			lines = append(lines, outside...)
+			Expect(lines).To(HaveLen(49), "fixture must be 49 lines")
+			conflicted := strings.Join(lines, "\n") + "\n"
+
+			workDir, rel, cleanup := setupHandWrittenConflict("note.md", conflicted)
+			defer cleanup()
+
+			r := git.NewYAMLMergeResolver(workDir, fakeMetrics)
+			Expect(r.Resolve(ctx, []string{rel})).To(Succeed())
+
+			raw, err := os.ReadFile(filepath.Join(workDir, rel))
+			Expect(err).NotTo(HaveOccurred())
+			// 34 replacement lines (2 delimiters + 3 merged keys + 29 body lines) + 8 outside.
+			expectResolved(string(raw), 42, outside)
+		})
+
+		It("preserves every line outside two conflict regions when the first straddles the frontmatter boundary", func() {
+			region1Ours := []string{"---", "title: ours", "trigger_count: 8", "---", "ours body line 1", "ours body line 2"}
+			region1Theirs := []string{"---", "title: theirs", "trigger_count: 1", "---", "theirs body line 1", "theirs body line 2"}
+			region2Ours := []string{"ours counter 1", "ours counter 2"}
+			region2Theirs := []string{"theirs counter 1", "theirs counter 2"}
+			outside1 := []string{"", "## Middle heading", "", "middle paragraph one", "", "middle paragraph two", ""}
+			outside2 := []string{"", "## Tail heading", ""}
+			for i := 1; i <= 17; i++ {
+				outside2 = append(outside2, fmt.Sprintf("tail line %d", i))
+			}
+
+			lines := []string{"<<<<<<< HEAD"}
+			lines = append(lines, region1Ours...)
+			lines = append(lines, "=======")
+			lines = append(lines, region1Theirs...)
+			lines = append(lines, ">>>>>>> theirs")
+			lines = append(lines, outside1...)
+			lines = append(lines, "<<<<<<< HEAD")
+			lines = append(lines, region2Ours...)
+			lines = append(lines, "=======")
+			lines = append(lines, region2Theirs...)
+			lines = append(lines, ">>>>>>> theirs")
+			lines = append(lines, outside2...)
+			Expect(lines).To(HaveLen(49), "fixture must be 49 lines")
+			conflicted := strings.Join(lines, "\n") + "\n"
+
+			outside := append(append([]string{}, outside1...), outside2...)
+
+			workDir, rel, cleanup := setupHandWrittenConflict("note.md", conflicted)
+			defer cleanup()
+
+			r := git.NewYAMLMergeResolver(workDir, fakeMetrics)
+			Expect(r.Resolve(ctx, []string{rel})).To(Succeed())
+
+			raw, err := os.ReadFile(filepath.Join(workDir, rel))
+			Expect(err).NotTo(HaveOccurred())
+			// 9 lines for region 1 + 5 for region 2 + 27 outside.
+			expectResolved(string(raw), 41, outside)
+			// Each region resolves from its own sides: no region's content may be
+			// duplicated into another region's replacement.
+			Expect(strings.Count(string(raw), "ours body line 1")).To(Equal(1))
+			Expect(strings.Count(string(raw), "theirs counter 1")).To(Equal(1))
+		})
+	})
 })
