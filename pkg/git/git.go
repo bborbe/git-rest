@@ -2129,8 +2129,41 @@ func lockHeldByProcess(ctx context.Context, path string) (bool, bool) {
 	return lockHeldByProc(ctx, path)
 }
 
-// lockHeldByLsof probes with lsof, which exists on macOS and not in the alpine
-// image. lsof exits 1 when no process has the file open.
+// parseLsofPIDList parses the output of `lsof -t`. A real lsof prints one bare
+// pid per line and nothing else; every non-empty line must therefore be a
+// positive decimal integer. Any other shape — a tab-separated listing, a path,
+// a header, a warning — makes the whole output untrustworthy, and ok is false.
+// Empty or whitespace-only output is likewise not evidence.
+func parseLsofPIDList(out string) (pids []string, ok bool) {
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		digits := true
+		for _, r := range line {
+			if r < '0' || r > '9' {
+				digits = false
+				break
+			}
+		}
+		pid, err := strconv.Atoi(line)
+		if !digits || err != nil || pid <= 0 {
+			return nil, false
+		}
+		pids = append(pids, line)
+	}
+	if len(pids) == 0 {
+		return nil, false
+	}
+	return pids, true
+}
+
+// lockHeldByLsof probes with lsof. A real `lsof -t` prints one bare pid per line
+// and exits 1 when nothing holds the file. A binary that prints anything else is
+// not evidence: the agent image's /usr/bin/lsof is the busybox applet, which
+// ignores -t and exits 0 with a full open-file listing. Such output is treated
+// as undetermined so the /proc probe answers instead.
 func lockHeldByLsof(ctx context.Context, path string) (bool, bool) {
 	if _, err := exec.LookPath("lsof"); err != nil {
 		return false, false
@@ -2138,7 +2171,11 @@ func lockHeldByLsof(ctx context.Context, path string) (bool, bool) {
 	// #nosec G204 -- binary is hardcoded to "lsof"; path is an internal repo path
 	out, err := exec.CommandContext(ctx, "lsof", "-t", path).Output()
 	if err == nil {
-		return strings.TrimSpace(string(out)) != "", true
+		pids, ok := parseLsofPIDList(string(out))
+		if !ok {
+			return false, false
+		}
+		return len(pids) > 0, true
 	}
 	var exitErr *exec.ExitError
 	if stderrors.As(err, &exitErr) && exitErr.ExitCode() == 1 && len(exitErr.Stderr) == 0 {
