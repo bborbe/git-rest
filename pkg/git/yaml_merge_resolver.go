@@ -103,8 +103,8 @@ func (r *yamlMergeResolver) resolveOne(ctx context.Context, path string) error {
 		return errors.Wrap(ctx, ErrConflictResolutionFailed, "no conflict region")
 	}
 
-	oursFM, oursBody, oursOK := splitFrontmatter(ours)
-	theirsFM, theirsBody, theirsOK := splitFrontmatter(theirs)
+	_, _, oursOK := splitFrontmatter(ours)
+	_, _, theirsOK := splitFrontmatter(theirs)
 	if !oursOK || !theirsOK {
 		if applied, ruleErr := r.applyPartitionedRules(ctx, path, abs, string(raw)); applied {
 			return ruleErr
@@ -117,26 +117,18 @@ func (r *yamlMergeResolver) resolveOne(ctx context.Context, path string) error {
 		return errors.Wrap(ctx, ErrConflictResolutionFailed, "no frontmatter delimiter pair")
 	}
 
-	oursMap, err := r.parseYAML(ctx, oursFM, path, "ours")
+	lines := strings.Split(string(raw), "\n")
+	regions, regionsOK := enumerateConflictRegions(lines)
+	if !regionsOK {
+		return errors.Wrap(ctx, ErrConflictResolutionFailed, "enumerate conflict regions")
+	}
+	replacements, err := r.resolveRegionReplacements(ctx, path, lines, regions)
 	if err != nil {
 		return err
 	}
-	theirsMap, err := r.parseYAML(ctx, theirsFM, path, "theirs")
-	if err != nil {
-		return err
-	}
+	final := spliceConflictRegions(lines, regions, replacements)
 
-	merged := deepMergeTheirsWins(oursMap, theirsMap)
-	mergedFM, err := yaml.Marshal(merged)
-	if err != nil {
-		r.metrics.IncResolverFailure(resolverFailureYAMLParse)
-		glog.Warningf("yaml-merge-resolver: %q marshal merged YAML failed: %v", path, err)
-		return errors.Wrap(ctx, ErrConflictResolutionFailed, "marshal merged yaml")
-	}
-
-	body := combineBodies(oursBody, theirsBody)
-	final := "---\n" + string(mergedFM) + "---\n" + body
-
+	// #nosec G703 -- path validated by safePath
 	if err := os.WriteFile(abs, normalizeTaskPhase(path, []byte(final)), 0o600); err != nil {
 		r.metrics.IncResolverFailure(resolverFailureWrite)
 		glog.Warningf("yaml-merge-resolver: write %q: %v", path, err)
@@ -343,9 +335,9 @@ func (r *yamlMergeResolver) safePath(rel string) (string, error) {
 	return joined, nil
 }
 
-// splitConflictSides extracts the ours and theirs versions of the first conflict
-// region from a file containing standard git three-way conflict markers. It returns
-// ok=false if either marker is missing.
+// splitConflictSides accumulates the ours and theirs versions of every conflict
+// region from a file containing standard git three-way conflict markers, in file
+// order. It returns ok=false if either side is empty.
 //
 // Assumption: the conflict region is a self-contained frontmatter block — either it
 // already starts with "---" (the opening delimiter was inside the conflict), or the
@@ -465,6 +457,75 @@ func combineBodies(ours, theirs string) string {
 	default:
 		return ours + "\n\n" + theirs
 	}
+}
+
+// resolveRegionReplacements builds one replacement line slice per conflict
+// region. Each region is resolved from its own sides, so content from one
+// region can never appear in another region's replacement.
+func (r *yamlMergeResolver) resolveRegionReplacements(
+	ctx context.Context, path string, lines []string, regions []conflictRegion,
+) ([][]string, error) {
+	replacements := make([][]string, 0, len(regions))
+	for _, region := range regions {
+		replacement, err := r.resolveRegion(ctx, path, lines, region)
+		if err != nil {
+			return nil, err
+		}
+		replacements = append(replacements, replacement)
+	}
+	return replacements, nil
+}
+
+// resolveRegion resolves one conflict region into the lines that replace it.
+// When both sides carry a frontmatter block the keys are deep-merged (theirs
+// wins) and the bodies combined; otherwise the region is treated as body text
+// and both raw sides are combined. The file's own opening "---" sits outside
+// the region when git placed it above the first marker, so it is reattached for
+// parsing and deliberately left out of the replacement.
+func (r *yamlMergeResolver) resolveRegion(
+	ctx context.Context, path string, lines []string, region conflictRegion,
+) ([]string, error) {
+	oursRegion := strings.Join(region.oursLines, "\n")
+	theirsRegion := strings.Join(region.theirsLines, "\n")
+
+	reattach := region.startLine > 0 &&
+		strings.TrimRight(lines[region.startLine-1], "\r") == "---" &&
+		!strings.HasPrefix(oursRegion, "---\n") &&
+		!strings.HasPrefix(theirsRegion, "---\n")
+
+	oursDoc, theirsDoc, opener := oursRegion, theirsRegion, ""
+	if reattach {
+		oursDoc = "---\n" + oursRegion
+		theirsDoc = "---\n" + theirsRegion
+	} else if strings.HasPrefix(oursRegion, "---\n") &&
+		strings.HasPrefix(theirsRegion, "---\n") {
+		opener = "---\n"
+	}
+
+	oursFM, oursBody, oursOK := splitFrontmatter(oursDoc)
+	theirsFM, theirsBody, theirsOK := splitFrontmatter(theirsDoc)
+	if !oursOK || !theirsOK {
+		return strings.Split(combineBodies(oursRegion, theirsRegion), "\n"), nil
+	}
+
+	oursMap, err := r.parseYAML(ctx, oursFM, path, "ours")
+	if err != nil {
+		return nil, err
+	}
+	theirsMap, err := r.parseYAML(ctx, theirsFM, path, "theirs")
+	if err != nil {
+		return nil, err
+	}
+
+	mergedFM, err := yaml.Marshal(deepMergeTheirsWins(oursMap, theirsMap))
+	if err != nil {
+		r.metrics.IncResolverFailure(resolverFailureYAMLParse)
+		glog.Warningf("yaml-merge-resolver: %q marshal merged YAML failed: %v", path, err)
+		return nil, errors.Wrap(ctx, ErrConflictResolutionFailed, "marshal merged yaml")
+	}
+
+	merged := opener + string(mergedFM) + "---\n" + combineBodies(oursBody, theirsBody)
+	return strings.Split(merged, "\n"), nil
 }
 
 // conflictRegion is one conflict region located in the original file's lines.
