@@ -8,7 +8,7 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 * MINOR version when you add functionality in a backwards-compatible manner, and
 * PATCH version when you make backwards-compatible bug fixes.
 
-## Unreleased
+## v0.40.5
 
 - fix: Stop the YAML merge resolver truncating a conflicted Markdown note to the conflict regions, preserving every line outside them when a clean resolve runs
 
