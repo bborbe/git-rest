@@ -1,5 +1,13 @@
 ---
-status: draft
+status: completed
+summary: Verified the YAML merge resolver now resolves each conflict region in place, preserving every line outside conflict regions; regression tests pass and make precommit exits 0
+execution_id: git-rest-line-preserve-exec-100-fix-primary-merge-path-line-truncation
+dark-factory-version: v0.198.17
+created: "2026-11-05T19:43:11Z"
+queued: "2026-11-05T19:43:11Z"
+started: "2026-11-05T20:21:37Z"
+completed: "2026-11-05T20:24:35Z"
+cancelled: "2026-11-05T19:51:20Z"
 ---
 
 # Preserve every line outside the conflict regions on the primary merge path
@@ -96,13 +104,149 @@ The doc comment on `splitConflictSides` still says "first conflict region" while
 
    Then make the change and confirm the same literal still passes. Do not write the fixture with a trailing newline: requirement 3 copies every line outside a region verbatim, including the final empty element of `strings.Split(raw, "\n")`, so a trailing-newline fixture gains a `\n` that today's code drops and can never be byte-identical. With no trailing newline the two outputs are identical and equal to `"---\ntitle: theirs\ntrigger_count: 1\n---\nours body\n\ntheirs body"` (7 lines).
 
-6. The two regression tests for the non-spanning shape are ALREADY present in `pkg/git/yaml_merge_resolver_test.go` — the uncommitted `Describe("Line preservation when the first conflict region does not span the file")` block inside the outer `Describe("YAMLMergeResolver", …)`. Do NOT add a second copy; edit the existing block in place if it needs a change. Verify with
+6. Add BOTH regression tests below to `pkg/git/yaml_merge_resolver_test.go`, inside the existing outer `Describe("YAMLMergeResolver", …)` block, as a new nested `Describe`. Afterwards verify that
 
    ```
    grep -c 'Line preservation when the first conflict region does not span the file' pkg/git/yaml_merge_resolver_test.go
    ```
 
-   returning exactly `1`. If the grep returns `0`, stop and report — the block is missing from the working tree; do not reconstruct it from memory.
+   returns exactly `1`.
+
+   ```go
+   	Describe("Line preservation when the first conflict region does not span the file", func() {
+   		lineCount := func(s string) int {
+   			return len(strings.Split(strings.TrimSuffix(s, "\n"), "\n"))
+   		}
+
+   		// containsInOrder asserts every non-empty line in want appears in out's
+   		// lines, in the same order. Combined with an exact line count this catches
+   		// a dropped line, a reordered block and duplicated content.
+   		containsInOrder := func(out string, want []string) {
+   			outLines := strings.Split(strings.TrimSuffix(out, "\n"), "\n")
+   			i := 0
+   			for _, w := range want {
+   				if w == "" {
+   					continue
+   				}
+   				for i < len(outLines) && outLines[i] != w {
+   					i++
+   				}
+   				Expect(
+   					i,
+   				).To(BeNumerically("<", len(outLines)), "line %q missing or out of order in:\n%s", w, out)
+   				i++
+   			}
+   		}
+
+   		// expectResolved asserts the exact written line count. A correct resolve
+   		// deletes the conflict markers and the duplicated frontmatter, so the
+   		// result is SHORTER than the conflicted input: a floor at the input's own
+   		// line count is unsatisfiable, and a floor below the correct count cannot
+   		// catch a truncation.
+   		expectResolved := func(out string, wantLines int, outside []string) {
+   			Expect(out).NotTo(ContainSubstring("<<<<<<<"))
+   			Expect(out).NotTo(ContainSubstring("======="))
+   			Expect(out).NotTo(ContainSubstring(">>>>>>>"))
+   			Expect(lineCount(out)).To(Equal(wantLines),
+   				"written file has %d lines, want %d\n--- output ---\n%s", lineCount(out), wantLines, out)
+   			containsInOrder(out, outside)
+   		}
+
+   		It("preserves every line outside a single non-spanning conflict region", func() {
+   			oursBody := make([]string, 0, 14)
+   			theirsBody := make([]string, 0, 14)
+   			for i := 1; i <= 14; i++ {
+   				oursBody = append(oursBody, fmt.Sprintf("ours body line %d", i))
+   				theirsBody = append(theirsBody, fmt.Sprintf("theirs body line %d", i))
+   			}
+   			outside := []string{
+   				"", "## Tail heading", "", "tail paragraph one",
+   				"", "tail paragraph two", "", "tail paragraph three",
+   			}
+
+   			lines := []string{
+   				"<<<<<<< HEAD",
+   				"---",
+   				"title: ours",
+   				"trigger_count: 8",
+   				"status: in_progress",
+   				"---",
+   			}
+   			lines = append(lines, oursBody...)
+   			lines = append(
+   				lines,
+   				"=======",
+   				"---",
+   				"title: theirs",
+   				"trigger_count: 1",
+   				"status: in_progress",
+   				"---",
+   			)
+   			lines = append(lines, theirsBody...)
+   			lines = append(lines, ">>>>>>> theirs")
+   			lines = append(lines, outside...)
+   			Expect(lines).To(HaveLen(49), "fixture must be 49 lines")
+   			conflicted := strings.Join(lines, "\n") + "\n"
+
+   			workDir, rel, cleanup := setupHandWrittenConflict("note.md", conflicted)
+   			defer cleanup()
+
+   			r := git.NewYAMLMergeResolver(workDir, fakeMetrics)
+   			Expect(r.Resolve(ctx, []string{rel})).To(Succeed())
+
+   			raw, err := os.ReadFile(filepath.Join(workDir, rel))
+   			Expect(err).NotTo(HaveOccurred())
+   			// 34 replacement lines (2 delimiters + 3 merged keys + 29 body lines) + 8 outside.
+   			expectResolved(string(raw), 42, outside)
+   		})
+
+   		It("preserves every line outside two conflict regions when the first straddles the frontmatter boundary", func() {
+   			region1Ours := []string{"---", "title: ours", "trigger_count: 8", "---", "ours body line 1", "ours body line 2"}
+   			region1Theirs := []string{"---", "title: theirs", "trigger_count: 1", "---", "theirs body line 1", "theirs body line 2"}
+   			region2Ours := []string{"ours counter 1", "ours counter 2"}
+   			region2Theirs := []string{"theirs counter 1", "theirs counter 2"}
+   			outside1 := []string{"", "## Middle heading", "", "middle paragraph one", "", "middle paragraph two", ""}
+   			outside2 := []string{"", "## Tail heading", ""}
+   			for i := 1; i <= 17; i++ {
+   				outside2 = append(outside2, fmt.Sprintf("tail line %d", i))
+   			}
+
+   			lines := []string{"<<<<<<< HEAD"}
+   			lines = append(lines, region1Ours...)
+   			lines = append(lines, "=======")
+   			lines = append(lines, region1Theirs...)
+   			lines = append(lines, ">>>>>>> theirs")
+   			lines = append(lines, outside1...)
+   			lines = append(lines, "<<<<<<< HEAD")
+   			lines = append(lines, region2Ours...)
+   			lines = append(lines, "=======")
+   			lines = append(lines, region2Theirs...)
+   			lines = append(lines, ">>>>>>> theirs")
+   			lines = append(lines, outside2...)
+   			Expect(lines).To(HaveLen(49), "fixture must be 49 lines")
+   			conflicted := strings.Join(lines, "\n") + "\n"
+
+   			outside := append(append([]string{}, outside1...), outside2...)
+
+   			workDir, rel, cleanup := setupHandWrittenConflict("note.md", conflicted)
+   			defer cleanup()
+
+   			r := git.NewYAMLMergeResolver(workDir, fakeMetrics)
+   			Expect(r.Resolve(ctx, []string{rel})).To(Succeed())
+
+   			raw, err := os.ReadFile(filepath.Join(workDir, rel))
+   			Expect(err).NotTo(HaveOccurred())
+   			// 9 lines for region 1 + 5 for region 2 + 27 outside.
+   			expectResolved(string(raw), 41, outside)
+   			// Each region resolves from its own sides: no region's content may be
+   			// duplicated into another region's replacement.
+   			Expect(strings.Count(string(raw), "ours body line 1")).To(Equal(1))
+   			Expect(strings.Count(string(raw), "theirs counter 1")).To(Equal(1))
+   		})
+   	})
+   ```
+
+   `setupHandWrittenConflict`, `fakeMetrics`, `ctx` and the `git` / `os` / `filepath` / `strings` / `fmt` imports already exist in that test file.
 
    Both fixtures are 49 lines and both put a complete `---` pair on each side of the first conflict region. Their assertions are exact: **42** written lines for the single-region fixture and **41** for the two-region fixture, with no conflict markers, every outside line present in order, and no region's content duplicated into another. Those counts are arithmetic, not magic — 34 replacement + 8 outside = 42, and 9 + 5 + 27 = 41. A correct resolve is SHORTER than the 49-line conflicted input because it deletes the marker lines and the duplicated frontmatter: fixture 1 loses 3 markers, 2 duplicated delimiters and 3 duplicated keys while gaining one blank separator; fixture 2 loses 6 markers across its two regions. Do not "fix" a failing count by padding the output.
 
