@@ -50,6 +50,17 @@ func TestIsLeaseConflict(t *testing.T) {
 			want:   true,
 		},
 		{
+			name:   "remote rejected incorrect old value provided",
+			output: " ! [remote rejected] abc -> x (incorrect old value provided)",
+			want:   true,
+		},
+		{
+			name: "hook decline mentioning incorrect old value is not a conflict",
+			output: "remote: incorrect old value provided\n" +
+				" ! [remote rejected] abc -> x (pre-receive hook declined)",
+			want: false,
+		},
+		{
 			name: "hook decline mentioning expected is not a conflict",
 			output: "remote: expected commit message\n" +
 				" ! [remote rejected] abc -> x (pre-receive hook declined)",
