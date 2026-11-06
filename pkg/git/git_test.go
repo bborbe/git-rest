@@ -3918,6 +3918,92 @@ var _ = Describe("Per-cycle stale lock cleanup", func() {
 	})
 })
 
+var _ = Describe("lsof -t output parsing", func() {
+	It("treats real lsof output as evidence", func() {
+		pids, ok := git.ParseLsofPIDList("1234\n5678\n")
+		Expect(ok).To(BeTrue())
+		Expect(pids).To(Equal([]string{"1234", "5678"}))
+	})
+
+	It("treats the busybox listing as no evidence", func() {
+		// Measured from the busybox lsof applet at /usr/bin/lsof in the agent
+		// image: -t is ignored and a full open-file listing is printed.
+		out := "1\t/bin/busybox\t0\t/dev/null\n" +
+			"1\t/bin/busybox\t1\tpipe:[2033249]\n" +
+			"1\t/bin/busybox\t2\tpipe:[2033250]\n"
+		pids, ok := git.ParseLsofPIDList(out)
+		Expect(ok).To(BeFalse())
+		Expect(pids).To(BeEmpty())
+	})
+
+	It("treats empty output as no evidence", func() {
+		for _, out := range []string{"", "  \n\n "} {
+			pids, ok := git.ParseLsofPIDList(out)
+			Expect(ok).To(BeFalse())
+			Expect(pids).To(BeEmpty())
+		}
+	})
+
+	It("treats a non-pid token as no evidence", func() {
+		pids, ok := git.ParseLsofPIDList("1234\nnot-a-pid\n")
+		Expect(ok).To(BeFalse())
+		Expect(pids).To(BeEmpty())
+	})
+
+	It("treats zero as no pid", func() {
+		pids, ok := git.ParseLsofPIDList("0\n")
+		Expect(ok).To(BeFalse())
+		Expect(pids).To(BeEmpty())
+	})
+
+	It("treats a signed number as no pid", func() {
+		pids, ok := git.ParseLsofPIDList("+1234\n")
+		Expect(ok).To(BeFalse())
+		Expect(pids).To(BeEmpty())
+	})
+
+	Context("lockHeldByLsof with a stub lsof on PATH", func() {
+		var lockPath string
+
+		installStub := func(body string) {
+			dir := GinkgoT().TempDir()
+			script := filepath.Join(dir, "lsof")
+			Expect(os.WriteFile(
+				script, []byte("#!/bin/sh\n"+body+"\n"), 0o755,
+			)).To(Succeed())
+			GinkgoT().Setenv(
+				"PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"),
+			)
+		}
+
+		BeforeEach(func() {
+			lockPath = filepath.Join(GinkgoT().TempDir(), "index.lock")
+			Expect(os.WriteFile(lockPath, nil, 0o600)).To(Succeed())
+		})
+
+		It("treats a busybox-shaped listing as undetermined", func() {
+			installStub("printf '1\\t/bin/busybox\\t0\\t/dev/null\\n'")
+			held, determined := git.LockHeldByLsof(context.Background(), lockPath)
+			Expect(held).To(BeFalse())
+			Expect(determined).To(BeFalse())
+		})
+
+		It("treats a bare pid list as a determined held", func() {
+			installStub("printf '1234\\n'")
+			held, determined := git.LockHeldByLsof(context.Background(), lockPath)
+			Expect(held).To(BeTrue())
+			Expect(determined).To(BeTrue())
+		})
+
+		It("treats exit 1 with empty stderr as a determined free", func() {
+			installStub("exit 1")
+			held, determined := git.LockHeldByLsof(context.Background(), lockPath)
+			Expect(held).To(BeFalse())
+			Expect(determined).To(BeTrue())
+		})
+	})
+})
+
 var _ = Describe("Dirty tree rescue on the push-retry path", func() {
 	var (
 		workDir       string

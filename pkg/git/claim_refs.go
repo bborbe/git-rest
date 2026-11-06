@@ -467,6 +467,7 @@ func isLeaseConflict(output string) bool {
 			"failed to update ref",
 			"reference already exists",
 			"reference does not exist",
+			"incorrect old value provided",
 		} {
 			if strings.Contains(reason, marker) {
 				return true

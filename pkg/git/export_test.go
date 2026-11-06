@@ -34,6 +34,13 @@ func CleanupStaleLocksForCycle(
 // LockHeldByProcess exposes the liveness probe for direct tests. Test builds only.
 var LockHeldByProcess = lockHeldByProcess
 
+// LockHeldByLsof exposes the lsof backend for direct tests. Test builds only.
+var LockHeldByLsof = lockHeldByLsof
+
+// ParseLsofPIDList exposes the lsof -t output parser for direct tests.
+// Test builds only.
+var ParseLsofPIDList = parseLsofPIDList
+
 // RetryPushForTest exposes retryPush so external tests can drive the
 // push-retry merge path directly. Forcing a real non-fast-forward rejection
 // deterministically is a race, so the path is exercised here instead.
