@@ -8,7 +8,7 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 * MINOR version when you add functionality in a backwards-compatible manner, and
 * PATCH version when you make backwards-compatible bug fixes.
 
-## Unreleased
+## v0.40.6
 
 - fix: Treat an `lsof -t` listing that is not a bare pid per line as no evidence, so the busybox `lsof` applet in the agent image no longer reports every free lock as held and stale `.git/*.lock` files are cleaned again
 - fix: Classify a claim push rejected server-side with `incorrect old value provided` as a lost race, so a claim renew that loses on newer git returns `ErrRefConflict` instead of a raw push error
