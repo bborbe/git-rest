@@ -8,7 +8,7 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 * MINOR version when you add functionality in a backwards-compatible manner, and
 * PATCH version when you make backwards-compatible bug fixes.
 
-## Unreleased
+## v0.41.0
 
 - feat: opt into `dockerBuild` (`autoBuild: true`, destination `dockerhub`) so a release tag builds and publishes `docker.io/bborbe/git-rest:<tag>` in-cluster, with no manual `make buca`
 
