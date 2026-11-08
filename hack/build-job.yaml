@@ -15,9 +15,9 @@
 #   __REF__                git ref (branch, tag or commit) to build
 #   __TAG__                image tag to push
 #   __DOCKERFILE__         Dockerfile path inside the repository, always relative
-#                          to the repository ROOT even when __CONTEXT__ is a
+#                          to the repository ROOT even when __CONTEXT_PATH__ is a
 #                          subdirectory (so a nested Dockerfile is "blog/Dockerfile")
-#   __CONTEXT__            BuildKit build-context directory: /src, or /src/<SUBDIR>
+#   __CONTEXT_PATH__       BuildKit build-context directory: /src, or /src/<SUBDIR>
 #   __IMAGE__              target image repository, without tag
 #   __PUSH__               "true" to push the built image
 #   __PUSH_SECRET__        name of the dockerconfigjson secret to mount
@@ -159,7 +159,7 @@ spec:
               fi
               buildctl-daemonless.sh build \
                 --frontend dockerfile.v0 \
-                --local context=__CONTEXT__ \
+                --local context=__CONTEXT_PATH__ \
                 --local dockerfile=/src \
                 --opt filename=__DOCKERFILE__ \
                 --opt platform=linux/amd64 \

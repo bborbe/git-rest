@@ -8,6 +8,10 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 * MINOR version when you add functionality in a backwards-compatible manner, and
 * PATCH version when you make backwards-compatible bug fixes.
 
+## Unreleased
+
+- fix: rename the build-job template's `__CONTEXT__` token to `__CONTEXT_PATH__`. The release-to-image dispatcher renders `hack/build-job.yaml` and aborts on any surviving `__TOKEN__` (`ErrUnrenderedToken`, logged as `reason=unrendered_token`), so every tag on this repo dispatched and then skipped — `v0.41.0` and `v0.41.1` both shipped with no image. `__CONTEXT_PATH__` is the renderer's canonical name for the BuildKit `--local context=` value; `go-skeleton`, which builds correctly, carries no `__CONTEXT__`
+
 ## v0.41.1
 
 - chore: restate the do-not-merge contract in the gate workflow
