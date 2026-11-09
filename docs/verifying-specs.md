@@ -483,7 +483,7 @@ git -C "$CLONE" pull --ff-only
 kubectlnukedev -n "$NS" exec "$POD" -- git -C /data log -1 --format=%s
 find "$CLONE/_conflicts" -type f 2>/dev/null | wc -l
 kubectlnukedev -n "$NS" exec "$POD" -- wget -qO- http://localhost:9090/metrics \
-  | grep -E '^git_rest_(body_merged_total|quarantined_backlog|resolver_failures_total\{category=~"vault_api_.*"\}|quarantine_cause_total)'
+  | grep -E '^git_rest_(body_merged_total|quarantined_backlog|quarantine_cause_total)|^git_rest_resolver_failures_total\{category="vault_api_'
 ```
 
 The clone's push must land **immediately after the write and before the pod's next pull tick** (the pull interval is `30s`), so that when the pod's pull flushes the pending write the commit is made on the old base and its push is rejected as non-fast-forward; the pull then merges the diverged remote and conflicts. If the pod's flush reaches the remote first, the pod's pull is a plain fast-forward — no merge, no conflict — and the probe must be re-run with the clone's push issued inside the same window. The refresh in step 3 matters: a stale clone makes the `_conflicts/` zero-delta assertion pass vacuously.

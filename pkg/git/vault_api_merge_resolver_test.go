@@ -164,6 +164,22 @@ var _ = Describe("VaultAPIMergeResolver", func() {
 		Expect(fakeMetrics.IncResolverFailureArgsForCall(0)).To(Equal("vault_api_declined"))
 	})
 
+	It("tags a decline with the declined cause when the fallback also fails", func() {
+		// The previous case has the fallback resolve the file, so Resolve returns
+		// nil and the Declined tag is never exercised. Here the fallback fails too,
+		// so the file is quarantined and the cause must be readable as Declined.
+		client.MergeReturns(
+			git.VaultAPIMergeResult{Result: "quarantined", Reason: "body_conflict"}, nil,
+		)
+		fallback.ResolveReturns(stderrors.New("fallback failed"))
+
+		err := resolver.Resolve(ctx, []string{relPath})
+
+		Expect(fallback.ResolveCallCount()).To(Equal(1))
+		Expect(fakeMetrics.IncResolverFailureArgsForCall(0)).To(Equal("vault_api_declined"))
+		Expect(git.QuarantineCauseFromError(err)).To(Equal(metrics.QuarantineCauseDeclined))
+	})
+
 	It("falls back when vault-api is unreachable", func() {
 		client.MergeReturns(git.VaultAPIMergeResult{}, stderrors.New("connection refused"))
 		fallback.ResolveReturns(stderrors.New("fallback failed"))
