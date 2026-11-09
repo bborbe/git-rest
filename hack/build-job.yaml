@@ -159,7 +159,7 @@ spec:
               fi
               buildctl-daemonless.sh build \
                 --frontend dockerfile.v0 \
-                --local context=__CONTEXT__ \
+                --local context=__CONTEXT_PATH__ \
                 --local dockerfile=/src \
                 --opt filename=__DOCKERFILE__ \
                 --opt platform=linux/amd64 \
