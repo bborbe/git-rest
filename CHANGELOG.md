@@ -8,6 +8,10 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 * MINOR version when you add functionality in a backwards-compatible manner, and
 * PATCH version when you make backwards-compatible bug fixes.
 
+## Unreleased
+
+- fix: restore `__CONTEXT_PATH__` in `hack/build-job.yaml`, ending the imageless-release probe. `v0.41.3` and `v0.41.4` were cut with the token deliberately broken so the releaser's image check had a release with no image to report; this restores the renderer's canonical name and the next tag builds again
+
 ## v0.41.4
 
 - test: second imageless probe. The template is still broken from `v0.41.3`, so this tag also ships without an image; the release is needed because `v0.41.3` was reviewed by a pre-v0.9.1 releaser that carried no image check. Reverted in the next commit
