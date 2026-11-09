@@ -8,7 +8,7 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 * MINOR version when you add functionality in a backwards-compatible manner, and
 * PATCH version when you make backwards-compatible bug fixes.
 
-## Unreleased
+## v0.41.3
 
 - test: reintroduce the `__CONTEXT__` token in `hack/build-job.yaml` so this tag ships without an image. Deliberate probe: it reproduces the exact failure of `v0.41.0`/`v0.41.1` so the releaser's image check can be observed reporting `image_expected: true` with `image_exists: false`. Reverted in the next commit
 
