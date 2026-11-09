@@ -52,6 +52,51 @@ var QuarantinedFilesTotal = prometheus.NewCounter(prometheus.CounterOpts{
 	Help: "Total number of conflicted files quarantined to _conflicts/ during pull (per-file quarantine for the resolver-failure branch).",
 })
 
+// QuarantineCause is the closed set of reasons a conflicted file was quarantined
+// during pull.
+type QuarantineCause string
+
+const (
+	// QuarantineCauseDeclined is a deliberate decline: vault-api refused the
+	// merge on purpose and returned a result other than "merged" with a reason.
+	QuarantineCauseDeclined QuarantineCause = "declined"
+	// QuarantineCauseBreak is a resolver break: the merge request itself failed
+	// (transport error, non-200, unparseable response).
+	QuarantineCauseBreak QuarantineCause = "break"
+	// QuarantineCauseNoThreeSides is a conflict whose three sides could not be
+	// read, so it is not a modify/modify merge: an add/add or delete/modify
+	// conflict has no base stage, and a failed `git show`/`merge-base` also lands
+	// here. It therefore cannot distinguish a base-less conflict from a git
+	// failure; use the resolver-failure category for that.
+	QuarantineCauseNoThreeSides QuarantineCause = "no_three_sides"
+	// QuarantineCauseEmptyContent is a merge reported as merged but carrying no
+	// content to stage.
+	QuarantineCauseEmptyContent QuarantineCause = "empty_content"
+	// QuarantineCauseOther covers every other path into quarantine: a write
+	// failure, a git-add failure, or a resolver other than the vault-api one.
+	QuarantineCauseOther QuarantineCause = "other"
+)
+
+// AvailableQuarantineCauses lists every QuarantineCause the cause label accepts.
+// init() ranges over it to pre-initialise the series and tests range over it to
+// assert the full set. Keep it in sync with the constants above.
+var AvailableQuarantineCauses = []QuarantineCause{
+	QuarantineCauseDeclined,
+	QuarantineCauseBreak,
+	QuarantineCauseNoThreeSides,
+	QuarantineCauseEmptyContent,
+	QuarantineCauseOther,
+}
+
+// QuarantineCauseTotal counts files quarantined during pull by the resolver
+// branch that caused the quarantine. The cause label is bounded by
+// AvailableQuarantineCauses and is never sourced from vault-api's free-text
+// Reason, which is unbounded.
+var QuarantineCauseTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+	Name: "git_rest_quarantine_cause_total",
+	Help: "Total files quarantined during pull, labelled by the resolver branch that caused the quarantine (declined=deliberate vault-api decline, break=merge request error, no_three_sides, empty_content, other).",
+}, []string{"cause"})
+
 // QuarantinedBacklog reports the number of regular files currently under _conflicts/.
 var QuarantinedBacklog = prometheus.NewGauge(prometheus.GaugeOpts{
 	Name: "git_rest_quarantined_backlog",
@@ -116,7 +161,9 @@ var WritePending = prometheus.NewGauge(prometheus.GaugeOpts{
 
 // ResolverFailuresTotal counts conflict-resolver failures by category.
 // Categories: yaml_parse_failed, no_frontmatter, write_failed, git_add_failed,
-// quarantine_io_failed, unsafe_path, nested_source. The quarantine_io_failed bucket covers
+// quarantine_io_failed, unsafe_path, nested_source, vault_api_no_three_sides,
+// vault_api_error, vault_api_declined, vault_api_empty_content. The
+// quarantine_io_failed bucket covers
 // any I/O failure in the quarantine flow (read source, git rm source, mkdir
 // destination, write destination, git add destination) — the implementation
 // does not use git mv (git refuses to move conflicted files), so the
@@ -124,7 +171,7 @@ var WritePending = prometheus.NewGauge(prometheus.GaugeOpts{
 // counts.
 var ResolverFailuresTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
 	Name: "git_rest_resolver_failures_total",
-	Help: "Total conflict-resolver failures by category. Resolver failures: yaml_parse_failed, no_frontmatter, write_failed, git_add_failed. Quarantine failures: quarantine_io_failed (any I/O step of the quarantine flow), unsafe_path (path-traversal rejection), nested_source (a conflicted path already under _conflicts/ was rejected by the nesting guard).",
+	Help: "Total conflict-resolver failures by category. Resolver failures: yaml_parse_failed, no_frontmatter, write_failed, git_add_failed, vault_api_no_three_sides, vault_api_error, vault_api_declined, vault_api_empty_content. Quarantine failures: quarantine_io_failed (any I/O step of the quarantine flow), unsafe_path (path-traversal rejection), nested_source (a conflicted path already under _conflicts/ was rejected by the nesting guard).",
 }, []string{"category"})
 
 func init() {
@@ -136,6 +183,7 @@ func init() {
 		ConflictPathsTotal,
 		ResolverFailuresTotal,
 		QuarantinedFilesTotal,
+		QuarantineCauseTotal,
 		QuarantinedBacklog,
 		PullRescuesTotal,
 		AutoresolvedTotal,
@@ -206,8 +254,15 @@ func init() {
 		"unsafe_path",
 		"quarantine_io_failed",
 		"nested_source",
+		"vault_api_no_three_sides",
+		"vault_api_error",
+		"vault_api_declined",
+		"vault_api_empty_content",
 	} {
 		ResolverFailuresTotal.WithLabelValues(category).Add(0)
+	}
+	for _, cause := range AvailableQuarantineCauses {
+		QuarantineCauseTotal.WithLabelValues(string(cause)).Add(0)
 	}
 	for _, op := range []string{"get", "put", "delete"} {
 		for _, result := range []string{"200", "400", "409", "500"} {
@@ -232,10 +287,16 @@ type Metrics interface {
 	IncConflictPaths(n int)
 	// IncResolverFailure records a conflict-resolver failure by category.
 	// category must be one of: yaml_parse_failed, no_frontmatter, write_failed,
-	// git_add_failed, unsafe_path, quarantine_io_failed, nested_source.
+	// git_add_failed, unsafe_path, quarantine_io_failed, nested_source,
+	// vault_api_no_three_sides, vault_api_error, vault_api_declined,
+	// vault_api_empty_content.
 	IncResolverFailure(category string)
 	// IncQuarantinedFiles records a single file moved into _conflicts/ during pull.
 	IncQuarantinedFiles()
+	// IncQuarantineCause records a single file quarantined during pull, labelled
+	// by the resolver branch that caused the quarantine. cause must be one of the
+	// bounded AvailableQuarantineCauses values.
+	IncQuarantineCause(cause QuarantineCause)
 	// SetQuarantinedBacklog records the number of regular files currently under
 	// _conflicts/ in the served repo. It is a setter rather than an increment so a
 	// deletion reduces the reported backlog.
@@ -304,6 +365,10 @@ func (p *prometheusMetrics) IncResolverFailure(category string) {
 
 func (p *prometheusMetrics) IncQuarantinedFiles() {
 	QuarantinedFilesTotal.Inc()
+}
+
+func (p *prometheusMetrics) IncQuarantineCause(cause QuarantineCause) {
+	QuarantineCauseTotal.WithLabelValues(string(cause)).Inc()
 }
 
 func (p *prometheusMetrics) SetQuarantinedBacklog(count int) {

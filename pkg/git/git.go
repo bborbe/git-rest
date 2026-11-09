@@ -1825,6 +1825,7 @@ func (g *git) resolveEachPath(
 			resolved = append(resolved, path)
 			continue
 		}
+		cause := QuarantineCauseFromError(resolveErr)
 		slog.WarnContext(
 			ctx,
 			"git-rest: resolver failed on path; attempting quarantine",
@@ -1833,7 +1834,7 @@ func (g *git) resolveEachPath(
 			"err",
 			resolveErr.Error(),
 		)
-		if g.quarantineOne(ctx, path, ts) {
+		if g.quarantineOne(ctx, path, ts, cause) {
 			quarantined = append(quarantined, path)
 		}
 	}
@@ -1942,7 +1943,12 @@ func (g *git) ensureConflictsDir(ctx context.Context) error {
 // nolint:funlen // 6 sequential IO steps (read → rm → mkdir → write → add → checkout),
 // each with its own metric + slog + early return. Linear flow is clearer than
 // extracting per-step helpers that would all share the same signature.
-func (g *git) quarantineOne(ctx context.Context, path string, unixSeconds int64) bool {
+func (g *git) quarantineOne(
+	ctx context.Context,
+	path string,
+	unixSeconds int64,
+	cause metrics.QuarantineCause,
+) bool {
 	// Guard the blocking os.* syscalls (ReadFile, MkdirAll, WriteFile) — these
 	// cannot be interrupted by exec.CommandContext, so we check ctx upfront.
 	select {
@@ -2035,6 +2041,7 @@ func (g *git) quarantineOne(ctx context.Context, path string, unixSeconds int64)
 	}
 	slog.InfoContext(ctx, "git-rest: restored canonical after quarantine", "path", path)
 	g.metrics.IncQuarantinedFiles()
+	g.metrics.IncQuarantineCause(cause)
 	slog.WarnContext(
 		ctx,
 		"git-rest: quarantined conflicted file",

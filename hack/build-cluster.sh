@@ -147,7 +147,7 @@ sed \
 	-e "s|__REF__|${REF}|g" \
 	-e "s|__TAG__|${TAG}|g" \
 	-e "s|__DOCKERFILE__|${DOCKERFILE}|g" \
-	-e "s|__CONTEXT__|${BUILD_CONTEXT}|g" \
+	-e "s|__CONTEXT_PATH__|${BUILD_CONTEXT}|g" \
 	-e "s|__IMAGE__|${IMAGE}|g" \
 	-e "s|__PUSH__|${PUSH}|g" \
 	-e "s|__PUSH_SECRET__|${PUSH_SECRET}|g" \

@@ -31,7 +31,10 @@ import (
 	"sync"
 	"testing"
 
+	liberrors "github.com/bborbe/errors"
 	libtime "github.com/bborbe/time"
+
+	pkgmetrics "github.com/bborbe/git-rest/pkg/metrics"
 )
 
 // unsafeTestMetrics is a minimal metrics.Metrics implementation used by the
@@ -51,6 +54,7 @@ type unsafeTestMetrics struct {
 	mu                      sync.Mutex
 	incResolverFailureCalls []string
 	incMergeOutcomeCalls    []string
+	incQuarantineCauseCalls []pkgmetrics.QuarantineCause
 }
 
 func (u *unsafeTestMetrics) ObserveGitOperation(_ string, _ float64) {}
@@ -76,6 +80,24 @@ func (u *unsafeTestMetrics) IncResolverFailure(category string) {
 }
 
 func (u *unsafeTestMetrics) IncQuarantinedFiles() {}
+
+func (u *unsafeTestMetrics) IncQuarantineCause(cause pkgmetrics.QuarantineCause) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	u.incQuarantineCauseCalls = append(u.incQuarantineCauseCalls, cause)
+}
+
+func (u *unsafeTestMetrics) quarantineCauseCount() int {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	return len(u.incQuarantineCauseCalls)
+}
+
+func (u *unsafeTestMetrics) quarantineCauseAt(i int) pkgmetrics.QuarantineCause {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	return u.incQuarantineCauseCalls[i]
+}
 
 func (u *unsafeTestMetrics) SetQuarantinedBacklog(_ int) {}
 
@@ -691,7 +713,7 @@ func TestQuarantineOneGitRmFails(t *testing.T) {
 		t.Fatal("New did not return *git")
 	}
 
-	got := repo.quarantineOne(ctx, "untracked.md", 1700000000)
+	got := repo.quarantineOne(ctx, "untracked.md", 1700000000, pkgmetrics.QuarantineCauseOther)
 	if got {
 		t.Fatal("quarantineOne must return false when git rm fails")
 	}
@@ -721,12 +743,101 @@ func TestQuarantineOneSourceMissing(t *testing.T) {
 	}
 
 	// Source file deliberately absent — os.ReadFile inside quarantineOne fails.
-	got := repo.quarantineOne(ctx, "missing.md", 1700000000)
+	got := repo.quarantineOne(ctx, "missing.md", 1700000000, pkgmetrics.QuarantineCauseOther)
 	if got {
 		t.Fatal("quarantineOne must return false when source file is missing")
 	}
 	if c := metrics.quarantineIOCount(); c != 1 {
 		t.Fatalf("quarantine_io_failed must increment exactly once, got %d", c)
+	}
+}
+
+// TestQuarantineOneRecordsCause verifies that a successful quarantine records
+// the passed cause on the companion counter, once, alongside IncQuarantinedFiles.
+func TestQuarantineOneRecordsCause(t *testing.T) {
+	ctx := context.Background()
+	workDir := setupMidMergeFixture(t)
+
+	metricsRecorder := &unsafeTestMetrics{}
+	repo, ok := New(
+		workDir, metricsRecorder, libtime.NewCurrentDateTime(), "", fakeResolver{},
+	).(*git)
+	if !ok {
+		t.Fatal("New did not return *git")
+	}
+
+	if !repo.quarantineOne(ctx, "a.md", 1700000000, pkgmetrics.QuarantineCauseBreak) {
+		t.Fatal("quarantineOne must succeed on a genuine mid-merge conflict")
+	}
+	if got := metricsRecorder.quarantineCauseCount(); got != 1 {
+		t.Fatalf("IncQuarantineCause must be called exactly once, got %d", got)
+	}
+	if got := metricsRecorder.quarantineCauseAt(0); got != pkgmetrics.QuarantineCauseBreak {
+		t.Fatalf("quarantine cause = %q, want %q", got, pkgmetrics.QuarantineCauseBreak)
+	}
+}
+
+// errResolver returns a fixed error from Resolve, so resolveEachPath can be
+// driven into the quarantine branch with a tagged or untagged error.
+type errResolver struct{ err error }
+
+func (r errResolver) Resolve(_ context.Context, _ []string) error { return r.err }
+
+// TestResolveEachPathReadsQuarantineCause verifies that resolveEachPath reads
+// the cause tag from a resolver error before quarantining: a tagged error yields
+// its cause, an untagged error yields "other".
+func TestResolveEachPathReadsQuarantineCause(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want pkgmetrics.QuarantineCause
+	}{
+		{
+			name: "tagged break error",
+			err: withQuarantineCause(
+				liberrors.New(context.Background(), "fallback failed"),
+				pkgmetrics.QuarantineCauseBreak,
+			),
+			want: pkgmetrics.QuarantineCauseBreak,
+		},
+		{
+			name: "untagged error",
+			err:  stderrors.New("fallback failed"),
+			want: pkgmetrics.QuarantineCauseOther,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			workDir := setupMidMergeFixture(t)
+
+			metricsRecorder := &unsafeTestMetrics{}
+			repo, ok := New(
+				workDir,
+				metricsRecorder,
+				libtime.NewCurrentDateTime(),
+				"",
+				errResolver{err: tc.err},
+			).(*git)
+			if !ok {
+				t.Fatal("New did not return *git")
+			}
+
+			resolved, quarantined := repo.resolveEachPath(ctx, []string{"a.md"}, nil, 1700000000)
+			if len(resolved) != 0 || len(quarantined) != 1 {
+				t.Fatalf(
+					"resolveEachPath = (resolved=%v, quarantined=%v), want one quarantined path",
+					resolved,
+					quarantined,
+				)
+			}
+			if got := metricsRecorder.quarantineCauseCount(); got != 1 {
+				t.Fatalf("IncQuarantineCause must be called exactly once, got %d", got)
+			}
+			if got := metricsRecorder.quarantineCauseAt(0); got != tc.want {
+				t.Fatalf("quarantine cause = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }
 

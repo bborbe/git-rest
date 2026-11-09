@@ -177,6 +177,56 @@ var _ = Describe("ResolverFailuresTotal nested_source label", func() {
 	})
 })
 
+var _ = Describe("ResolverFailuresTotal vault-api labels", func() {
+	It("pre-initialises every vault-api category at 0", func() {
+		for _, category := range []string{
+			"vault_api_no_three_sides",
+			"vault_api_error",
+			"vault_api_declined",
+			"vault_api_empty_content",
+		} {
+			Expect(gatherCounterVecLabelPresent(
+				"git_rest_resolver_failures_total", "category", category,
+			)).To(BeTrue(), "category="+category+" must be registered at init() time")
+			Expect(gatherCounterVecLabelValue(
+				"git_rest_resolver_failures_total", "category", category,
+			)).To(Equal(0.0))
+		}
+	})
+})
+
+var _ = Describe("QuarantineCauseTotal", func() {
+	It("pre-initialises every cause at 0", func() {
+		for _, cause := range metrics.AvailableQuarantineCauses {
+			Expect(gatherCounterVecLabelPresent(
+				"git_rest_quarantine_cause_total", "cause", string(cause),
+			)).To(BeTrue(), "cause="+string(cause)+" must be registered at init() time")
+			Expect(gatherCounterVecLabelValue(
+				"git_rest_quarantine_cause_total", "cause", string(cause),
+			)).To(Equal(0.0))
+		}
+	})
+
+	It("increments exactly the named cause and no other", func() {
+		before := gatherCounterVecLabelValue(
+			"git_rest_quarantine_cause_total", "cause", string(metrics.QuarantineCauseBreak),
+		)
+		beforeOther := gatherCounterVecLabelValue(
+			"git_rest_quarantine_cause_total", "cause", string(metrics.QuarantineCauseDeclined),
+		)
+		m := metrics.NewMetrics()
+		m.IncQuarantineCause(metrics.QuarantineCauseBreak)
+		after := gatherCounterVecLabelValue(
+			"git_rest_quarantine_cause_total", "cause", string(metrics.QuarantineCauseBreak),
+		)
+		afterOther := gatherCounterVecLabelValue(
+			"git_rest_quarantine_cause_total", "cause", string(metrics.QuarantineCauseDeclined),
+		)
+		Expect(after - before).To(Equal(1.0))
+		Expect(afterOther - beforeOther).To(Equal(0.0))
+	})
+})
+
 var _ = Describe("RefRequestsTotal", func() {
 	It("exposes all thirteen op/result series at 0 before any ref request", func() {
 		mfs, err := prometheus.DefaultGatherer.Gather()
