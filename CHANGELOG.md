@@ -8,7 +8,7 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 * MINOR version when you add functionality in a backwards-compatible manner, and
 * PATCH version when you make backwards-compatible bug fixes.
 
-## Unreleased
+## v0.42.0
 
 - feat: Add `git_rest_quarantine_cause_total{cause}` and split `git_rest_resolver_failures_total{category="vault_api_failed"}` into distinct categories, so a deliberate merge decline is separable from a resolver break from the metrics alone.
 
