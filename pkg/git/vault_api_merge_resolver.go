@@ -22,8 +22,49 @@ import (
 // resolve — an unreachable service, a refused request, or a returned Reason.
 // Every such case falls through to the fallback resolver, so this counter
 // measures how often the automatic path declined rather than how often the
-// merge failed outright.
-const resolverFailureVaultAPI = "vault_api_failed"
+// merge failed outright. The four branches are split into distinct categories
+// so a deliberate decline is separable from a resolver break.
+const (
+	resolverFailureVaultAPINoSides      = "vault_api_no_three_sides"
+	resolverFailureVaultAPIError        = "vault_api_error"
+	resolverFailureVaultAPIDeclined     = "vault_api_declined"
+	resolverFailureVaultAPIEmptyContent = "vault_api_empty_content"
+)
+
+// quarantineCauseError tags a resolver error with the branch that produced it,
+// so the quarantine path can label the quarantine with its cause. It unwraps to
+// the underlying error, so existing error handling is unchanged.
+type quarantineCauseError struct {
+	cause metrics.QuarantineCause
+	err   error
+}
+
+func (e *quarantineCauseError) Error() string { return e.err.Error() }
+
+func (e *quarantineCauseError) Unwrap() error { return e.err }
+
+func (e *quarantineCauseError) QuarantineCause() metrics.QuarantineCause { return e.cause }
+
+// withQuarantineCause tags err with cause. A nil err is returned unchanged, so
+// a fallback that resolved the file is never wrapped.
+func withQuarantineCause(err error, cause metrics.QuarantineCause) error {
+	if err == nil {
+		return nil
+	}
+	return &quarantineCauseError{cause: cause, err: err}
+}
+
+// QuarantineCauseFromError returns the cause tagged on err by a resolver, or
+// metrics.QuarantineCauseOther when err carries no tag. It is the single place
+// the cause is read back, and it must traverse the errors.Wrapf that Resolve
+// applies per path.
+func QuarantineCauseFromError(err error) metrics.QuarantineCause {
+	var qce *quarantineCauseError
+	if errors.As(err, &qce) {
+		return qce.QuarantineCause()
+	}
+	return metrics.QuarantineCauseOther
+}
 
 // Side is one side of a diverged file as vault-api's merge endpoint expects it:
 // the file's content at that revision plus the revision's committer time, which
@@ -120,30 +161,39 @@ func (r *vaultAPIMergeResolver) resolveOne(ctx context.Context, path string) err
 		// No three sides means this conflict is not a modify/modify one — an
 		// add/add or delete/modify conflict has no base, and a merge of one
 		// side against nothing is not a merge. Leave it to the fallback.
-		r.metrics.IncResolverFailure(resolverFailureVaultAPI)
+		r.metrics.IncResolverFailure(resolverFailureVaultAPINoSides)
 		glog.Infof("vault-api-merge-resolver: %q has no three sides (%v), falling back", path, err)
-		return r.fallback.Resolve(ctx, []string{path})
+		return withQuarantineCause(
+			r.fallback.Resolve(ctx, []string{path}),
+			metrics.QuarantineCauseNoThreeSides,
+		)
 	}
 
 	result, err := r.client.Merge(ctx, path, base, ours, theirs)
 	if err != nil {
-		r.metrics.IncResolverFailure(resolverFailureVaultAPI)
+		r.metrics.IncResolverFailure(resolverFailureVaultAPIError)
 		glog.Warningf(
 			"vault-api-merge-resolver: %q merge request failed: %v, falling back",
 			path,
 			err,
 		)
-		return r.fallback.Resolve(ctx, []string{path})
+		return withQuarantineCause(
+			r.fallback.Resolve(ctx, []string{path}),
+			metrics.QuarantineCauseBreak,
+		)
 	}
 	if result.Result != vaultAPIMerged {
-		r.metrics.IncResolverFailure(resolverFailureVaultAPI)
+		r.metrics.IncResolverFailure(resolverFailureVaultAPIDeclined)
 		glog.Infof(
 			"vault-api-merge-resolver: %q declined (result=%q reason=%q), falling back",
 			path,
 			result.Result,
 			result.Reason,
 		)
-		return r.fallback.Resolve(ctx, []string{path})
+		return withQuarantineCause(
+			r.fallback.Resolve(ctx, []string{path}),
+			metrics.QuarantineCauseDeclined,
+		)
 	}
 
 	// vault-api returns the merged bytes rather than writing them, because this
@@ -153,12 +203,15 @@ func (r *vaultAPIMergeResolver) resolveOne(ctx context.Context, path string) err
 	// blocked). So the write is this resolver's, and the puller's merge commit
 	// picks the file up from the index.
 	if result.Content == "" {
-		r.metrics.IncResolverFailure(resolverFailureVaultAPI)
+		r.metrics.IncResolverFailure(resolverFailureVaultAPIEmptyContent)
 		glog.Warningf(
 			"vault-api-merge-resolver: %q reported merged with no content, falling back",
 			path,
 		)
-		return r.fallback.Resolve(ctx, []string{path})
+		return withQuarantineCause(
+			r.fallback.Resolve(ctx, []string{path}),
+			metrics.QuarantineCauseEmptyContent,
+		)
 	}
 	if err := r.writeMerged(path, result.Content); err != nil {
 		r.metrics.IncResolverFailure(resolverFailureWrite)

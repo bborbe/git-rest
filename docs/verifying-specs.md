@@ -483,7 +483,7 @@ git -C "$CLONE" pull --ff-only
 kubectlnukedev -n "$NS" exec "$POD" -- git -C /data log -1 --format=%s
 find "$CLONE/_conflicts" -type f 2>/dev/null | wc -l
 kubectlnukedev -n "$NS" exec "$POD" -- wget -qO- http://localhost:9090/metrics \
-  | grep -E '^git_rest_(body_merged_total|quarantined_backlog|resolver_failures_total\{category="vault_api_failed"\})'
+  | grep -E '^git_rest_(body_merged_total|quarantined_backlog|quarantine_cause_total)|^git_rest_resolver_failures_total\{category="vault_api_'
 ```
 
 The clone's push must land **immediately after the write and before the pod's next pull tick** (the pull interval is `30s`), so that when the pod's pull flushes the pending write the commit is made on the old base and its push is rejected as non-fast-forward; the pull then merges the diverged remote and conflicts. If the pod's flush reaches the remote first, the pod's pull is a plain fast-forward — no merge, no conflict — and the probe must be re-run with the clone's push issued inside the same window. The refresh in step 3 matters: a stale clone makes the `_conflicts/` zero-delta assertion pass vacuously.
@@ -495,7 +495,7 @@ Assertions:
 - **No quarantine:** after `git -C "$CLONE" pull --ff-only`, `find "$CLONE/_conflicts" -type f 2>/dev/null | wc -l` shows a delta of 0 against `BEFORE_CONFLICTS`.
 - **Counted once:** `git_rest_body_merged_total` equals `BEFORE_BODY + 1`.
 - **Backlog unchanged:** `git_rest_quarantined_backlog` does not increase from `BEFORE_BACKLOG`.
-- **Expected fallback on rungs 2 and 3:** `git_rest_resolver_failures_total{category="vault_api_failed"}` increments on the same pull. This is the normal path — vault-api declines a body conflict by policy and the YAML fallback then succeeds — and it is not a regression. Rung 1 does not show this increment because it wires the bare YAML resolver with no vault-api URL.
+- **Expected fallback on rungs 2 and 3:** `git_rest_resolver_failures_total{category="vault_api_declined"}` increments on the same pull. This is the normal path — vault-api declines a body conflict by policy and the YAML fallback then succeeds — and it is not a regression. `git_rest_quarantine_cause_total` stays unchanged when the fallback resolves the file, because no quarantine happened. Rung 1 does not show the increment because it wires the bare YAML resolver with no vault-api URL.
 
 The follow-up task `[[git-rest Merges Body-Conflict Hunks Instead of Quarantining Them]]` owns the dev/prod probe evidence and the 24 h watch; this recipe is its replayable form. A run against a pod whose deploy gate fails is not evidence, and the recipe must be re-run after the correct release is deployed.
 
