@@ -287,6 +287,102 @@ var _ = Describe("Git", func() {
 				).To(HaveLen(2), "expected create + update commits, got: %s", string(out))
 			})
 		})
+
+		Context("rollback when staging fails", func() {
+			// holdIndexLock makes the next `git add` fail deterministically. The
+			// test process holds the file open, as in the pull lock tests above.
+			holdIndexLock := func() (*os.File, string) {
+				lockPath := filepath.Join(workDir, ".git", "index.lock")
+				holder, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
+				Expect(err).NotTo(HaveOccurred())
+				return holder, lockPath
+			}
+			releaseLock := func(holder *os.File, lockPath string) {
+				Expect(holder.Close()).To(Succeed())
+				Expect(os.Remove(lockPath)).To(Succeed())
+			}
+			expectCleanTree := func() {
+				Expect(
+					strings.TrimSpace(gitOutputStr(workDir, "status", "--porcelain")),
+				).To(BeEmpty())
+			}
+
+			It("removes a new file when git add fails, and a retry succeeds", func() {
+				holder, lockPath := holdIndexLock()
+
+				err := g.WriteFile(ctx, "ghost.txt", []byte("ghost"))
+				Expect(err).To(HaveOccurred())
+				Expect(filepath.Join(workDir, "ghost.txt")).NotTo(BeAnExistingFile())
+
+				releaseLock(holder, lockPath)
+				expectCleanTree()
+
+				Expect(g.WriteFile(ctx, "ghost.txt", []byte("ghost"))).To(Succeed())
+				got, err := g.ReadFile(ctx, "ghost.txt")
+				Expect(err).NotTo(HaveOccurred())
+				Expect(got).To(Equal([]byte("ghost")))
+			})
+
+			It("restores the original content of an existing file when git add fails", func() {
+				Expect(g.WriteFile(ctx, "original.txt", []byte("original"))).To(Succeed())
+				holder, lockPath := holdIndexLock()
+
+				err := g.WriteFile(ctx, "original.txt", []byte("changed"))
+				Expect(err).To(HaveOccurred())
+				got, readErr := os.ReadFile(filepath.Join(workDir, "original.txt"))
+				Expect(readErr).NotTo(HaveOccurred())
+				Expect(got).To(Equal([]byte("original")))
+
+				releaseLock(holder, lockPath)
+				expectCleanTree()
+			})
+
+			It("removes empty parent directories of a new nested file when git add fails", func() {
+				holder, lockPath := holdIndexLock()
+
+				err := g.WriteFile(ctx, "rollback/deep/nested.txt", []byte("nested"))
+				Expect(err).To(HaveOccurred())
+				Expect(filepath.Join(workDir, "rollback", "deep", "nested.txt")).
+					NotTo(BeAnExistingFile())
+				Expect(filepath.Join(workDir, "rollback", "deep")).NotTo(BeADirectory())
+				Expect(filepath.Join(workDir, "rollback")).NotTo(BeADirectory())
+
+				releaseLock(holder, lockPath)
+				expectCleanTree()
+			})
+		})
+
+		Context("rollback when commit fails", func() {
+			It("leaves the tree and index clean and commits only the next write", func() {
+				branch := strings.TrimSpace(
+					gitOutputStr(workDir, "rev-parse", "--abbrev-ref", "HEAD"),
+				)
+				refLockPath := filepath.Join(
+					workDir, ".git", "refs", "heads", branch+".lock",
+				)
+				// A live holder on the branch ref lock lets `git add` succeed and
+				// makes `git commit` fail when it tries to update the ref.
+				holder, err := os.OpenFile(refLockPath, os.O_CREATE|os.O_RDWR, 0o600)
+				Expect(err).NotTo(HaveOccurred())
+
+				err = g.WriteFile(ctx, "commit-ghost.txt", []byte("ghost"))
+				Expect(err).To(HaveOccurred())
+				Expect(filepath.Join(workDir, "commit-ghost.txt")).NotTo(BeAnExistingFile())
+
+				Expect(holder.Close()).To(Succeed())
+				Expect(os.Remove(refLockPath)).To(Succeed())
+
+				Expect(
+					strings.TrimSpace(gitOutputStr(workDir, "status", "--porcelain")),
+				).To(BeEmpty())
+
+				Expect(g.WriteFile(ctx, "commit-real.txt", []byte("real"))).To(Succeed())
+				shown := strings.TrimSpace(
+					gitOutputStr(workDir, "show", "--name-only", "--format=", "HEAD"),
+				)
+				Expect(shown).To(Equal("commit-real.txt"))
+			})
+		})
 	})
 
 	Context("WriteFileIfAbsent", func() {

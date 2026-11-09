@@ -788,10 +788,14 @@ func (g *git) writeFileLocked(
 		)
 	}
 
+	// Capture the on-disk state before mutating anything, so a later failure can
+	// restore it without re-reading after the failure.
+	snap := captureWriteSnapshot(fullPath, g.repoPath)
+
 	// Compare against the file on disk, NOT the index against HEAD: after the
 	// first write of a burst the index already differs from HEAD, so an
 	// index-vs-HEAD check would report "changed" for every later identical write.
-	if existing, err := os.ReadFile(fullPath); err == nil && bytes.Equal(existing, content) {
+	if snap.state == preWriteExisting && bytes.Equal(snap.content, content) {
 		slog.InfoContext(ctx, "write file: no changes to commit (content unchanged)", "path", path)
 		return nil
 	}
@@ -808,6 +812,7 @@ func (g *git) writeFileLocked(
 
 	if err := g.runCmd(ctx, g.repoPath, "add", path); err != nil {
 		g.metrics.IncGitOperationError("write_file")
+		g.rollbackWrite(ctx, path, snap, false)
 		return errors.Wrapf(ctx, err, "git add %s", path)
 	}
 
@@ -833,6 +838,7 @@ func (g *git) writeFileLocked(
 			return nil
 		}
 		g.metrics.IncGitOperationError("write_file")
+		g.rollbackWrite(ctx, path, snap, true)
 		return errors.Wrapf(ctx, err, "git commit: %s", strings.TrimSpace(string(commitOut)))
 	}
 
@@ -844,6 +850,125 @@ func (g *git) writeFileLocked(
 	}
 
 	return nil
+}
+
+// preWriteState classifies what writeFileLocked found on disk before writing.
+// It is deliberately independent of the fileExists flag, which WriteFile derives
+// from os.Stat and therefore reports false for a path whose stat failed for any
+// reason other than "does not exist".
+type preWriteState int
+
+const (
+	// preWriteUnknown means the pre-write state could not be determined, so a
+	// rollback must not touch the path at all.
+	preWriteUnknown preWriteState = iota
+	// preWriteAbsent means the path definitively did not exist before the write.
+	preWriteAbsent
+	// preWriteExisting means the path existed and its content was captured.
+	preWriteExisting
+)
+
+// writeSnapshot captures the on-disk state before a write so a failed staging or
+// commit can restore it without re-reading anything after the failure.
+type writeSnapshot struct {
+	state   preWriteState
+	content []byte   // previous content; valid only when state is preWriteExisting
+	newDirs []string // parent directories that did not exist yet, deepest first
+}
+
+// captureWriteSnapshot records the state of fullPath and the parent directories
+// that do not exist yet. It must run before the write.
+func captureWriteSnapshot(fullPath, repoPath string) writeSnapshot {
+	snap := writeSnapshot{state: preWriteUnknown}
+	if data, err := os.ReadFile(fullPath); err == nil {
+		snap.state = preWriteExisting
+		snap.content = data
+	} else if os.IsNotExist(err) {
+		snap.state = preWriteAbsent
+	}
+	snap.newDirs = missingParentDirs(fullPath, repoPath)
+	return snap
+}
+
+// missingParentDirs returns the parent directories of fullPath that do not exist
+// yet, deepest first, stopping at repoPath.
+func missingParentDirs(fullPath, repoPath string) []string {
+	var dirs []string
+	prefix := repoPath + string(filepath.Separator)
+	for dir := filepath.Dir(fullPath); dir != repoPath && strings.HasPrefix(dir, prefix); dir = filepath.Dir(dir) {
+		if _, err := os.Stat(dir); err == nil {
+			break
+		} else if !os.IsNotExist(err) {
+			break
+		}
+		dirs = append(dirs, dir)
+	}
+	return dirs
+}
+
+// removeEmptyDirs removes dirs deepest-first, stopping at the first one that is
+// not empty: its parents then contain it and must stay.
+func removeEmptyDirs(dirs []string) {
+	for _, dir := range dirs {
+		if err := os.Remove(dir); err != nil {
+			return
+		}
+	}
+}
+
+// rollbackWrite restores the working tree — and, when staged is true, the index —
+// to the state captured before the write. It is best-effort and never returns an
+// error: the caller keeps returning its original cause, so a failed rollback can
+// never mask it.
+//
+// The restore-failure branches below are deliberately uncovered by tests: the
+// write, the failing git command and the rollback all run inside one WriteFile
+// call, so a test cannot make the restore fail without an injection seam, and a
+// test-only package-level setter is forbidden by the coding guidelines. They
+// log the rollback failure at error level and leave the original error intact.
+func (g *git) rollbackWrite(ctx context.Context, path string, snap writeSnapshot, staged bool) {
+	fullPath := filepath.Join(g.repoPath, path)
+	if staged {
+		if err := g.runCmd(ctx, g.repoPath, "restore", "--staged", "--", path); err != nil {
+			slog.ErrorContext(
+				ctx,
+				"write file: unstage after failed commit",
+				"path",
+				path,
+				"error",
+				err,
+			)
+		}
+	}
+	switch snap.state {
+	case preWriteAbsent:
+		if err := os.Remove(fullPath); err != nil && !os.IsNotExist(err) {
+			slog.ErrorContext(
+				ctx,
+				"write file: remove after failed write",
+				"path",
+				path,
+				"error",
+				err,
+			)
+			return
+		}
+		removeEmptyDirs(snap.newDirs)
+	case preWriteExisting:
+		if err := os.WriteFile(fullPath, snap.content, 0600); err != nil { //nolint:gosec
+			slog.ErrorContext(
+				ctx,
+				"write file: restore after failed write",
+				"path",
+				path,
+				"error",
+				err,
+			)
+		}
+	case preWriteUnknown:
+		// The pre-write state is unknown; writing over the path could destroy a
+		// real file, so leave it exactly as it is.
+	}
 }
 
 // hasFrontmatter reports whether content starts with a `---` line and later
