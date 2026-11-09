@@ -57,6 +57,8 @@ func (n *noopMetrics) IncResolverFailure(_ string) {}
 
 func (n *noopMetrics) IncQuarantinedFiles() {}
 
+func (n *noopMetrics) IncQuarantineCause(_ metrics.QuarantineCause) {}
+
 func (n *noopMetrics) SetQuarantinedBacklog(_ int) {}
 
 func (n *noopMetrics) IncPullRescue() {}

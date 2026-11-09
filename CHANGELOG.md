@@ -8,6 +8,10 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 * MINOR version when you add functionality in a backwards-compatible manner, and
 * PATCH version when you make backwards-compatible bug fixes.
 
+## Unreleased
+
+- feat: Add `git_rest_quarantine_cause_total{cause}` and split `git_rest_resolver_failures_total{category="vault_api_failed"}` into distinct categories, so a deliberate merge decline is separable from a resolver break from the metrics alone.
+
 ## v0.41.4
 
 - test: second imageless probe. The template is still broken from `v0.41.3`, so this tag also ships without an image; the release is needed because `v0.41.3` was reviewed by a pre-v0.9.1 releaser that carried no image check. Reverted in the next commit

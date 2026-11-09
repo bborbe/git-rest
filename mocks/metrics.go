@@ -46,6 +46,11 @@ type FakeMetrics struct {
 	incPushRetryMutex       sync.RWMutex
 	incPushRetryArgsForCall []struct {
 	}
+	IncQuarantineCauseStub        func(metrics.QuarantineCause)
+	incQuarantineCauseMutex       sync.RWMutex
+	incQuarantineCauseArgsForCall []struct {
+		arg1 metrics.QuarantineCause
+	}
 	IncQuarantinedFilesStub        func()
 	incQuarantinedFilesMutex       sync.RWMutex
 	incQuarantinedFilesArgsForCall []struct {
@@ -318,6 +323,38 @@ func (fake *FakeMetrics) IncPushRetryCalls(stub func()) {
 	fake.incPushRetryMutex.Lock()
 	defer fake.incPushRetryMutex.Unlock()
 	fake.IncPushRetryStub = stub
+}
+
+func (fake *FakeMetrics) IncQuarantineCause(arg1 metrics.QuarantineCause) {
+	fake.incQuarantineCauseMutex.Lock()
+	fake.incQuarantineCauseArgsForCall = append(fake.incQuarantineCauseArgsForCall, struct {
+		arg1 metrics.QuarantineCause
+	}{arg1})
+	stub := fake.IncQuarantineCauseStub
+	fake.recordInvocation("IncQuarantineCause", []interface{}{arg1})
+	fake.incQuarantineCauseMutex.Unlock()
+	if stub != nil {
+		fake.IncQuarantineCauseStub(arg1)
+	}
+}
+
+func (fake *FakeMetrics) IncQuarantineCauseCallCount() int {
+	fake.incQuarantineCauseMutex.RLock()
+	defer fake.incQuarantineCauseMutex.RUnlock()
+	return len(fake.incQuarantineCauseArgsForCall)
+}
+
+func (fake *FakeMetrics) IncQuarantineCauseCalls(stub func(metrics.QuarantineCause)) {
+	fake.incQuarantineCauseMutex.Lock()
+	defer fake.incQuarantineCauseMutex.Unlock()
+	fake.IncQuarantineCauseStub = stub
+}
+
+func (fake *FakeMetrics) IncQuarantineCauseArgsForCall(i int) metrics.QuarantineCause {
+	fake.incQuarantineCauseMutex.RLock()
+	defer fake.incQuarantineCauseMutex.RUnlock()
+	argsForCall := fake.incQuarantineCauseArgsForCall[i]
+	return argsForCall.arg1
 }
 
 func (fake *FakeMetrics) IncQuarantinedFiles() {

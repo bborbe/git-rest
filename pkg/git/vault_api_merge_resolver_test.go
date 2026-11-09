@@ -17,6 +17,7 @@ import (
 
 	"github.com/bborbe/git-rest/mocks"
 	"github.com/bborbe/git-rest/pkg/git"
+	"github.com/bborbe/git-rest/pkg/metrics"
 )
 
 // setupAddAddConflictRepo creates a repo whose file exists on both branches but
@@ -74,13 +75,14 @@ func unmergedStages(workDir, path string) string {
 
 var _ = Describe("VaultAPIMergeResolver", func() {
 	var (
-		ctx      context.Context
-		workDir  string
-		relPath  string
-		cleanup  func()
-		client   *mocks.FakeVaultAPIMergeClient
-		fallback *mocks.FakeConflictResolver
-		resolver git.ConflictResolver
+		ctx         context.Context
+		workDir     string
+		relPath     string
+		cleanup     func()
+		client      *mocks.FakeVaultAPIMergeClient
+		fallback    *mocks.FakeConflictResolver
+		fakeMetrics *mocks.FakeMetrics
+		resolver    git.ConflictResolver
 	)
 
 	BeforeEach(func() {
@@ -91,7 +93,8 @@ var _ = Describe("VaultAPIMergeResolver", func() {
 		)
 		client = &mocks.FakeVaultAPIMergeClient{}
 		fallback = &mocks.FakeConflictResolver{}
-		resolver = git.NewVaultAPIMergeResolver(workDir, client, fallback, &mocks.FakeMetrics{})
+		fakeMetrics = &mocks.FakeMetrics{}
+		resolver = git.NewVaultAPIMergeResolver(workDir, client, fallback, fakeMetrics)
 	})
 
 	AfterEach(func() {
@@ -134,11 +137,14 @@ var _ = Describe("VaultAPIMergeResolver", func() {
 		// would leave git's marker file in the index while the log claimed a
 		// clean merge.
 		client.MergeReturns(git.VaultAPIMergeResult{Result: "merged"}, nil)
+		fallback.ResolveReturns(stderrors.New("fallback failed"))
 
-		Expect(resolver.Resolve(ctx, []string{relPath})).To(Succeed())
+		err := resolver.Resolve(ctx, []string{relPath})
 
 		Expect(fallback.ResolveCallCount()).To(Equal(1))
 		Expect(unmergedStages(workDir, relPath)).NotTo(BeEmpty())
+		Expect(fakeMetrics.IncResolverFailureArgsForCall(0)).To(Equal("vault_api_empty_content"))
+		Expect(git.QuarantineCauseFromError(err)).To(Equal(metrics.QuarantineCauseEmptyContent))
 	})
 
 	It("falls back when vault-api quarantines the file", func() {
@@ -146,20 +152,27 @@ var _ = Describe("VaultAPIMergeResolver", func() {
 			git.VaultAPIMergeResult{Result: "quarantined", Reason: "body_conflict"}, nil,
 		)
 
+		// The fallback resolves the file, so Resolve returns nil and there is no
+		// tagged error to read the cause from. The category still records the
+		// deliberate decline.
 		Expect(resolver.Resolve(ctx, []string{relPath})).To(Succeed())
 
 		Expect(client.MergeCallCount()).To(Equal(1))
 		Expect(fallback.ResolveCallCount()).To(Equal(1))
 		_, paths := fallback.ResolveArgsForCall(0)
 		Expect(paths).To(Equal([]string{relPath}))
+		Expect(fakeMetrics.IncResolverFailureArgsForCall(0)).To(Equal("vault_api_declined"))
 	})
 
 	It("falls back when vault-api is unreachable", func() {
 		client.MergeReturns(git.VaultAPIMergeResult{}, stderrors.New("connection refused"))
+		fallback.ResolveReturns(stderrors.New("fallback failed"))
 
-		Expect(resolver.Resolve(ctx, []string{relPath})).To(Succeed())
+		err := resolver.Resolve(ctx, []string{relPath})
 
 		Expect(fallback.ResolveCallCount()).To(Equal(1))
+		Expect(fakeMetrics.IncResolverFailureArgsForCall(0)).To(Equal("vault_api_error"))
+		Expect(git.QuarantineCauseFromError(err)).To(Equal(metrics.QuarantineCauseBreak))
 	})
 
 	It("falls back without posting when the conflict has no base stage", func() {
@@ -168,13 +181,17 @@ var _ = Describe("VaultAPIMergeResolver", func() {
 		addDir, addPath, cleanupAddAdd := setupAddAddConflictRepo()
 		defer cleanupAddAdd()
 		addResolver := git.NewVaultAPIMergeResolver(
-			addDir, client, fallback, &mocks.FakeMetrics{},
+			addDir, client, fallback, fakeMetrics,
 		)
 
-		Expect(addResolver.Resolve(ctx, []string{addPath})).To(Succeed())
+		fallback.ResolveReturns(stderrors.New("fallback failed"))
+
+		err := addResolver.Resolve(ctx, []string{addPath})
 
 		Expect(client.MergeCallCount()).To(Equal(0))
 		Expect(fallback.ResolveCallCount()).To(Equal(1))
+		Expect(fakeMetrics.IncResolverFailureArgsForCall(0)).To(Equal("vault_api_no_three_sides"))
+		Expect(git.QuarantineCauseFromError(err)).To(Equal(metrics.QuarantineCauseNoThreeSides))
 	})
 
 	It("keeps resolving the remaining paths after one falls back", func() {
