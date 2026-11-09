@@ -8,6 +8,10 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 * MINOR version when you add functionality in a backwards-compatible manner, and
 * PATCH version when you make backwards-compatible bug fixes.
 
+## Unreleased
+
+- test: reintroduce the `__CONTEXT__` token in `hack/build-job.yaml` so this tag ships without an image. Deliberate probe: it reproduces the exact failure of `v0.41.0`/`v0.41.1` so the releaser's image check can be observed reporting `image_expected: true` with `image_exists: false`. Reverted in the next commit
+
 ## v0.41.2
 
 - fix: Roll back a file write when staging or committing fails, restoring the previous content or removing the new file and its empty parent directories, and unstaging a failed commit's path, so a failed write leaves the working tree and index untouched and a retried create is no longer answered as already existing
