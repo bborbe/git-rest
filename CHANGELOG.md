@@ -8,7 +8,7 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 * MINOR version when you add functionality in a backwards-compatible manner, and
 * PATCH version when you make backwards-compatible bug fixes.
 
-## Unreleased
+## v0.42.1
 
 - fix: restore `__CONTEXT_PATH__` in `hack/build-job.yaml` and teach `hack/build-cluster.sh` the same token, ending the imageless-release probe. `v0.41.3`, `v0.41.4` and `v0.42.0` were cut with the token deliberately broken so the releaser's image check had a release with no image to report. The script half is a separate defect the probe exposed: since the v0.41.2 rename `build-cluster.sh` still substituted only `__CONTEXT__`, so `make build BUILD_TARGET=<cluster>` rendered a Job with `__CONTEXT_PATH__` surviving
 
