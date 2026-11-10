@@ -214,6 +214,8 @@ Claim refs are documented in the [API reference](api.md#claim-refs). One counter
 |--------|---------|
 | `git_rest_ref_requests_total` | Counter over claim-ref requests, labelled `op` (`get`, `put`, `delete`) and `result` (the HTTP status code). The common op/result pairs are pre-initialised to zero at process start. |
 
+Every vault with `alerts.enabled=true` also gets `VaultObsidian<Realm>BulkRefDelete`: `sum by (kubernetes_pod_name) (increase(git_rest_ref_requests_total{app="vault-obsidian-<name>",op="delete",result="200"}[5m])) > 100` for `2m`, severity `warning`. Measured baseline on `vault-obsidian-openclaw` over the 24 h ending 2026-10-26T19:45Z (289 five-minute datapoints): median 8, p95 47, max 81, zero above 100. The 2026-10-26 mass clear read 180 and 224. Only successful deletes count, so a failed attempt never fires it.
+
 ### Quarantine backlog
 
 Quarantined files accumulate under `_conflicts/` in the served repo until an operator drains them. Two series make that visible:
