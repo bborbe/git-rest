@@ -70,5 +70,22 @@ spec:
     severity: warning
     namespace: {{ $.Release.Namespace }}
   name: VaultObsidian{{ $camel }}QuarantineBacklog
+---
+apiVersion: monitoring.benjamin-borbe.de/v1
+kind: Alert
+metadata:
+  name: '{{ $name }}-bulk-ref-delete-warning'
+  namespace: {{ $.Release.Namespace }}
+spec:
+  annotations:
+    summary: {{ $name }} git-rest is deleting claim refs in bulk
+    description: 'git-rest in {{ $name }} has deleted more than 100 claim refs in 5min — normal traffic peaks near 80 per 5min. A mass deletion clears redrive streak or job-claim state without a per-task audit trail, so check which executor is calling /api/v1/refs and why.'
+  expression: |-
+    sum by (kubernetes_pod_name) (increase(git_rest_ref_requests_total{app="{{ $name }}",op="delete",result="200"}[5m])) > 100
+  for: 2m
+  labels:
+    severity: warning
+    namespace: {{ $.Release.Namespace }}
+  name: VaultObsidian{{ $camel }}BulkRefDelete
 {{- end }}
 {{- end }}

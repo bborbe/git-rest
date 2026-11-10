@@ -12,6 +12,14 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 
 - feat: `make build` resolves `BUILD_TARGET` from a bounded sun probe - sun when reachable, local docker as the fallback. An explicit `BUILD_TARGET` always wins, and the decision prints at parse time so it is visible under `make -n`
 
+## v0.43.1
+
+- chore: update github.com/bborbe/http to v1.26.33, github.com/bborbe/log to v1.7.8, github.com/bborbe/time to v1.27.26
+
+## v0.43.0
+
+- feat: Add a per-vault `VaultObsidian<Realm>BulkRefDelete` alert (`-bulk-ref-delete-warning`) — `sum by (kubernetes_pod_name) (increase(git_rest_ref_requests_total{app="vault-obsidian-<name>",op="delete",result="200"}[5m])) > 100` for `2m`, severity `warning`. Normal traffic peaks near 80 successful deletes per 5 min; the threshold fires on the 2026-10-26 openclaw mass clear (180 and 224) and on nothing else in a full day of measured baseline. Counts only successful deletes, so a failed attempt never fires it.
+
 ## v0.42.1
 
 - fix: restore `__CONTEXT_PATH__` in `hack/build-job.yaml` and teach `hack/build-cluster.sh` the same token, ending the imageless-release probe. `v0.41.3`, `v0.41.4` and `v0.42.0` were cut with the token deliberately broken so the releaser's image check had a release with no image to report. The script half is a separate defect the probe exposed: since the v0.41.2 rename `build-cluster.sh` still substituted only `__CONTEXT__`, so `make build BUILD_TARGET=<cluster>` rendered a Job with `__CONTEXT_PATH__` surviving
