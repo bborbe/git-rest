@@ -8,6 +8,10 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 * MINOR version when you add functionality in a backwards-compatible manner, and
 * PATCH version when you make backwards-compatible bug fixes.
 
+## Unreleased
+
+- chore: update github.com/bborbe/http to v1.26.33, github.com/bborbe/log to v1.7.8, github.com/bborbe/time to v1.27.26
+
 ## v0.43.0
 
 - feat: Add a per-vault `VaultObsidian<Realm>BulkRefDelete` alert (`-bulk-ref-delete-warning`) — `sum by (kubernetes_pod_name) (increase(git_rest_ref_requests_total{app="vault-obsidian-<name>",op="delete",result="200"}[5m])) > 100` for `2m`, severity `warning`. Normal traffic peaks near 80 successful deletes per 5 min; the threshold fires on the 2026-10-26 openclaw mass clear (180 and 224) and on nothing else in a full day of measured baseline. Counts only successful deletes, so a failed attempt never fires it.
