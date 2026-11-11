@@ -1,5 +1,5 @@
 ---
-status: prompted
+status: completed
 tags:
     - dark-factory
     - spec
@@ -7,6 +7,8 @@ tags:
 approved: "2026-11-09T10:56:10Z"
 generating: "2026-11-09T10:56:11Z"
 prompted: "2026-11-11T15:47:10Z"
+verifying: "2026-11-11T16:29:24Z"
+completed: "2026-11-11T16:29:31Z"
 branch: dark-factory/batch-claim-ref-commit-reads
 ---
 
