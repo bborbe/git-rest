@@ -8,7 +8,7 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 * MINOR version when you add functionality in a backwards-compatible manner, and
 * PATCH version when you make backwards-compatible bug fixes.
 
-## Unreleased
+## v0.44.1
 
 - fix: Read claim ref commit messages in one batched `git cat-file --batch` invocation instead of one `git cat-file -p` process per matching ref. A listing's git process count is now constant, so the largest claim prefix answers inside the caller's deadline again and success records that already exist are no longer re-driven.
 - perf: Read every claim ref commit message in one `git cat-file --batch` invocation instead of one `git cat-file -p` per matching ref, so a claim ref listing's git process count stays constant as a prefix grows; the live path falls back to per-sha reads when the batch fails, and the mirror path still returns `served=false`
