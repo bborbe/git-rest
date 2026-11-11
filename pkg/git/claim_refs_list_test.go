@@ -56,6 +56,16 @@ func newClaimListFake(refs []git.RemoteRef) *mocks.FakeClaimOrigin {
 	fake.ReadCommitMessageStub = func(_ context.Context, sha string) ([]byte, error) {
 		return claimMessages[sha], nil
 	}
+	fake.ReadCommitMessagesStub = func(
+		_ context.Context,
+		shas []string,
+	) (map[string][]byte, error) {
+		messages := make(map[string][]byte, len(shas))
+		for _, sha := range shas {
+			messages[sha] = claimMessages[sha]
+		}
+		return messages, nil
+	}
 	return fake
 }
 
@@ -80,6 +90,20 @@ func goldenClaimFixture() *mocks.FakeClaimOrigin {
 			return []byte("not json"), nil
 		}
 		return claimMessages[sha], nil
+	}
+	fake.ReadCommitMessagesStub = func(
+		_ context.Context,
+		shas []string,
+	) (map[string][]byte, error) {
+		messages := make(map[string][]byte, len(shas))
+		for _, sha := range shas {
+			if sha == claimShaB {
+				messages[sha] = []byte("not json")
+				continue
+			}
+			messages[sha] = claimMessages[sha]
+		}
+		return messages, nil
 	}
 	return fake
 }
@@ -272,6 +296,97 @@ func testClaimListNoMatch(t *testing.T) {
 	if fake.FetchCommitsCallCount() != 0 {
 		t.Fatalf("expected no fetch, got %d", fake.FetchCommitsCallCount())
 	}
+	if fake.ReadCommitMessagesCallCount() != 0 {
+		t.Fatalf(
+			"expected no batched message read, got %d",
+			fake.ReadCommitMessagesCallCount(),
+		)
+	}
+}
+
+// TestClaimRefBatchFallback proves a failed batched message read on the live
+// path degrades to one per-sha read and still returns the complete listing.
+func TestClaimRefBatchFallback(t *testing.T) {
+	refs := []git.RemoteRef{
+		{SHA: claimShaA, Ref: "refs/claims/a"},
+		{SHA: claimShaB, Ref: "refs/claims/b"},
+		{SHA: claimShaC, Ref: "refs/claims/c"},
+	}
+	fake := newClaimListFake(refs)
+	fake.ReadCommitMessagesStub = func(
+		_ context.Context,
+		_ []string,
+	) (map[string][]byte, error) {
+		return nil, errors.New("batch message read failed")
+	}
+	g := git.NewGitWithClaimOrigin(fake)
+	claims, err := g.ListClaimRefs(context.Background(), "claims/")
+	if err != nil {
+		t.Fatalf("ListClaimRefs: %v", err)
+	}
+	if got := fake.ReadCommitMessagesCallCount(); got != 1 {
+		t.Fatalf("expected one batched message read, got %d", got)
+	}
+	if got := fake.ReadCommitMessageCallCount(); got != len(refs) {
+		t.Fatalf("expected %d per-sha reads, got %d", len(refs), got)
+	}
+	if len(claims) != len(refs) {
+		t.Fatalf("expected %d claims, got %d: %+v", len(refs), len(claims), claims)
+	}
+	for _, ref := range refs {
+		found := false
+		for _, claim := range claims {
+			if claim.Ref == ref.Ref && claim.SHA == ref.SHA {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("ref %s missing from the fallback listing: %+v", ref.Ref, claims)
+		}
+	}
+}
+
+// TestClaimRefBatchCancellation proves a cancelled context aborts with a nil
+// result and a wrapped context.Canceled, both before and during the listing.
+func TestClaimRefBatchCancellation(t *testing.T) {
+	t.Run("before the listing starts", func(t *testing.T) {
+		fake := newClaimListFake(twoClaimRefs())
+		g := git.NewGitWithClaimOrigin(fake)
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		claims, err := g.ListClaimRefs(ctx, "claims/")
+		if claims != nil {
+			t.Fatalf("expected a nil result, got %+v", claims)
+		}
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("expected context.Canceled, got %v", err)
+		}
+	})
+
+	t.Run("mid-listing", func(t *testing.T) {
+		refs := twoClaimRefs()
+		fake := newClaimListFake(refs)
+		ctx, cancel := context.WithCancel(context.Background())
+		fake.ReadCommitMessagesStub = func(
+			_ context.Context,
+			shas []string,
+		) (map[string][]byte, error) {
+			cancel()
+			messages := make(map[string][]byte, len(shas))
+			for _, sha := range shas {
+				messages[sha] = claimMessages[sha]
+			}
+			return messages, nil
+		}
+		g := git.NewGitWithClaimOrigin(fake)
+		claims, err := g.ListClaimRefs(ctx, "claims/")
+		if claims != nil {
+			t.Fatalf("expected a nil result, got %+v", claims)
+		}
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("expected context.Canceled, got %v", err)
+		}
+	})
 }
 
 func assertOneClaimWarning(t *testing.T, logs string) {

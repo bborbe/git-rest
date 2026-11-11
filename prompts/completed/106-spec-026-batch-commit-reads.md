@@ -1,8 +1,13 @@
 ---
-status: approved
+status: completed
 spec: [026-batch-claim-ref-commit-reads]
+summary: Batched claim-ref commit-message reads into one git cat-file --batch per listing on both live and mirror paths, preserving the live per-sha fallback and mirror served=false fallback, with process-count, fallback, cancellation, and parser tests plus a regenerated mock and CHANGELOG entry.
+execution_id: 198dced9-6730-5c5f-96c5-3b4df9ebed9a-exec-106-spec-026-batch-commit-reads
+dark-factory-version: dev
 created: "2026-11-11T15:36:03Z"
 queued: "2026-11-11T15:57:25Z"
+started: "2026-11-11T16:13:05Z"
+completed: "2026-11-11T16:23:45Z"
 branch: dark-factory/batch-claim-ref-commit-reads
 ---
 

@@ -49,6 +49,20 @@ type FakeClaimOrigin struct {
 		result1 []byte
 		result2 error
 	}
+	ReadCommitMessagesStub        func(context.Context, []string) (map[string][]byte, error)
+	readCommitMessagesMutex       sync.RWMutex
+	readCommitMessagesArgsForCall []struct {
+		arg1 context.Context
+		arg2 []string
+	}
+	readCommitMessagesReturns struct {
+		result1 map[string][]byte
+		result2 error
+	}
+	readCommitMessagesReturnsOnCall map[int]struct {
+		result1 map[string][]byte
+		result2 error
+	}
 	invocations      map[string][][]interface{}
 	invocationsMutex sync.RWMutex
 }
@@ -246,6 +260,76 @@ func (fake *FakeClaimOrigin) ReadCommitMessageReturnsOnCall(i int, result1 []byt
 	}
 	fake.readCommitMessageReturnsOnCall[i] = struct {
 		result1 []byte
+		result2 error
+	}{result1, result2}
+}
+
+func (fake *FakeClaimOrigin) ReadCommitMessages(arg1 context.Context, arg2 []string) (map[string][]byte, error) {
+	var arg2Copy []string
+	if arg2 != nil {
+		arg2Copy = make([]string, len(arg2))
+		copy(arg2Copy, arg2)
+	}
+	fake.readCommitMessagesMutex.Lock()
+	ret, specificReturn := fake.readCommitMessagesReturnsOnCall[len(fake.readCommitMessagesArgsForCall)]
+	fake.readCommitMessagesArgsForCall = append(fake.readCommitMessagesArgsForCall, struct {
+		arg1 context.Context
+		arg2 []string
+	}{arg1, arg2Copy})
+	stub := fake.ReadCommitMessagesStub
+	fakeReturns := fake.readCommitMessagesReturns
+	fake.recordInvocation("ReadCommitMessages", []interface{}{arg1, arg2Copy})
+	fake.readCommitMessagesMutex.Unlock()
+	if stub != nil {
+		return stub(arg1, arg2)
+	}
+	if specificReturn {
+		return ret.result1, ret.result2
+	}
+	return fakeReturns.result1, fakeReturns.result2
+}
+
+func (fake *FakeClaimOrigin) ReadCommitMessagesCallCount() int {
+	fake.readCommitMessagesMutex.RLock()
+	defer fake.readCommitMessagesMutex.RUnlock()
+	return len(fake.readCommitMessagesArgsForCall)
+}
+
+func (fake *FakeClaimOrigin) ReadCommitMessagesCalls(stub func(context.Context, []string) (map[string][]byte, error)) {
+	fake.readCommitMessagesMutex.Lock()
+	defer fake.readCommitMessagesMutex.Unlock()
+	fake.ReadCommitMessagesStub = stub
+}
+
+func (fake *FakeClaimOrigin) ReadCommitMessagesArgsForCall(i int) (context.Context, []string) {
+	fake.readCommitMessagesMutex.RLock()
+	defer fake.readCommitMessagesMutex.RUnlock()
+	argsForCall := fake.readCommitMessagesArgsForCall[i]
+	return argsForCall.arg1, argsForCall.arg2
+}
+
+func (fake *FakeClaimOrigin) ReadCommitMessagesReturns(result1 map[string][]byte, result2 error) {
+	fake.readCommitMessagesMutex.Lock()
+	defer fake.readCommitMessagesMutex.Unlock()
+	fake.ReadCommitMessagesStub = nil
+	fake.readCommitMessagesReturns = struct {
+		result1 map[string][]byte
+		result2 error
+	}{result1, result2}
+}
+
+func (fake *FakeClaimOrigin) ReadCommitMessagesReturnsOnCall(i int, result1 map[string][]byte, result2 error) {
+	fake.readCommitMessagesMutex.Lock()
+	defer fake.readCommitMessagesMutex.Unlock()
+	fake.ReadCommitMessagesStub = nil
+	if fake.readCommitMessagesReturnsOnCall == nil {
+		fake.readCommitMessagesReturnsOnCall = make(map[int]struct {
+			result1 map[string][]byte
+			result2 error
+		})
+	}
+	fake.readCommitMessagesReturnsOnCall[i] = struct {
+		result1 map[string][]byte
 		result2 error
 	}{result1, result2}
 }

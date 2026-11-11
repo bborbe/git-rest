@@ -5,15 +5,18 @@
 package git
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	stderrors "errors"
+	"fmt"
 	"log/slog"
 	"os/exec"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -77,11 +80,16 @@ type RemoteRef struct {
 // ClaimOrigin abstracts the origin-contacting git operations used by claim-ref
 // listing. The production implementation is gitOrigin; tests inject a fake.
 //
+// ReadCommitMessages reads every requested commit message in one git
+// invocation. Callers batch before their per-ref loop; the live path falls back
+// to ReadCommitMessage per sha when the batch fails.
+//
 //counterfeiter:generate -o ../../mocks/claim_origin.go --fake-name FakeClaimOrigin . ClaimOrigin
 type ClaimOrigin interface {
 	ListRefs(ctx context.Context, pattern string) ([]RemoteRef, error)
 	FetchCommits(ctx context.Context, shas []string) error
 	ReadCommitMessage(ctx context.Context, sha string) ([]byte, error)
+	ReadCommitMessages(ctx context.Context, shas []string) (map[string][]byte, error)
 }
 
 // gitOrigin is the production ClaimOrigin, backed by the git binary.
@@ -146,6 +154,73 @@ func (o *gitOrigin) ReadCommitMessage(ctx context.Context, sha string) ([]byte, 
 	return []byte(message), nil
 }
 
+// ReadCommitMessages returns the commit message of every sha in one
+// `git cat-file --batch` invocation. An empty list is a no-op. Any missing,
+// malformed or truncated object is returned as an error so the caller can take
+// its path's fallback.
+func (o *gitOrigin) ReadCommitMessages(
+	ctx context.Context,
+	shas []string,
+) (map[string][]byte, error) {
+	if len(shas) == 0 {
+		return map[string][]byte{}, nil
+	}
+	input := strings.Join(shas, "\n") + "\n"
+	out, err := o.g.runCmdInput(ctx, o.g.repoPath, []byte(input), "cat-file", "--batch")
+	if err != nil {
+		return nil, errors.Wrap(ctx, err, "git cat-file --batch")
+	}
+	messages, err := parseBatchCommitMessages(out, shas)
+	if err != nil {
+		return nil, errors.Wrap(ctx, err, "parse git cat-file --batch output")
+	}
+	return messages, nil
+}
+
+// parseBatchCommitMessages parses `git cat-file --batch` output for the given
+// input shas, in input order. Each entry is one header line plus exactly <size>
+// content bytes plus one separator newline. The message is the content after
+// the first blank line, or the whole content when no blank line exists. A
+// missing object, malformed header, bad size or truncated output is an error.
+func parseBatchCommitMessages(out []byte, shas []string) (map[string][]byte, error) {
+	messages := make(map[string][]byte, len(shas))
+	offset := 0
+	for _, sha := range shas {
+		headerEnd := bytes.IndexByte(out[offset:], '\n')
+		if headerEnd < 0 {
+			return nil, fmt.Errorf("truncated header for %s", sha)
+		}
+		header := string(out[offset : offset+headerEnd])
+		offset += headerEnd + 1
+		fields := strings.Fields(header)
+		if len(fields) == 2 && fields[1] == "missing" {
+			return nil, fmt.Errorf("object %s missing", sha)
+		}
+		if len(fields) != 3 {
+			return nil, fmt.Errorf("malformed header for %s: %q", sha, header)
+		}
+		size, err := strconv.Atoi(fields[2])
+		if err != nil || size < 0 {
+			return nil, fmt.Errorf("bad size for %s: %q", sha, fields[2])
+		}
+		if offset+size > len(out) {
+			return nil, fmt.Errorf("truncated object for %s", sha)
+		}
+		content := out[offset : offset+size]
+		offset += size
+		if offset >= len(out) || out[offset] != '\n' {
+			return nil, fmt.Errorf("missing separator after %s", sha)
+		}
+		offset++
+		_, message, found := strings.Cut(string(content), "\n\n")
+		if !found {
+			message = string(content)
+		}
+		messages[sha] = []byte(message)
+	}
+	return messages, nil
+}
+
 // ListClaimRefs returns the claim refs under refs/<prefix>. It serves a fresh
 // local claim mirror without touching the network and falls back to the live
 // origin when the mirror is stale, absent, unconfigured or missing an object.
@@ -169,13 +244,16 @@ func (g *git) ListClaimRefs(ctx context.Context, prefix string) ([]ClaimRef, err
 	return g.listClaimRefsLive(ctx, prefix)
 }
 
-// listClaimRefsLive lists claim refs from the origin. This is the pre-mirror
-// behaviour, unchanged. All listed commits are fetched in one batched git
-// invocation; when that fetch fails, each commit is fetched on its own. An entry
-// is dropped with one WARN only when a re-list shows its ref vanished or moved;
-// a fetch failure for a ref that still points at the listed sha is returned as
-// an error.
+// listClaimRefsLive lists claim refs from the origin. All listed commits are
+// fetched in one batched git invocation and all messages are read in one batched
+// git invocation. A failed fetch batch degrades to a per-sha fetch; a failed
+// message batch degrades to a per-sha read. An entry is dropped with one WARN
+// only when a re-list shows its ref vanished or moved; a fetch failure for a ref
+// that still points at the listed sha is returned as an error.
 func (g *git) listClaimRefsLive(ctx context.Context, prefix string) ([]ClaimRef, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, errors.Wrap(ctx, err, "claim ref listing cancelled")
+	}
 	entries, err := g.origin.ListRefs(ctx, "refs/"+prefix+"*")
 	if err != nil {
 		return nil, errors.Wrap(ctx, err, "list claim refs")
@@ -190,7 +268,8 @@ func (g *git) listClaimRefsLive(ctx context.Context, prefix string) ([]ClaimRef,
 	if len(matched) == 0 {
 		return []ClaimRef{}, nil
 	}
-	batchOK := g.fetchClaimCommits(ctx, matched)
+	fetchOK := g.fetchClaimCommits(ctx, matched)
+	messages, batchOK := g.readClaimCommits(ctx, matched)
 	result := make([]ClaimRef, 0, len(matched))
 	for _, entry := range matched {
 		select {
@@ -198,7 +277,7 @@ func (g *git) listClaimRefsLive(ctx context.Context, prefix string) ([]ClaimRef,
 			return nil, errors.Wrap(ctx, ctx.Err(), "claim ref listing cancelled")
 		default:
 		}
-		claim, keep, err := g.readClaimRef(ctx, entry, batchOK)
+		claim, keep, err := g.readClaimRef(ctx, entry, fetchOK, batchOK, messages)
 		if err != nil {
 			return nil, err
 		}
@@ -228,24 +307,65 @@ func (g *git) fetchClaimCommits(ctx context.Context, matched []RemoteRef) bool {
 	return true
 }
 
+// readClaimCommits reads every listed commit message in one git invocation and
+// reports whether it succeeded. A failed batch is logged at debug only: the
+// live path's per-sha fallback owns the outcome.
+func (g *git) readClaimCommits(
+	ctx context.Context,
+	matched []RemoteRef,
+) (map[string][]byte, bool) {
+	shas := make([]string, 0, len(matched))
+	for _, entry := range matched {
+		shas = append(shas, entry.SHA)
+	}
+	messages, err := g.origin.ReadCommitMessages(ctx, shas)
+	if err != nil {
+		slog.DebugContext(
+			ctx,
+			"claim ref batch message read failed; falling back to per-sha reads",
+			"error", err,
+		)
+		return nil, false
+	}
+	return messages, true
+}
+
 // readClaimRef reads and parses one listed claim ref. When the batched fetch
 // failed it retries the entry on its own; a failed retry is classified by
-// resolveFetchFailure. It returns keep=false when the ref vanished or moved
-// between listing and fetching.
+// resolveFetchFailure. When the batched message read failed it reads this sha on
+// its own. It returns keep=false when the ref vanished or moved between listing
+// and fetching.
 func (g *git) readClaimRef(
 	ctx context.Context,
 	entry RemoteRef,
+	fetchOK bool,
 	batchOK bool,
+	messages map[string][]byte,
 ) (ClaimRef, bool, error) {
 	claim := ClaimRef{Ref: entry.Ref, SHA: entry.SHA}
-	if !batchOK {
+	if !fetchOK {
 		if err := g.origin.FetchCommits(ctx, []string{entry.SHA}); err != nil {
 			return g.resolveFetchFailure(ctx, entry, err)
 		}
 	}
-	message, err := g.origin.ReadCommitMessage(ctx, entry.SHA)
-	if err != nil {
-		return ClaimRef{}, false, errors.Wrapf(ctx, err, "read claim commit %s", entry.SHA)
+	var message []byte
+	if batchOK {
+		var found bool
+		message, found = messages[entry.SHA]
+		if !found {
+			return ClaimRef{}, false, errors.Wrapf(
+				ctx,
+				stderrors.New("claim commit absent from batch"),
+				"read claim commit %s",
+				entry.SHA,
+			)
+		}
+	} else {
+		var err error
+		message, err = g.origin.ReadCommitMessage(ctx, entry.SHA)
+		if err != nil {
+			return ClaimRef{}, false, errors.Wrapf(ctx, err, "read claim commit %s", entry.SHA)
+		}
 	}
 	cluster, taskID, leaseUntil, err := parseClaimMetadata(ctx, message)
 	if err != nil {

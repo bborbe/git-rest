@@ -9,9 +9,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"regexp"
@@ -262,6 +264,24 @@ func newMirrorReadFake(
 		}
 		return nil, errors.New("cat-file: object missing")
 	}
+	fake.ReadCommitMessagesStub = func(
+		_ context.Context,
+		requested []string,
+	) (map[string][]byte, error) {
+		bySHA := make(map[string]string, len(shas))
+		for ref, refSHA := range shas {
+			bySHA[refSHA] = messages[ref]
+		}
+		result := make(map[string][]byte, len(requested))
+		for _, sha := range requested {
+			message, ok := bySHA[sha]
+			if !ok {
+				return nil, errors.New("cat-file: object missing")
+			}
+			result[sha] = []byte(message)
+		}
+		return result, nil
+	}
 	return fake
 }
 
@@ -417,6 +437,16 @@ func TestClaimMirrorStaleFallsBack(t *testing.T) {
 		fake.ReadCommitMessageStub = func(_ context.Context, _ string) ([]byte, error) {
 			return claimMessages[claimShaA], nil
 		}
+		fake.ReadCommitMessagesStub = func(
+			_ context.Context,
+			shas []string,
+		) (map[string][]byte, error) {
+			messages := make(map[string][]byte, len(shas))
+			for _, sha := range shas {
+				messages[sha] = claimMessages[claimShaA]
+			}
+			return messages, nil
+		}
 		return fake
 	}
 
@@ -528,6 +558,19 @@ func TestClaimMirrorMissingObjectFallsBack(t *testing.T) {
 			return claimMessages[claimShaB], nil
 		}
 		return nil, errors.New("cat-file: object missing")
+	}
+	fake.ReadCommitMessagesStub = func(
+		_ context.Context,
+		shas []string,
+	) (map[string][]byte, error) {
+		messages := make(map[string][]byte, len(shas))
+		for _, sha := range shas {
+			if sha != claimShaB {
+				return nil, errors.New("cat-file: object missing")
+			}
+			messages[sha] = claimMessages[claimShaB]
+		}
+		return messages, nil
 	}
 
 	g := git.NewGitWithClaimMirrorForTest(repo, fake)
@@ -661,6 +704,29 @@ func assertRefsHandlerStatuses(t *testing.T, g git.Git) {
 	}
 }
 
+// newReadAfterWriteFake returns a fake whose per-item and batched message reads
+// both answer with the same valid claim message for any sha.
+func newReadAfterWriteFake() *mocks.FakeClaimOrigin {
+	message := []byte(
+		`{"cluster":"nuke","task_id":"t1","lease_until":"2026-10-25T00:00:00Z","nonce":"x"}`,
+	)
+	fake := &mocks.FakeClaimOrigin{}
+	fake.ReadCommitMessageStub = func(context.Context, string) ([]byte, error) {
+		return message, nil
+	}
+	fake.ReadCommitMessagesStub = func(
+		_ context.Context,
+		shas []string,
+	) (map[string][]byte, error) {
+		messages := make(map[string][]byte, len(shas))
+		for _, sha := range shas {
+			messages[sha] = message
+		}
+		return messages, nil
+	}
+	return fake
+}
+
 // TestClaimMirrorReadAfterWrite proves a write on this instance is visible to
 // the very next read without a pull, and that the read was served from the
 // mirror rather than falling back to the origin.
@@ -677,12 +743,7 @@ func TestClaimMirrorReadAfterWrite(t *testing.T) {
 		t.Fatalf("Pull: %v", err)
 	}
 
-	fake := &mocks.FakeClaimOrigin{}
-	fake.ReadCommitMessageStub = func(context.Context, string) ([]byte, error) {
-		return []byte(
-			`{"cluster":"nuke","task_id":"t1","lease_until":"2026-10-25T00:00:00Z","nonce":"x"}`,
-		), nil
-	}
+	fake := newReadAfterWriteFake()
 	g := git.NewGitWithClaimMirrorForTest(fixture.cloneA, fake)
 	git.SetClaimMirrorFreshAtForTest(g, time.Now())
 	freshAt := git.ClaimMirrorFreshAtForTest(g)
@@ -837,6 +898,201 @@ func TestClaimMirrorSyncStateUnchanged(t *testing.T) {
 	if afterRefs != beforeRefs {
 		t.Fatalf("remote-tracking refs changed:\nbefore %q\nafter  %q", beforeRefs, afterRefs)
 	}
+}
+
+// TestClaimRefBatchProcessCount proves a listing starts a constant number of
+// git processes regardless of how many refs match the prefix, on both the live
+// and mirror paths, and that the commit-message read is one `cat-file --batch`.
+func TestClaimRefBatchProcessCount(t *testing.T) {
+	realGit, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatalf("locate git: %v", err)
+	}
+	shimDir := t.TempDir()
+	counterPath := filepath.Join(shimDir, "counter")
+	writeGitShim(t, filepath.Join(shimDir, "git"), realGit, counterPath)
+
+	for _, tc := range []struct {
+		name      string
+		mirror    bool
+		wantTotal int
+	}{
+		{name: "live", mirror: false, wantTotal: 4},
+		{name: "mirror", mirror: true, wantTotal: 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			counts := make(map[int]gitProcessCounts, 2)
+			for _, size := range []int{300, 600} {
+				counts[size] = measureClaimRefProcesses(
+					t, tc.mirror, size, shimDir, counterPath,
+				)
+				if counts[size].total != tc.wantTotal {
+					t.Fatalf(
+						"%d refs: want %d git processes, got %d (%+v)",
+						size, tc.wantTotal, counts[size].total, counts[size],
+					)
+				}
+				if counts[size].catFile != 1 {
+					t.Fatalf(
+						"%d refs: want exactly one cat-file process, got %d",
+						size, counts[size].catFile,
+					)
+				}
+			}
+			if counts[300].total != counts[600].total {
+				t.Fatalf(
+					"process count changed with ref count: 300 -> %d, 600 -> %d",
+					counts[300].total, counts[600].total,
+				)
+			}
+		})
+	}
+}
+
+// gitProcessCounts is the number of git processes a measurement observed.
+type gitProcessCounts struct {
+	total   int
+	catFile int
+}
+
+// measureClaimRefProcesses seeds size claim refs, issues the refs GET with the
+// shim on PATH, and returns the git process counts it observed.
+func measureClaimRefProcesses(
+	t *testing.T,
+	mirror bool,
+	size int,
+	shimDir string,
+	counterPath string,
+) gitProcessCounts {
+	t.Helper()
+	fixture := newClaimFixture(t)
+	configureClaimIdentity(t, fixture.bare)
+	seedClaimRefs(t, fixture.bare, size)
+
+	client := newClaimClient(fixture.cloneA)
+	ctx := context.Background()
+	if mirror {
+		if err := client.ConfigureClaimMirror(ctx); err != nil {
+			t.Fatalf("ConfigureClaimMirror: %v", err)
+		}
+		if err := client.Pull(ctx); err != nil {
+			t.Fatalf("Pull: %v", err)
+		}
+	}
+
+	oldPath := os.Getenv("PATH")
+	if err := os.Setenv("PATH", shimDir+string(os.PathListSeparator)+oldPath); err != nil {
+		t.Fatalf("prepend git shim to PATH: %v", err)
+	}
+	if err := os.WriteFile(counterPath, nil, 0o600); err != nil {
+		t.Fatalf("truncate git counter: %v", err)
+	}
+
+	logs, restore := captureSlogLogs()
+	defer restore()
+	h := libhttp.NewJSONErrorHandler(handler.NewRefsGetHandler(client))
+	req := httptest.NewRequest(
+		http.MethodGet,
+		"/api/v1/refs?prefix=claims%2Fsuccess%2F",
+		nil,
+	)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if err := os.Setenv("PATH", oldPath); err != nil {
+		t.Fatalf("restore PATH: %v", err)
+	}
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET status %d, want %d: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	var claims []git.ClaimRef
+	if err := json.Unmarshal(rec.Body.Bytes(), &claims); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(claims) != size {
+		t.Fatalf("want %d refs, got %d", size, len(claims))
+	}
+	wantSource := "served_from=origin"
+	if mirror {
+		wantSource = "served_from=mirror"
+	}
+	if got := countLogLines(logs.String(), wantSource); got != 1 {
+		t.Fatalf("want exactly one %s line, got %d in:\n%s", wantSource, got, logs)
+	}
+	return countGitInvocations(t, counterPath)
+}
+
+// seedClaimRefs seeds size refs under refs/claims/success/ in one update-ref
+// process, cycling through four distinct claim commits.
+func seedClaimRefs(t *testing.T, bare string, size int) {
+	t.Helper()
+	messages := []string{
+		`{"cluster":"c1","task_id":"t1","lease_until":"2026-10-25T00:00:00Z","nonce":"n1"}`,
+		`{"cluster":"c2","task_id":"t2","lease_until":"2026-10-25T00:00:00Z","nonce":"n2"}`,
+		`{"cluster":"c3","task_id":"t3","lease_until":"2026-10-25T00:00:00Z","nonce":"n3"}`,
+		`{"cluster":"c4","task_id":"t4","lease_until":"2026-10-25T00:00:00Z","nonce":"n4"}`,
+	}
+	shas := make([]string, 0, len(messages))
+	for _, message := range messages {
+		shas = append(shas, strings.TrimSpace(mustGit(
+			t, bare, "commit-tree", claimEmptyTreeSHA, "-m", message,
+		)))
+	}
+	var input strings.Builder
+	for i := 1; i <= size; i++ {
+		fmt.Fprintf(
+			&input,
+			"create refs/claims/success/task%d/phase%d/%d %s\n",
+			i, i, i, shas[i%len(shas)],
+		)
+	}
+	mustGitInput(t, bare, input.String(), "update-ref", "--stdin")
+}
+
+// mustGitInput runs git in dir with stdin and fails the test on a non-zero exit.
+func mustGitInput(t *testing.T, dir, input string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	cmd.Stdin = strings.NewReader(input)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v in %s: %v: %s", args, dir, err, out)
+	}
+	return string(out)
+}
+
+// writeGitShim writes an executable git shim that appends its arguments to
+// counterPath and execs the real git binary.
+func writeGitShim(t *testing.T, path, realGit, counterPath string) {
+	t.Helper()
+	script := "#!/bin/sh\n" +
+		"printf '%s\\n' \"$*\" >> " + shellQuote(counterPath) + "\n" +
+		"exec " + shellQuote(realGit) + " \"$@\"\n"
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatalf("write git shim: %v", err)
+	}
+}
+
+// countGitInvocations reads the shim counter and counts all lines and the
+// lines that start with cat-file.
+func countGitInvocations(t *testing.T, counterPath string) gitProcessCounts {
+	t.Helper()
+	data, err := os.ReadFile(counterPath)
+	if err != nil {
+		t.Fatalf("read git counter: %v", err)
+	}
+	var counts gitProcessCounts
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		counts.total++
+		if strings.HasPrefix(line, "cat-file") {
+			counts.catFile++
+		}
+	}
+	return counts
 }
 
 // TestClaimMirrorUpdateFailureSwallowed proves a failed local mirror update

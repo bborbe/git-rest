@@ -6,6 +6,7 @@ package git
 
 import (
 	"context"
+	stderrors "errors"
 	"log/slog"
 	"sort"
 	"strings"
@@ -123,14 +124,19 @@ func (g *git) claimMirrorAge() (time.Duration, bool) {
 	return age, true
 }
 
-// listClaimRefsFromMirror lists claim refs from the local mirror. served=false
-// means the caller must take the live path; it is returned for every condition
-// that would make a mirror answer untrustworthy, and never together with a
-// partial result.
+// listClaimRefsFromMirror lists claim refs from the local mirror. All messages
+// are read in one batched git invocation before the loop. served=false means the
+// caller must take the live path; it is returned for every condition that would
+// make a mirror answer untrustworthy, including a failed or incomplete message
+// batch, and never together with a partial result. The mirror path deliberately
+// has no per-item read fallback.
 func (g *git) listClaimRefsFromMirror(
 	ctx context.Context,
 	prefix string,
 ) (claims []ClaimRef, served bool, err error) {
+	if err := ctx.Err(); err != nil {
+		return nil, false, errors.Wrap(ctx, err, "claim ref listing cancelled")
+	}
 	out, err := g.runCmdOutput(
 		ctx,
 		g.repoPath,
@@ -146,21 +152,17 @@ func (g *git) listClaimRefsFromMirror(
 		)
 		return nil, false, nil
 	}
-	matched := make([]RemoteRef, 0)
-	for _, line := range strings.Split(string(out), "\n") {
-		sha, ref, found := strings.Cut(line, " ")
-		if !found {
-			continue
-		}
-		claimRef := claimRefNamespace + strings.TrimPrefix(ref, claimMirrorNamespace)
-		if !matchesClaimPrefix(claimRef, prefix) {
-			continue
-		}
-		matched = append(matched, RemoteRef{SHA: sha, Ref: claimRef})
-	}
+	matched := parseMirrorRefs(out, prefix)
 	sort.Slice(matched, func(i, j int) bool { return matched[i].Ref < matched[j].Ref })
 	if len(matched) == 0 {
 		return []ClaimRef{}, true, nil
+	}
+	messages, batchOK, readErr := g.readMirrorCommitMessages(ctx, matched)
+	if readErr != nil {
+		return nil, false, readErr
+	}
+	if !batchOK {
+		return nil, false, nil
 	}
 	result := make([]ClaimRef, 0, len(matched))
 	for _, entry := range matched {
@@ -169,14 +171,14 @@ func (g *git) listClaimRefsFromMirror(
 			return nil, false, errors.Wrap(ctx, ctx.Err(), "claim ref listing cancelled")
 		default:
 		}
-		message, readErr := g.origin.ReadCommitMessage(ctx, entry.SHA)
-		if readErr != nil {
+		message, found := messages[entry.SHA]
+		if !found {
 			slog.WarnContext(
 				ctx,
 				"git-rest: reading a mirrored claim commit failed; using the live origin",
 				"ref", entry.Ref,
 				"sha", entry.SHA,
-				"error", readErr,
+				"error", stderrors.New("claim commit absent from batch"),
 			)
 			return nil, false, nil
 		}
@@ -199,6 +201,51 @@ func (g *git) listClaimRefsFromMirror(
 		result = append(result, claim)
 	}
 	return result, true, nil
+}
+
+// parseMirrorRefs parses `for-each-ref` output of the mirror namespace into
+// claim refs matching prefix. Lines without a separator are skipped.
+func parseMirrorRefs(out []byte, prefix string) []RemoteRef {
+	matched := make([]RemoteRef, 0)
+	for _, line := range strings.Split(string(out), "\n") {
+		sha, ref, found := strings.Cut(line, " ")
+		if !found {
+			continue
+		}
+		claimRef := claimRefNamespace + strings.TrimPrefix(ref, claimMirrorNamespace)
+		if !matchesClaimPrefix(claimRef, prefix) {
+			continue
+		}
+		matched = append(matched, RemoteRef{SHA: sha, Ref: claimRef})
+	}
+	return matched
+}
+
+// readMirrorCommitMessages reads every mirrored commit message in one batched
+// git invocation. batchOK=false means the caller must take the live path: a
+// failed batch is logged and reported as not served, while a cancelled context
+// is returned as a wrapped error. The mirror path has no per-item fallback.
+func (g *git) readMirrorCommitMessages(
+	ctx context.Context,
+	matched []RemoteRef,
+) (map[string][]byte, bool, error) {
+	shas := make([]string, 0, len(matched))
+	for _, entry := range matched {
+		shas = append(shas, entry.SHA)
+	}
+	messages, err := g.origin.ReadCommitMessages(ctx, shas)
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, false, errors.Wrap(ctx, ctx.Err(), "claim ref listing cancelled")
+		}
+		slog.WarnContext(
+			ctx,
+			"git-rest: reading a mirrored claim commit failed; using the live origin",
+			"error", err,
+		)
+		return nil, false, nil
+	}
+	return messages, true, nil
 }
 
 // claimMirrorRef maps a claim key ("claims/task/t1") to its mirror ref

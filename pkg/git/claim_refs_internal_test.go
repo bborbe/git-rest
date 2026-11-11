@@ -5,8 +5,78 @@
 package git
 
 import (
+	"fmt"
+	"reflect"
+	"strings"
 	"testing"
 )
+
+func TestClaimRefBatchParse(t *testing.T) {
+	shaA := strings.Repeat("a", 40)
+	shaB := strings.Repeat("b", 40)
+	contentA := "tree deadbeef\nauthor A\n\n{\"cluster\":\"one\"}"
+	contentB := "tree deadbeef\n\n{\"cluster\":\"two\"}"
+	noSeparator := "not json"
+	tests := []struct {
+		name    string
+		out     string
+		shas    []string
+		want    map[string][]byte
+		wantErr bool
+	}{
+		{
+			name: "two valid commit objects",
+			out: fmt.Sprintf(
+				"%s commit %d\n%s\n%s commit %d\n%s\n",
+				shaA, len(contentA), contentA,
+				shaB, len(contentB), contentB,
+			),
+			shas: []string{shaA, shaB},
+			want: map[string][]byte{
+				shaA: []byte(`{"cluster":"one"}`),
+				shaB: []byte(`{"cluster":"two"}`),
+			},
+		},
+		{
+			name:    "missing object",
+			out:     shaA + " missing\n",
+			shas:    []string{shaA},
+			wantErr: true,
+		},
+		{
+			name:    "truncated object",
+			out:     shaA + " commit 100\nshort\n",
+			shas:    []string{shaA},
+			wantErr: true,
+		},
+		{
+			name: "commit with no message separator",
+			out: fmt.Sprintf(
+				"%s commit %d\n%s\n",
+				shaA, len(noSeparator), noSeparator,
+			),
+			shas: []string{shaA},
+			want: map[string][]byte{shaA: []byte(noSeparator)},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := parseBatchCommitMessages([]byte(test.out), test.shas)
+			if test.wantErr {
+				if err == nil {
+					t.Fatalf("expected an error, got %v", got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("parseBatchCommitMessages: %v", err)
+			}
+			if !reflect.DeepEqual(got, test.want) {
+				t.Fatalf("got %#v, want %#v", got, test.want)
+			}
+		})
+	}
+}
 
 func TestIsLeaseConflict(t *testing.T) {
 	tests := []struct {
