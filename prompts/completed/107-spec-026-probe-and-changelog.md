@@ -1,8 +1,13 @@
 ---
-status: approved
+status: completed
 spec: [026-batch-claim-ref-commit-reads]
+summary: Added hack/claim-ref-listing-probe.sh (live-origin and mirror modes, counting git shim, 300 seeded refs) and an Unreleased fix entry in CHANGELOG.md; verified post-fix prints 1 cat-file invocation/300 refs, pre-fix prints 300, and make precommit exits 0.
+execution_id: 198dced9-6730-5c5f-96c5-3b4df9ebed9a-exec-107-spec-026-probe-and-changelog
+dark-factory-version: dev
 created: "2026-11-11T15:36:03Z"
 queued: "2026-11-11T16:01:48Z"
+started: "2026-11-11T16:23:46Z"
+completed: "2026-11-11T16:29:24Z"
 branch: dark-factory/batch-claim-ref-commit-reads
 ---
 
