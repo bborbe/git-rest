@@ -350,6 +350,37 @@ func (g *git) runCmdOutput(ctx context.Context, dir string, args ...string) ([]b
 	return stdout.Bytes(), nil
 }
 
+// runCmdInput executes a git subcommand in dir, feeding stdin to it, and
+// returns its stdout. It mirrors runCmdOutput and adds cmd.Stdin.
+func (g *git) runCmdInput(
+	ctx context.Context,
+	dir string,
+	stdin []byte,
+	args ...string,
+) ([]byte, error) {
+	// #nosec G204 -- binary is hardcoded to "git"; args are internal subcommands, not user input
+	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd.Dir = dir
+	cmd.WaitDelay = gitWaitDelay
+	if g.sshKeyPath != "" {
+		cmd.Env = append(
+			os.Environ(),
+			fmt.Sprintf(
+				"GIT_SSH_COMMAND=ssh -i %s -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no",
+				string(g.sshKeyPath),
+			),
+		)
+	}
+	var stdout, stderr bytes.Buffer
+	cmd.Stdin = bytes.NewReader(stdin)
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return nil, errors.Wrapf(ctx, err, "git %v: %s", args, stderr.String())
+	}
+	return stdout.Bytes(), nil
+}
+
 // runCmdRaw executes a git subcommand in dir and returns combined stdout+stderr
 // regardless of exit code. Use when the output must be inspected on failure
 // (e.g., detecting rebase conflict paths from git rebase output).

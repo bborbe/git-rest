@@ -6,7 +6,10 @@ package git_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"os"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -52,6 +55,55 @@ func newClaimListFake(refs []git.RemoteRef) *mocks.FakeClaimOrigin {
 	fake.FetchCommitsStub = func(_ context.Context, _ []string) error { return nil }
 	fake.ReadCommitMessageStub = func(_ context.Context, sha string) ([]byte, error) {
 		return claimMessages[sha], nil
+	}
+	fake.ReadCommitMessagesStub = func(
+		_ context.Context,
+		shas []string,
+	) (map[string][]byte, error) {
+		messages := make(map[string][]byte, len(shas))
+		for _, sha := range shas {
+			messages[sha] = claimMessages[sha]
+		}
+		return messages, nil
+	}
+	return fake
+}
+
+// goldenClaimFixture returns a deterministic origin with mixed ref shapes in an
+// unsorted order, so the listing under test must sort them. One ref (claimShaB)
+// carries an unparseable message, so its metadata stays empty.
+func goldenClaimFixture() *mocks.FakeClaimOrigin {
+	refs := []git.RemoteRef{
+		{SHA: claimShaB, Ref: "refs/claims/task/2"},
+		{SHA: claimShaE, Ref: "refs/claims/repo/a/b"},
+		{SHA: claimShaD, Ref: "refs/claims/tasks/1"},
+		{SHA: claimShaC, Ref: "refs/claims/task/1"},
+		{SHA: claimShaA, Ref: "refs/claims/task/10"},
+	}
+	fake := &mocks.FakeClaimOrigin{}
+	fake.ListRefsStub = func(_ context.Context, _ string) ([]git.RemoteRef, error) {
+		return refs, nil
+	}
+	fake.FetchCommitsStub = func(_ context.Context, _ []string) error { return nil }
+	fake.ReadCommitMessageStub = func(_ context.Context, sha string) ([]byte, error) {
+		if sha == claimShaB {
+			return []byte("not json"), nil
+		}
+		return claimMessages[sha], nil
+	}
+	fake.ReadCommitMessagesStub = func(
+		_ context.Context,
+		shas []string,
+	) (map[string][]byte, error) {
+		messages := make(map[string][]byte, len(shas))
+		for _, sha := range shas {
+			if sha == claimShaB {
+				messages[sha] = []byte("not json")
+				continue
+			}
+			messages[sha] = claimMessages[sha]
+		}
+		return messages, nil
 	}
 	return fake
 }
@@ -244,6 +296,97 @@ func testClaimListNoMatch(t *testing.T) {
 	if fake.FetchCommitsCallCount() != 0 {
 		t.Fatalf("expected no fetch, got %d", fake.FetchCommitsCallCount())
 	}
+	if fake.ReadCommitMessagesCallCount() != 0 {
+		t.Fatalf(
+			"expected no batched message read, got %d",
+			fake.ReadCommitMessagesCallCount(),
+		)
+	}
+}
+
+// TestClaimRefBatchFallback proves a failed batched message read on the live
+// path degrades to one per-sha read and still returns the complete listing.
+func TestClaimRefBatchFallback(t *testing.T) {
+	refs := []git.RemoteRef{
+		{SHA: claimShaA, Ref: "refs/claims/a"},
+		{SHA: claimShaB, Ref: "refs/claims/b"},
+		{SHA: claimShaC, Ref: "refs/claims/c"},
+	}
+	fake := newClaimListFake(refs)
+	fake.ReadCommitMessagesStub = func(
+		_ context.Context,
+		_ []string,
+	) (map[string][]byte, error) {
+		return nil, errors.New("batch message read failed")
+	}
+	g := git.NewGitWithClaimOrigin(fake)
+	claims, err := g.ListClaimRefs(context.Background(), "claims/")
+	if err != nil {
+		t.Fatalf("ListClaimRefs: %v", err)
+	}
+	if got := fake.ReadCommitMessagesCallCount(); got != 1 {
+		t.Fatalf("expected one batched message read, got %d", got)
+	}
+	if got := fake.ReadCommitMessageCallCount(); got != len(refs) {
+		t.Fatalf("expected %d per-sha reads, got %d", len(refs), got)
+	}
+	if len(claims) != len(refs) {
+		t.Fatalf("expected %d claims, got %d: %+v", len(refs), len(claims), claims)
+	}
+	for _, ref := range refs {
+		found := false
+		for _, claim := range claims {
+			if claim.Ref == ref.Ref && claim.SHA == ref.SHA {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("ref %s missing from the fallback listing: %+v", ref.Ref, claims)
+		}
+	}
+}
+
+// TestClaimRefBatchCancellation proves a cancelled context aborts with a nil
+// result and a wrapped context.Canceled, both before and during the listing.
+func TestClaimRefBatchCancellation(t *testing.T) {
+	t.Run("before the listing starts", func(t *testing.T) {
+		fake := newClaimListFake(twoClaimRefs())
+		g := git.NewGitWithClaimOrigin(fake)
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		claims, err := g.ListClaimRefs(ctx, "claims/")
+		if claims != nil {
+			t.Fatalf("expected a nil result, got %+v", claims)
+		}
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("expected context.Canceled, got %v", err)
+		}
+	})
+
+	t.Run("mid-listing", func(t *testing.T) {
+		refs := twoClaimRefs()
+		fake := newClaimListFake(refs)
+		ctx, cancel := context.WithCancel(context.Background())
+		fake.ReadCommitMessagesStub = func(
+			_ context.Context,
+			shas []string,
+		) (map[string][]byte, error) {
+			cancel()
+			messages := make(map[string][]byte, len(shas))
+			for _, sha := range shas {
+				messages[sha] = claimMessages[sha]
+			}
+			return messages, nil
+		}
+		g := git.NewGitWithClaimOrigin(fake)
+		claims, err := g.ListClaimRefs(ctx, "claims/")
+		if claims != nil {
+			t.Fatalf("expected a nil result, got %+v", claims)
+		}
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("expected context.Canceled, got %v", err)
+		}
+	})
 }
 
 func assertOneClaimWarning(t *testing.T, logs string) {
@@ -260,6 +403,55 @@ func assertOneClaimWarning(t *testing.T, logs string) {
 	}
 	if warnings != 1 {
 		t.Fatalf("expected exactly one warning, got %d in:\n%s", warnings, logs)
+	}
+}
+
+// TestGenerateClaimRefsGolden captures the current listing into the golden file.
+// It only runs when UPDATE_GOLDEN=1 is set; a normal test run never writes.
+//
+// Regenerate with:
+//
+//	UPDATE_GOLDEN=1 go test ./pkg/git -run '^TestGenerateClaimRefsGolden$' -count=1
+func TestGenerateClaimRefsGolden(t *testing.T) {
+	if os.Getenv("UPDATE_GOLDEN") != "1" {
+		t.Skip("set UPDATE_GOLDEN=1 to regenerate")
+	}
+	g := git.NewGitWithClaimOrigin(goldenClaimFixture())
+	claims, err := g.ListClaimRefs(context.Background(), "claims/")
+	if err != nil {
+		t.Fatalf("ListClaimRefs: %v", err)
+	}
+	data, err := json.MarshalIndent(claims, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal golden: %v", err)
+	}
+	data = append(data, '\n')
+	if err := os.MkdirAll("testdata", 0o700); err != nil {
+		t.Fatalf("create testdata: %v", err)
+	}
+	if err := os.WriteFile("testdata/claim_refs_golden.json", data, 0o600); err != nil {
+		t.Fatalf("write golden: %v", err)
+	}
+}
+
+// TestListClaimRefsGolden deep-equals the live listing against the committed
+// pre-fix golden. It never writes the golden file.
+func TestListClaimRefsGolden(t *testing.T) {
+	data, err := os.ReadFile("testdata/claim_refs_golden.json")
+	if err != nil {
+		t.Fatalf("read golden: %v", err)
+	}
+	var want []git.ClaimRef
+	if err := json.Unmarshal(data, &want); err != nil {
+		t.Fatalf("unmarshal golden: %v", err)
+	}
+	g := git.NewGitWithClaimOrigin(goldenClaimFixture())
+	got, err := g.ListClaimRefs(context.Background(), "claims/")
+	if err != nil {
+		t.Fatalf("ListClaimRefs: %v", err)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("listing does not match golden:\n got: %#v\nwant: %#v", got, want)
 	}
 }
 

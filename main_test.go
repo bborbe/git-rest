@@ -1116,6 +1116,12 @@ func TestSuite(t *testing.T) {
 	format.TruncatedDiff = false
 	RegisterFailHandler(Fail)
 	suiteConfig, reporterConfig := GinkgoConfiguration()
-	suiteConfig.Timeout = 60 * time.Second
+	// The suite has outgrown 60s: it now runs 50+ real-git specs (several of
+	// which shell out to git clone), and a 60s budget expires mid-run on any
+	// loaded machine -- measured twice on 2026-11-11, timing out a different
+	// spec each time (SyncOnStartup, then CloneIfNeeded). 300s mirrors
+	// pkg/git/git_suite_test.go and restores headroom without hiding a
+	// genuine hang.
+	suiteConfig.Timeout = 300 * time.Second
 	RunSpecs(t, "Main Suite", suiteConfig, reporterConfig)
 }
