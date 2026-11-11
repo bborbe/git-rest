@@ -8,6 +8,10 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 * MINOR version when you add functionality in a backwards-compatible manner, and
 * PATCH version when you make backwards-compatible bug fixes.
 
+## Unreleased
+
+- feat: `make build` resolves `BUILD_TARGET` from a bounded sun probe - sun when reachable, local docker as the fallback. An explicit `BUILD_TARGET` always wins, and the decision prints at parse time so it is visible under `make -n`
+
 ## v0.43.1
 
 - chore: update github.com/bborbe/http to v1.26.33, github.com/bborbe/log to v1.7.8, github.com/bborbe/time to v1.27.26
