@@ -6,7 +6,10 @@ package git_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"os"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -51,6 +54,31 @@ func newClaimListFake(refs []git.RemoteRef) *mocks.FakeClaimOrigin {
 	}
 	fake.FetchCommitsStub = func(_ context.Context, _ []string) error { return nil }
 	fake.ReadCommitMessageStub = func(_ context.Context, sha string) ([]byte, error) {
+		return claimMessages[sha], nil
+	}
+	return fake
+}
+
+// goldenClaimFixture returns a deterministic origin with mixed ref shapes in an
+// unsorted order, so the listing under test must sort them. One ref (claimShaB)
+// carries an unparseable message, so its metadata stays empty.
+func goldenClaimFixture() *mocks.FakeClaimOrigin {
+	refs := []git.RemoteRef{
+		{SHA: claimShaB, Ref: "refs/claims/task/2"},
+		{SHA: claimShaE, Ref: "refs/claims/repo/a/b"},
+		{SHA: claimShaD, Ref: "refs/claims/tasks/1"},
+		{SHA: claimShaC, Ref: "refs/claims/task/1"},
+		{SHA: claimShaA, Ref: "refs/claims/task/10"},
+	}
+	fake := &mocks.FakeClaimOrigin{}
+	fake.ListRefsStub = func(_ context.Context, _ string) ([]git.RemoteRef, error) {
+		return refs, nil
+	}
+	fake.FetchCommitsStub = func(_ context.Context, _ []string) error { return nil }
+	fake.ReadCommitMessageStub = func(_ context.Context, sha string) ([]byte, error) {
+		if sha == claimShaB {
+			return []byte("not json"), nil
+		}
 		return claimMessages[sha], nil
 	}
 	return fake
@@ -260,6 +288,55 @@ func assertOneClaimWarning(t *testing.T, logs string) {
 	}
 	if warnings != 1 {
 		t.Fatalf("expected exactly one warning, got %d in:\n%s", warnings, logs)
+	}
+}
+
+// TestGenerateClaimRefsGolden captures the current listing into the golden file.
+// It only runs when UPDATE_GOLDEN=1 is set; a normal test run never writes.
+//
+// Regenerate with:
+//
+//	UPDATE_GOLDEN=1 go test ./pkg/git -run '^TestGenerateClaimRefsGolden$' -count=1
+func TestGenerateClaimRefsGolden(t *testing.T) {
+	if os.Getenv("UPDATE_GOLDEN") != "1" {
+		t.Skip("set UPDATE_GOLDEN=1 to regenerate")
+	}
+	g := git.NewGitWithClaimOrigin(goldenClaimFixture())
+	claims, err := g.ListClaimRefs(context.Background(), "claims/")
+	if err != nil {
+		t.Fatalf("ListClaimRefs: %v", err)
+	}
+	data, err := json.MarshalIndent(claims, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal golden: %v", err)
+	}
+	data = append(data, '\n')
+	if err := os.MkdirAll("testdata", 0o700); err != nil {
+		t.Fatalf("create testdata: %v", err)
+	}
+	if err := os.WriteFile("testdata/claim_refs_golden.json", data, 0o600); err != nil {
+		t.Fatalf("write golden: %v", err)
+	}
+}
+
+// TestListClaimRefsGolden deep-equals the live listing against the committed
+// pre-fix golden. It never writes the golden file.
+func TestListClaimRefsGolden(t *testing.T) {
+	data, err := os.ReadFile("testdata/claim_refs_golden.json")
+	if err != nil {
+		t.Fatalf("read golden: %v", err)
+	}
+	var want []git.ClaimRef
+	if err := json.Unmarshal(data, &want); err != nil {
+		t.Fatalf("unmarshal golden: %v", err)
+	}
+	g := git.NewGitWithClaimOrigin(goldenClaimFixture())
+	got, err := g.ListClaimRefs(context.Background(), "claims/")
+	if err != nil {
+		t.Fatalf("ListClaimRefs: %v", err)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("listing does not match golden:\n got: %#v\nwant: %#v", got, want)
 	}
 }
 

@@ -1,0 +1,37 @@
+[
+  {
+    "ref": "refs/claims/repo/a/b",
+    "sha": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "cluster": "five",
+    "task_id": "t-5",
+    "lease_until": "2026-10-25T12:05:00Z"
+  },
+  {
+    "ref": "refs/claims/task/1",
+    "sha": "cccccccccccccccccccccccccccccccccccccccc",
+    "cluster": "three",
+    "task_id": "t-3",
+    "lease_until": "2026-10-23T12:05:00Z"
+  },
+  {
+    "ref": "refs/claims/task/10",
+    "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "cluster": "one",
+    "task_id": "t-1",
+    "lease_until": "2026-10-21T12:05:00Z"
+  },
+  {
+    "ref": "refs/claims/task/2",
+    "sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "cluster": "",
+    "task_id": "",
+    "lease_until": ""
+  },
+  {
+    "ref": "refs/claims/tasks/1",
+    "sha": "dddddddddddddddddddddddddddddddddddddddd",
+    "cluster": "four",
+    "task_id": "t-4",
+    "lease_until": "2026-10-24T12:05:00Z"
+  }
+]

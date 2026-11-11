@@ -8,6 +8,10 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 * MINOR version when you add functionality in a backwards-compatible manner, and
 * PATCH version when you make backwards-compatible bug fixes.
 
+## Unreleased
+
+- test: Capture the pre-fix claim-ref listing as a committed golden in `pkg/git/testdata/claim_refs_golden.json`, deep-equal'd by `TestListClaimRefsGolden` so the batched-read change cannot silently alter claim ref values or order
+
 ## v0.44.0
 
 - feat: `make build` resolves `BUILD_TARGET` from a bounded sun probe - sun when reachable, local docker as the fallback. An explicit `BUILD_TARGET` always wins, and the decision prints at parse time so it is visible under `make -n`

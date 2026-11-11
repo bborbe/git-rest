@@ -291,16 +291,19 @@ func (r *vaultAPIMergeResolver) sides(
 		return Side{}, Side{}, Side{}, errors.Wrap(ctx, err, "read merge-base time")
 	}
 
-	return Side{
+	base = Side{
 		Content:       baseContent,
 		CommitterTime: time.Unix(baseSeconds, 0).UTC(),
-	}, Side{
+	}
+	ours = Side{
 		Content:       oursContent,
 		CommitterTime: time.Unix(oursSeconds, 0).UTC(),
-	}, Side{
+	}
+	theirs = Side{
 		Content:       theirsContent,
 		CommitterTime: time.Unix(theirsSeconds, 0).UTC(),
-	}, nil
+	}
+	return base, ours, theirs, nil
 }
 
 // baseTime returns the committer timestamp of the merge base of HEAD and
