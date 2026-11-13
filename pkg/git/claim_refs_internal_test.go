@@ -78,34 +78,6 @@ func TestClaimRefBatchParse(t *testing.T) {
 	}
 }
 
-func TestClaimMirrorPattern(t *testing.T) {
-	tests := []struct {
-		name   string
-		prefix string
-		want   string
-	}{
-		{name: "whole claim namespace", prefix: "claims/", want: "refs/claim-mirror/"},
-		{name: "trailing slash", prefix: "claims/target/", want: "refs/claim-mirror/target/"},
-		{name: "no trailing slash", prefix: "claims/target", want: "refs/claim-mirror/target"},
-		{
-			name:   "nested prefix",
-			prefix: "claims/redrive-reason/r-1/",
-			want:   "refs/claim-mirror/redrive-reason/r-1/",
-		},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			got := claimMirrorPattern(test.prefix)
-			if got != test.want {
-				t.Fatalf("claimMirrorPattern(%q) = %q, want %q", test.prefix, got, test.want)
-			}
-			if test.prefix != "claims/" && got == claimMirrorNamespace {
-				t.Fatalf("claimMirrorPattern(%q) returned the bare namespace", test.prefix)
-			}
-		})
-	}
-}
-
 func TestIsLeaseConflict(t *testing.T) {
 	tests := []struct {
 		name   string

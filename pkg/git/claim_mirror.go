@@ -124,22 +124,12 @@ func (g *git) claimMirrorAge() (time.Duration, bool) {
 	return age, true
 }
 
-// claimMirrorPattern maps a caller prefix ("claims/target/") to the mirror ref
-// pattern for for-each-ref ("refs/claim-mirror/target/"). The claim key prefix
-// is stripped because the mirror refspec strips it too.
-func claimMirrorPattern(prefix string) string {
-	return claimMirrorNamespace + strings.TrimPrefix(prefix, claimKeyPrefix)
-}
-
-// listClaimRefsFromMirror lists claim refs from the local mirror. The
-// for-each-ref walk is scoped to the caller's prefix, so its cost follows the
-// answer rather than the whole namespace; the prefix filter is retained as the
-// authority for whole-path-component semantics. All messages are read in one
-// batched git invocation before the loop. served=false means the caller must
-// take the live path; it is returned for every condition that would make a
-// mirror answer untrustworthy, including a failed or incomplete message batch,
-// and never together with a partial result. The mirror path deliberately has no
-// per-item read fallback.
+// listClaimRefsFromMirror lists claim refs from the local mirror. All messages
+// are read in one batched git invocation before the loop. served=false means the
+// caller must take the live path; it is returned for every condition that would
+// make a mirror answer untrustworthy, including a failed or incomplete message
+// batch, and never together with a partial result. The mirror path deliberately
+// has no per-item read fallback.
 func (g *git) listClaimRefsFromMirror(
 	ctx context.Context,
 	prefix string,
@@ -147,12 +137,17 @@ func (g *git) listClaimRefsFromMirror(
 	if err := ctx.Err(); err != nil {
 		return nil, false, errors.Wrap(ctx, err, "claim ref listing cancelled")
 	}
+	// Scope the walk to the prefix. An unscoped pattern makes git read every
+	// ref in the mirror namespace (~7,000 loose refs in production, ~600 ms) on
+	// every listing, however small the answer. for-each-ref matches a literal
+	// pattern exactly or up to a slash, which is the same whole-path-component
+	// rule matchesClaimPrefix applies; parseMirrorRefs still filters as before.
 	out, err := g.runCmdOutput(
 		ctx,
 		g.repoPath,
 		"for-each-ref",
 		"--format=%(objectname) %(refname)",
-		claimMirrorPattern(prefix),
+		claimMirrorRef(prefix),
 	)
 	if err != nil {
 		slog.WarnContext(

@@ -10,8 +10,11 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 
 ## Unreleased
 
-- perf: Scope a claim ref listing's `git for-each-ref` invocation to the requested prefix, so a one-ref answer no longer pays for every ref under `claims/success/`; the returned refs, order and metadata are unchanged.
 - test: Lock both claim ref listing paths to their prefix-scoped git invocations — the live-path test records the exact `ls-remote` pattern and the probe asserts the `ls-remote`/`for-each-ref` argv in live and mirror modes.
+
+## v0.44.2
+
+- fix: Scope the claim-mirror `for-each-ref` to the requested prefix instead of walking the whole mirror namespace and filtering in Go. With ~7,000 loose claim refs every claim ref listing paid a flat ~600 ms walk however small its answer, which capped the executor's per-event consumer near one event per second. Prefix semantics are unchanged: `for-each-ref` matches a literal pattern exactly or up to a slash, the same whole-path-component rule, and the Go-side filter still runs.
 
 ## v0.44.1
 
