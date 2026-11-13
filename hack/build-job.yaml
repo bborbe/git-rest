@@ -67,6 +67,16 @@ spec:
           args:
             - |
               set -eu
+              # The credential is OPTIONAL — the volume is `optional: true`, so a
+              # cluster without the Secret mounts an empty directory rather than
+              # failing. Gate on the files, or `set -eu` turns an absent Secret
+              # into an init failure that breaks every public-repo build.
+              if [ ! -f /git-credential/APP_ID ] \
+                || [ ! -f /git-credential/INSTALLATION_ID ] \
+                || [ ! -f /git-credential/PEM_KEY ]; then
+                echo "mint-token: no git-credential Secret mounted; building unauthenticated (public repos only)"
+                exit 0
+              fi
               # The App identity is read from the mounted Secret rather than
               # templated in: no numeric IDs reach the rendered manifest, and one
               # template serves every repo without a per-repo ID table.
