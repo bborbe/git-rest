@@ -1,10 +1,12 @@
 ---
-status: approved
+status: prompted
 tags:
     - dark-factory
     - spec
     - bug
 approved: "2026-11-13T09:14:14Z"
+generating: "2026-11-13T09:18:27Z"
+prompted: "2026-11-13T09:28:56Z"
 branch: dark-factory/scope-claim-ref-listing-by-prefix
 ---
 

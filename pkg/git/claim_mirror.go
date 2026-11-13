@@ -124,12 +124,22 @@ func (g *git) claimMirrorAge() (time.Duration, bool) {
 	return age, true
 }
 
-// listClaimRefsFromMirror lists claim refs from the local mirror. All messages
-// are read in one batched git invocation before the loop. served=false means the
-// caller must take the live path; it is returned for every condition that would
-// make a mirror answer untrustworthy, including a failed or incomplete message
-// batch, and never together with a partial result. The mirror path deliberately
-// has no per-item read fallback.
+// claimMirrorPattern maps a caller prefix ("claims/target/") to the mirror ref
+// pattern for for-each-ref ("refs/claim-mirror/target/"). The claim key prefix
+// is stripped because the mirror refspec strips it too.
+func claimMirrorPattern(prefix string) string {
+	return claimMirrorNamespace + strings.TrimPrefix(prefix, claimKeyPrefix)
+}
+
+// listClaimRefsFromMirror lists claim refs from the local mirror. The
+// for-each-ref walk is scoped to the caller's prefix, so its cost follows the
+// answer rather than the whole namespace; the prefix filter is retained as the
+// authority for whole-path-component semantics. All messages are read in one
+// batched git invocation before the loop. served=false means the caller must
+// take the live path; it is returned for every condition that would make a
+// mirror answer untrustworthy, including a failed or incomplete message batch,
+// and never together with a partial result. The mirror path deliberately has no
+// per-item read fallback.
 func (g *git) listClaimRefsFromMirror(
 	ctx context.Context,
 	prefix string,
@@ -142,7 +152,7 @@ func (g *git) listClaimRefsFromMirror(
 		g.repoPath,
 		"for-each-ref",
 		"--format=%(objectname) %(refname)",
-		claimMirrorNamespace,
+		claimMirrorPattern(prefix),
 	)
 	if err != nil {
 		slog.WarnContext(
