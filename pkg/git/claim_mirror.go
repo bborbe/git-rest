@@ -137,12 +137,17 @@ func (g *git) listClaimRefsFromMirror(
 	if err := ctx.Err(); err != nil {
 		return nil, false, errors.Wrap(ctx, err, "claim ref listing cancelled")
 	}
+	// Scope the walk to the prefix. An unscoped pattern makes git read every
+	// ref in the mirror namespace (~7,000 loose refs in production, ~600 ms) on
+	// every listing, however small the answer. for-each-ref matches a literal
+	// pattern exactly or up to a slash, which is the same whole-path-component
+	// rule matchesClaimPrefix applies; parseMirrorRefs still filters as before.
 	out, err := g.runCmdOutput(
 		ctx,
 		g.repoPath,
 		"for-each-ref",
 		"--format=%(objectname) %(refname)",
-		claimMirrorNamespace,
+		claimMirrorRef(prefix),
 	)
 	if err != nil {
 		slog.WarnContext(
