@@ -1,5 +1,5 @@
 ---
-status: prompted
+status: completed
 tags:
     - dark-factory
     - spec
@@ -7,6 +7,8 @@ tags:
 approved: "2026-11-13T09:14:14Z"
 generating: "2026-11-13T09:18:27Z"
 prompted: "2026-11-13T09:28:56Z"
+verifying: "2026-11-13T09:53:22Z"
+completed: "2026-11-13T09:53:29Z"
 branch: dark-factory/scope-claim-ref-listing-by-prefix
 ---
 
