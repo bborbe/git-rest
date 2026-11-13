@@ -49,7 +49,55 @@ spec:
     spec:
       restartPolicy: Never
       automountServiceAccountToken: false
+      # The mint image lives on a private registry, so the kubelet needs a
+      # credential for it. Without this the pod sits in ImagePullBackOff with
+      # `no basic auth credentials` — the same failure an expired clone token
+      # produces, which is what makes it easy to misread as a broken image.
+      imagePullSecrets:
+        - name: buildkit-push-nuke
       initContainers:
+        # Mints a GitHub App installation token for THIS pod. A render-time mint
+        # (hack/mint-git-credential.sh) writes one token into a shared Secret and
+        # that token dies 60 minutes later, so every build after the hour fails
+        # at the clone with `could not read Username`. Minting here makes the
+        # credential's lifetime the pod's, not the render's.
+        - name: mint-token
+          image: __MINT_IMAGE__
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -eu
+              # The credential is OPTIONAL — the volume is `optional: true`, so a
+              # cluster without the Secret mounts an empty directory rather than
+              # failing. Gate on the files, or `set -eu` turns an absent Secret
+              # into an init failure that breaks every public-repo build.
+              if [ ! -f /git-credential/APP_ID ] \
+                || [ ! -f /git-credential/INSTALLATION_ID ] \
+                || [ ! -f /git-credential/PEM_KEY ]; then
+                echo "mint-token: no git-credential Secret mounted; building unauthenticated (public repos only)"
+                exit 0
+              fi
+              # The App identity is read from the mounted Secret rather than
+              # templated in: no numeric IDs reach the rendered manifest, and one
+              # template serves every repo without a per-repo ID table.
+              /main \
+                -app-id="$(cat /git-credential/APP_ID)" \
+                -installation-id="$(cat /git-credential/INSTALLATION_ID)" \
+                -pem-key-file=/git-credential/PEM_KEY \
+                > /token/token
+          resources:
+            requests:
+              cpu: 100m
+              memory: 64Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+          volumeMounts:
+            - name: git-credential
+              mountPath: /git-credential
+              readOnly: true
+            - name: token
+              mountPath: /token
         - name: clone
           image: alpine/git:v2.54.0@sha256:e8ceedc73bd80992ae8d58a7d24c58b8322146c354f1d2e81a97db4452068ec0
           command: ["/bin/sh", "-c"]
@@ -68,7 +116,9 @@ spec:
               # removed anyway as a belt-and-braces measure.
               git init -q /src
               git -C /src remote add origin "$1"
-              token_file=/git-credential/token
+              # Written by the mint-token init container, not mounted: the token is
+              # minted per pod and never persisted in a Secret.
+              token_file=/token/token
               # The secret is projected with an explicit `items:` list, so a secret
               # that exists without the expected key fails the mount loudly. This
               # branch covers the remaining case: the key present but blank.
@@ -142,8 +192,10 @@ spec:
               mountPath: /src
             - name: meta
               mountPath: /meta
-            - name: git-credential
-              mountPath: /git-credential
+            # Only the minted token, never the App PEM: the clone has no reason
+            # to read a key that can mint credentials for every repo the App sees.
+            - name: token
+              mountPath: /token
               readOnly: true
       containers:
         - name: build
@@ -231,19 +283,30 @@ spec:
               mountPath: /docker-config
               readOnly: true
       volumes:
-        # Optional on purpose: a cluster without this secret still builds every
-        # public repo, and a private one fails loudly at the clone instead of
-        # silently running unauthenticated.
+        # The App identity the mint-token container reads. Optional on purpose: a
+        # cluster without it still builds every public repo, and a private one
+        # fails loudly at the mint instead of silently running unauthenticated.
+        #
+        # This replaces a `git-clone` Secret holding one pre-minted token. That
+        # design dies on a clock: an installation token lives 60 minutes, so a
+        # repo whose builds are days apart clones anonymously and fails with
+        # `could not read Username for 'https://github.com'` — measured
+        # 2026-11-13 on both sun and nukedev.
         - name: git-credential
           secret:
-            secretName: git-clone
+            secretName: __GIT_SECRET__
             optional: true
-            # Project only the one key. Without `items:` every key in the secret
-            # lands in /git-credential, and a differently-named key would silently
-            # take the anonymous path.
             items:
-              - key: token
-                path: token
+              - key: APP_ID
+                path: APP_ID
+              - key: INSTALLATION_ID
+                path: INSTALLATION_ID
+              - key: PEM_KEY
+                path: PEM_KEY
+        # Holds the minted installation token. The build container mounts
+        # neither this nor the App secret.
+        - name: token
+          emptyDir: {}
         - name: src
           emptyDir: {}
         - name: meta
