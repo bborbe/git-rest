@@ -1,14 +1,28 @@
 #!/usr/bin/env bash
-# claim-ref-listing-probe.sh — rung-1 reproduction for the claim-ref listing
-# process fan-out (specs/in-progress/026-batch-claim-ref-commit-reads.md).
+# claim-ref-listing-probe.sh — rung-1 reproduction for claim-ref listing cost
+# (specs/in-progress/026-batch-claim-ref-commit-reads.md and
+# specs/in-progress/027-scope-claim-ref-listing-by-prefix.md).
 #
-# Seeds a temporary bare origin with PROBE_REFS refs/claims/success/... refs,
-# puts a counting `git` shim first on the *server's* PATH, boots the git-rest
-# binary against a clone of that origin, and GETs the claim-ref listing. The
-# printed `cat-file` count comes from the shim's counter file and the ref count
-# from the response body — neither is hard-coded. The script deliberately does
-# not assert the `cat-file` count: the pre-fix build must still print its real
-# count so the reviewer can compare the two builds.
+# Seeds a temporary bare origin with PROBE_REFS refs/claims/success/... refs
+# plus PROBE_FIXTURE_REFS refs under PROBE_FIXTURE_PREFIX (default
+# claims/target/), puts a counting `git` shim first on the *server's* PATH,
+# boots the git-rest binary against a clone of that origin, and GETs the
+# claim-ref listing. The printed `cat-file` count and argv lines come from the
+# shim's counter file; the ref counts come from the response bodies — none are
+# hard-coded. The script deliberately does not assert the `cat-file` count: the
+# pre-fix build must still print its real count so the reviewer can compare the
+# two builds.
+#
+# Prefix-scoping assertions (spec 027). The probe lists the small fixture prefix
+# and prints how long that listing took. Each listing path is guarded by the
+# argv it actually sends to git:
+#   - live mode asserts the recorded `ls-remote` argument line ends in
+#     refs/claims/target/* and not the whole claim namespace refs/claims/*.
+#   - --mirror mode asserts the recorded `for-each-ref` argument line ends in
+#     refs/claim-mirror/target/ and not the bare refs/claim-mirror/, and prints
+#     `ls-remote argv: (none)` because the mirror path makes no network call.
+# A process *count* would not discriminate: the unfixed walk is also exactly
+# one process.
 #
 # Discrimination (pre-fix vs post-fix). Build a binary from a clean
 # origin/master checkout separately:
@@ -45,6 +59,19 @@ PROBE_REFS="${PROBE_REFS:-300}"
 printf '%s' "${PROBE_REFS}" | grep -Eq '^[1-9][0-9]*$' ||
 	die "PROBE_REFS must be a positive integer (got '${PROBE_REFS}')"
 
+# Small synthetic fixture prefix listed separately so the probe can show that a
+# narrow listing does not pay for the large claims/success/ fixture. It does not
+# exist in production.
+PROBE_FIXTURE_PREFIX="${PROBE_FIXTURE_PREFIX:-claims/target/}"
+PROBE_FIXTURE_REFS="${PROBE_FIXTURE_REFS:-3}"
+mirror_namespace="refs/claim-mirror/"
+printf '%s' "${PROBE_FIXTURE_REFS}" | grep -Eq '^[1-9][0-9]*$' ||
+	die "PROBE_FIXTURE_REFS must be a positive integer (got '${PROBE_FIXTURE_REFS}')"
+case "${PROBE_FIXTURE_PREFIX}" in
+claims/*) ;;
+*) die "PROBE_FIXTURE_PREFIX must start with claims/ (got '${PROBE_FIXTURE_PREFIX}')" ;;
+esac
+
 # Allocate a free localhost port unless PORT was supplied. python3 gives the
 # kernel's own free port; the RANDOM fallback keeps the script runnable on a
 # host without python3 (bash 3.2 has $RANDOM).
@@ -65,6 +92,7 @@ shim_dir="${tmp}/shim"
 counter="${tmp}/git-argv.log"
 server_log="${tmp}/server.log"
 body="${tmp}/body.json"
+fixture_body="${tmp}/fixture-body.json"
 mkdir -p "${shim_dir}"
 : >"${counter}"
 
@@ -128,6 +156,13 @@ while [ "${i}" -le "${PROBE_REFS}" ]; do
 	idx=$(((i - 1) % commit_count))
 	printf 'create refs/claims/success/task%d/phase%d/%d %s\n' \
 		"${i}" "${i}" "${i}" "${claim_shas[${idx}]}" >>"${refs_input}"
+	i=$((i + 1))
+done
+i=1
+while [ "${i}" -le "${PROBE_FIXTURE_REFS}" ]; do
+	idx=$(((i - 1) % commit_count))
+	printf 'create refs/%stask%d/phase%d/%d %s\n' \
+		"${PROBE_FIXTURE_PREFIX}" "${i}" "${i}" "${i}" "${claim_shas[${idx}]}" >>"${refs_input}"
 	i=$((i + 1))
 done
 git -C "${origin}" update-ref --stdin <"${refs_input}" ||
@@ -230,7 +265,7 @@ else
 	done
 fi
 
-# --- derive the numbers from live data --------------------------------------
+# --- derive the success-prefix numbers from live data -----------------------
 # grep -c exits 1 when nothing matches; `|| true` keeps that from aborting the
 # script while still leaving "0" as the output.
 catfile_invocations="$(grep -c '^cat-file' "${counter}" 2>/dev/null || true)"
@@ -248,7 +283,68 @@ echo "${served_from}"
 echo "cat-file invocations: ${catfile_invocations}"
 echo "refs returned: ${refs_returned}"
 
-if [ "${refs_returned}" -eq "${PROBE_REFS}" ]; then
+# --- GET the small fixture prefix -------------------------------------------
+# URL-encode the prefix's slashes; the default is claims%2Ftarget%2F.
+fixture_prefix_encoded="$(printf '%s' "${PROBE_FIXTURE_PREFIX}" | sed 's|/|%2F|g')"
+fixture_url="http://127.0.0.1:${port}/api/v1/refs?prefix=${fixture_prefix_encoded}"
+
+# Truncate immediately before the GET so the recorded argv belongs to this
+# listing, not to the success-prefix GET or to a pull.
+: >"${counter}"
+elapsed_s="$(curl -sS -o "${fixture_body}" -w '%{time_total}' "${fixture_url}")" || {
+	echo "--- server log ---" >&2
+	cat "${server_log}" >&2 || true
+	die "GET ${fixture_url} failed"
+}
+elapsed_ms="$(awk -v t="${elapsed_s}" 'BEGIN{printf "%d", t*1000}')"
+fixture_refs_returned="$(grep -o '"ref":' "${fixture_body}" 2>/dev/null | wc -l | tr -d ' ' || true)"
+[ -n "${fixture_refs_returned}" ] || fixture_refs_returned=0
+
+# --- report and assert the scoped invocation --------------------------------
+# The last field of each recorded line is the ref pattern git was given. A
+# process count cannot distinguish a scoped walk from the whole-namespace walk;
+# the pattern can.
+for_each_ref_line="$(grep '^for-each-ref' "${counter}" | tail -n 1 || true)"
+ls_remote_line="$(grep '^ls-remote' "${counter}" | tail -n 1 || true)"
+
+echo "fixture prefix: ${PROBE_FIXTURE_PREFIX}"
+echo "fixture refs returned: ${fixture_refs_returned}"
+echo "small-prefix listing: ${elapsed_ms} ms"
+
+if [ "${MODE}" = "mirror" ]; then
+	echo "ls-remote argv: (none)"
+	[ -n "${for_each_ref_line}" ] || for_each_ref_line="(none)"
+	echo "for-each-ref argv: ${for_each_ref_line}"
+	expected_pattern="${mirror_namespace}${PROBE_FIXTURE_PREFIX#claims/}"
+	recorded_pattern="${for_each_ref_line##* }"
+	if [ "${recorded_pattern}" != "${expected_pattern}" ]; then
+		die "expected for-each-ref pattern '${expected_pattern}', recorded line '${for_each_ref_line}'"
+	fi
+	if [ "${recorded_pattern}" = "${mirror_namespace}" ]; then
+		die "for-each-ref walked the bare namespace '${mirror_namespace}': '${for_each_ref_line}'"
+	fi
+else
+	echo "for-each-ref argv: (none)"
+	[ -n "${ls_remote_line}" ] || ls_remote_line="(none)"
+	echo "ls-remote argv: ${ls_remote_line}"
+	expected_pattern="refs/${PROBE_FIXTURE_PREFIX}*"
+	recorded_pattern="${ls_remote_line##* }"
+	if [ "${recorded_pattern}" != "${expected_pattern}" ]; then
+		die "expected ls-remote pattern '${expected_pattern}', recorded line '${ls_remote_line}'"
+	fi
+	if [ "${recorded_pattern}" = "refs/claims/*" ]; then
+		die "ls-remote asked for the whole claim namespace 'refs/claims/*': '${ls_remote_line}'"
+	fi
+fi
+
+# Report, do not fail, when the small-prefix listing misses the 100 ms target:
+# that decides whether the follow-up index spec is warranted.
+if [ "${elapsed_ms}" -gt 100 ]; then
+	echo "small-prefix listing exceeds 100 ms: index fallback indicated"
+fi
+
+if [ "${refs_returned}" -eq "${PROBE_REFS}" ] &&
+	[ "${fixture_refs_returned}" -eq "${PROBE_FIXTURE_REFS}" ]; then
 	exit 0
 fi
-die "expected ${PROBE_REFS} refs, got ${refs_returned}"
+die "expected ${PROBE_REFS} success refs and ${PROBE_FIXTURE_REFS} fixture refs, got ${refs_returned} and ${fixture_refs_returned}"

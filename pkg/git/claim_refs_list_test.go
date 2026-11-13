@@ -455,6 +455,39 @@ func TestListClaimRefsGolden(t *testing.T) {
 	}
 }
 
+// TestClaimListLiveScopedPattern records the exact pattern the live-origin path
+// sends to the origin and proves the Go filter still applies whole-path-component
+// semantics: the ls-remote glob may return refs/claims/targets/1, but the listing
+// must drop it.
+func TestClaimListLiveScopedPattern(t *testing.T) {
+	refs := []git.RemoteRef{
+		{SHA: claimShaA, Ref: "refs/claims/target/1"},
+		{SHA: claimShaB, Ref: "refs/claims/targets/1"},
+	}
+	fake := newClaimListFake(refs)
+	g := git.NewGitWithClaimOrigin(fake)
+	logs, restore := captureSlogLogs()
+	defer restore()
+
+	claims, err := g.ListClaimRefs(context.Background(), "claims/target/")
+	if err != nil {
+		t.Fatalf("ListClaimRefs: %v", err)
+	}
+	if got := fake.ListRefsCallCount(); got != 1 {
+		t.Fatalf("expected exactly one ListRefs call, got %d", got)
+	}
+	_, pattern := fake.ListRefsArgsForCall(0)
+	if pattern != "refs/claims/target/*" {
+		t.Fatalf("expected ListRefs pattern refs/claims/target/*, got %q", pattern)
+	}
+	if len(claims) != 1 || claims[0].Ref != "refs/claims/target/1" {
+		t.Fatalf("expected only refs/claims/target/1, got %+v", claims)
+	}
+	if got := countLogLines(logs.String(), "served_from=origin"); got != 1 {
+		t.Fatalf("expected exactly one served_from=origin line, got %d in:\n%s", got, logs)
+	}
+}
+
 func TestClaimIsObjectID(t *testing.T) {
 	tests := []struct {
 		name string

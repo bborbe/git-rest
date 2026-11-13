@@ -254,6 +254,8 @@ func (g *git) listClaimRefsLive(ctx context.Context, prefix string) ([]ClaimRef,
 	if err := ctx.Err(); err != nil {
 		return nil, errors.Wrap(ctx, err, "claim ref listing cancelled")
 	}
+	// The pattern scopes the remote listing to the caller's prefix; the Go
+	// filter below stays the authority for whole-path-component semantics.
 	entries, err := g.origin.ListRefs(ctx, "refs/"+prefix+"*")
 	if err != nil {
 		return nil, errors.Wrap(ctx, err, "list claim refs")
