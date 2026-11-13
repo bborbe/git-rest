@@ -1,10 +1,11 @@
 ---
-status: draft
-kind: bug
+status: approved
 tags:
     - dark-factory
     - spec
     - bug
+approved: "2026-11-13T09:14:14Z"
+branch: dark-factory/scope-claim-ref-listing-by-prefix
 ---
 
 ## Summary
