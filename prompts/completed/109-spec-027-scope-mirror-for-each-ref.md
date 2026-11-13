@@ -1,8 +1,13 @@
 ---
-status: approved
+status: completed
 spec: [027-scope-claim-ref-listing-by-prefix]
+summary: Verified the already-committed prefix-scoped mirror for-each-ref change and probe extension; focused tests, both probe modes and make precommit pass, and the 7000-ref small-prefix listing measured 13 ms (under the 100 ms index threshold).
+execution_id: 7185c73c-c70f-559f-ae84-eddce61cd208-exec-109-spec-027-scope-mirror-for-each-ref
+dark-factory-version: dev
 created: "2026-11-13T09:21:44Z"
 queued: "2026-11-13T09:37:46Z"
+started: "2026-11-13T09:48:00Z"
+completed: "2026-11-13T09:53:22Z"
 branch: dark-factory/scope-claim-ref-listing-by-prefix
 ---
 
