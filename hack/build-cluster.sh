@@ -17,6 +17,13 @@ TIMEOUT="${TIMEOUT:-3600}"
 DOCKERFILE="${DOCKERFILE:-Dockerfile}"
 DOCKER_REGISTRY="${DOCKER_REGISTRY:-docker.io}"
 
+# Clone credential. The Job's mint-token init container mints a fresh GitHub App
+# installation token from this Secret on every pod, so the credential's lifetime
+# is the pod's rather than a render's. Pinned by digest so a moved `dev` tag
+# cannot silently change the mint binary between two builds of the same ref.
+GIT_SECRET="${GIT_SECRET:-git-app}"
+MINT_IMAGE="${MINT_IMAGE:-docker.prod.nuke.benjamin-borbe.de:443/scripts-mint-iat@sha256:cdda1554dcc203b408fe4f9a734c07204ee0a0971b3dc062c599c98b63388e81}"
+
 die() {
 	echo "build-cluster: $*" >&2
 	exit 1
@@ -86,6 +93,10 @@ printf '%s' "${DOCKERFILE}" | grep -qE '^[A-Za-z0-9._/-]+$' ||
 	die "DOCKERFILE '${DOCKERFILE}' contains characters outside [A-Za-z0-9._/-]"
 printf '%s' "${PUSH_SECRET}" | grep -qE '^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$' ||
 	die "PUSH_SECRET '${PUSH_SECRET}' is not a valid Kubernetes secret name"
+printf '%s' "${GIT_SECRET}" | grep -qE '^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$' ||
+	die "GIT_SECRET '${GIT_SECRET}' is not a valid Kubernetes secret name"
+printf '%s' "${MINT_IMAGE}" | grep -qE '^[A-Za-z0-9._/:@-]+$' ||
+	die "MINT_IMAGE '${MINT_IMAGE}' contains characters outside [A-Za-z0-9._/:@-]"
 printf '%s' "${DOCKER_REGISTRY}" | grep -qE '^[A-Za-z0-9._/:-]+$' ||
 	die "DOCKER_REGISTRY '${DOCKER_REGISTRY}' contains characters outside [A-Za-z0-9._/:-]"
 printf '%s' "${TIMEOUT}" | grep -qE '^[0-9]+$' ||
@@ -101,7 +112,7 @@ esac
 # passes the whitelist on its first line and its remaining lines are injected
 # verbatim by sed into the YAML and the embedded `sh -c` script. Reject embedded
 # newlines for every value before rendering.
-for _var in REF TAG IMAGE REPO_URL DOCKERFILE SUBDIR PUSH_SECRET DOCKER_REGISTRY TIMEOUT NAMESPACE; do
+for _var in REF TAG IMAGE REPO_URL DOCKERFILE SUBDIR PUSH_SECRET GIT_SECRET MINT_IMAGE DOCKER_REGISTRY TIMEOUT NAMESPACE; do
 	case "${!_var}" in
 	*$'\n'*) die "${_var} contains a newline, which is not allowed" ;;
 	esac
@@ -151,6 +162,8 @@ sed \
 	-e "s|__IMAGE__|${IMAGE}|g" \
 	-e "s|__PUSH__|${PUSH}|g" \
 	-e "s|__PUSH_SECRET__|${PUSH_SECRET}|g" \
+	-e "s|__GIT_SECRET__|${GIT_SECRET}|g" \
+	-e "s|__MINT_IMAGE__|${MINT_IMAGE}|g" \
 	-e "s|__DEADLINE_SECONDS__|${TIMEOUT}|g" \
 	-e "s|__SOURCE_DATE_EPOCH__|${SOURCE_DATE_EPOCH}|g" \
 	-e "s|__DOCKER_REGISTRY__|${DOCKER_REGISTRY}|g" \

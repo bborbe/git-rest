@@ -10,6 +10,7 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 
 ## Unreleased
 
+- feat: Mint the cluster build's clone credential inside the build Job instead of at render time. `hack/build-cluster.sh` now takes `GIT_SECRET` (default `git-app`) and `MINT_IMAGE`, and `hack/build-job.yaml` runs a `mint-token` init container ahead of the clone. A render-time mint writes one GitHub App installation token into a shared Secret and that token dies 60 minutes later, so every build after the hour failed at the clone with `could not read Username`; minting per pod makes the credential's lifetime the pod's. The App identity is read from the mounted Secret rather than templated in, and the mint image is pinned by digest so a moved `dev` tag cannot change the binary between two builds of the same ref.
 - test: Lock both claim ref listing paths to their prefix-scoped git invocations — the live-path test records the exact `ls-remote` pattern and the probe asserts the `ls-remote`/`for-each-ref` argv in live and mirror modes.
 
 ## v0.44.2
