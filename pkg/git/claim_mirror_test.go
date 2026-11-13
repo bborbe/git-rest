@@ -1095,6 +1095,83 @@ func countGitInvocations(t *testing.T, counterPath string) gitProcessCounts {
 	return counts
 }
 
+// TestClaimMirrorWalkIsPrefixScoped proves the mirror listing hands the prefix
+// to for-each-ref instead of walking the whole mirror namespace. A process
+// count cannot prove this: the unscoped walk is also exactly one process, so
+// the test asserts the recorded argv itself.
+func TestClaimMirrorWalkIsPrefixScoped(t *testing.T) {
+	realGit, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatalf("locate git: %v", err)
+	}
+	shimDir := t.TempDir()
+	counterPath := filepath.Join(shimDir, "counter")
+	writeGitShim(t, filepath.Join(shimDir, "git"), realGit, counterPath)
+
+	fixture := newClaimFixture(t)
+	configureClaimIdentity(t, fixture.bare)
+	seedClaimRefs(t, fixture.bare, 80)
+
+	client := newClaimClient(fixture.cloneA)
+	ctx := context.Background()
+	if err := client.ConfigureClaimMirror(ctx); err != nil {
+		t.Fatalf("ConfigureClaimMirror: %v", err)
+	}
+	if err := client.Pull(ctx); err != nil {
+		t.Fatalf("Pull: %v", err)
+	}
+
+	oldPath := os.Getenv("PATH")
+	if err := os.Setenv("PATH", shimDir+string(os.PathListSeparator)+oldPath); err != nil {
+		t.Fatalf("prepend git shim to PATH: %v", err)
+	}
+	if err := os.WriteFile(counterPath, nil, 0o600); err != nil {
+		t.Fatalf("truncate git counter: %v", err)
+	}
+	logs, restore := captureSlogLogs()
+	defer restore()
+	h := libhttp.NewJSONErrorHandler(handler.NewRefsGetHandler(client))
+	// task7 must match task7/... only, never task70..task79.
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/refs?prefix=claims%2Fsuccess%2Ftask7", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if err := os.Setenv("PATH", oldPath); err != nil {
+		t.Fatalf("restore PATH: %v", err)
+	}
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET status %d, want %d: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	var claims []git.ClaimRef
+	if err := json.Unmarshal(rec.Body.Bytes(), &claims); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(claims) != 1 {
+		t.Fatalf("want 1 ref under claims/success/task7, got %d: %+v", len(claims), claims)
+	}
+	if got := countLogLines(logs.String(), "served_from=mirror"); got != 1 {
+		t.Fatalf("want exactly one served_from=mirror line, got %d in:\n%s", got, logs)
+	}
+
+	data, err := os.ReadFile(counterPath)
+	if err != nil {
+		t.Fatalf("read git counter: %v", err)
+	}
+	var walks []string
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.HasPrefix(line, "for-each-ref") {
+			walks = append(walks, line)
+		}
+	}
+	if len(walks) != 1 {
+		t.Fatalf("want exactly one for-each-ref, got %d: %q", len(walks), walks)
+	}
+	const want = " refs/claim-mirror/success/task7"
+	if !strings.HasSuffix(walks[0], want) {
+		t.Fatalf("for-each-ref not scoped to the prefix: %q, want suffix %q", walks[0], want)
+	}
+}
+
 // TestClaimMirrorUpdateFailureSwallowed proves a failed local mirror update
 // never fails the request: the origin write stands and the failure is logged.
 func TestClaimMirrorUpdateFailureSwallowed(t *testing.T) {
