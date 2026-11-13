@@ -1,6 +1,6 @@
 module github.com/bborbe/git-rest
 
-go 1.27.3
+go 1.27.4
 
 require (
 	github.com/bborbe/errors v1.6.6
