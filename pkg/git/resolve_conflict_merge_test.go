@@ -911,6 +911,104 @@ func TestResolveModifyDeleteTheirsDeleted(t *testing.T) {
 	}
 }
 
+// TestLinesSubMultiset pins the additive-only predicate: base is a sub-multiset of
+// ours (every base line present at least as many times), ordering ignored, so a
+// dropped duplicate line is not counted as present.
+func TestLinesSubMultiset(t *testing.T) {
+	cases := []struct {
+		name string
+		base string
+		ours string
+		want bool
+	}{
+		{"identical", "a\nb\n", "a\nb\n", true},
+		{"additive", "a\nb\n", "a\nb\nc\n", true},
+		{"reordered", "a\nb\nc\n", "c\na\nb\n", true},
+		{"dropped line", "a\nb\nc\n", "a\nc\n", false},
+		{"dropped duplicate", "a\na\nb\n", "a\nb\nc\nd\n", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := linesSubMultiset(tc.base, tc.ours); got != tc.want {
+				t.Errorf("linesSubMultiset(%q, %q) = %v, want %v", tc.base, tc.ours, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestResolveModifyDeleteAdditiveSurvivingSide proves the additive modify/delete
+// arm: a theirs-deleted path outside _conflicts/ whose merge-base version is a
+// sub-multiset of the survivor is kept (returns true, survivor intact), while a
+// lossy or duplicate-dropping edit falls through (returns false, quarantined by
+// the caller).
+func TestResolveModifyDeleteAdditiveSurvivingSide(t *testing.T) {
+	cases := []struct {
+		name    string
+		base    string
+		ours    string
+		wantRes bool
+		wantSur string
+	}{
+		{
+			"additive",
+			"line one\nline two\n",
+			"line one\nline two\nline three\n",
+			true,
+			"line one\nline two\nline three\n",
+		},
+		{"lossy", "line one\nline two\nline three\n", "line one\nline three\n", false, ""},
+		{"dropped duplicate", "a\na\nb\n", "a\nb\nc\nd\n", false, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			workDir := t.TempDir()
+			run := func(args ...string) {
+				cmd := exec.Command("git", args...)
+				cmd.Dir = workDir
+				if out, e := cmd.CombinedOutput(); e != nil {
+					t.Fatalf("git %v: %s", args, string(out))
+				}
+			}
+			run("init", "-q", "-b", "main")
+			run("config", "user.email", "test@example.com")
+			run("config", "user.name", "Test")
+			if wErr := os.WriteFile(filepath.Join(workDir, "f.md"), []byte(tc.base), 0o644); wErr != nil {
+				t.Fatalf("write base: %v", wErr)
+			}
+			run("add", "--", "f.md")
+			run("commit", "-q", "-m", "base")
+			// theirs deletes the path.
+			run("checkout", "-q", "-b", "theirs")
+			run("rm", "-q", "--", "f.md")
+			run("commit", "-q", "-m", "delete")
+			// ours modifies it additively or lossily.
+			run("checkout", "-q", "main")
+			if wErr := os.WriteFile(filepath.Join(workDir, "f.md"), []byte(tc.ours), 0o644); wErr != nil {
+				t.Fatalf("write ours: %v", wErr)
+			}
+			run("commit", "-q", "-am", "modify")
+			// Merge theirs: a modify/delete conflict (non-zero exit expected).
+			mergeCmd := exec.Command("git", "merge", "theirs")
+			mergeCmd.Dir = workDir
+			_ = mergeCmd.Run()
+
+			repo := New(workDir, &unsafeTestMetrics{}, libtime.NewCurrentDateTime(), "", fakeResolver{}).(*git)
+			if got := repo.resolveModifyDelete(context.Background(), "f.md", conflictKindTheirsDeleted); got != tc.wantRes {
+				t.Fatalf("resolveModifyDelete = %v, want %v", got, tc.wantRes)
+			}
+			if tc.wantRes {
+				content, rErr := os.ReadFile(filepath.Join(workDir, "f.md"))
+				if rErr != nil {
+					t.Fatalf("read survivor: %v", rErr)
+				}
+				if string(content) != tc.wantSur {
+					t.Errorf("survivor = %q, want %q", string(content), tc.wantSur)
+				}
+			}
+		})
+	}
+}
+
 // TestIsRetryablePushRejection pins the push-rejection classifier against the
 // git output shapes it must tell apart: a lost push race is retryable, while an
 // auth failure, a remote hook refusal, or a success is terminal.

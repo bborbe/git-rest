@@ -1585,8 +1585,11 @@ func (g *git) acceptUpstreamDeletion(ctx context.Context, path string) error {
 //
 // A theirs-deleted conflict is accepted only when the path is under _conflicts/:
 // that is the operator's drain of a quarantined entry (spec 015 Desired Behavior
-// 4). A theirs-deleted path outside the quarantine directory falls through to the
-// configured resolver, exactly as before.
+// 4). A theirs-deleted path outside the quarantine directory is kept as the
+// surviving side when the merge-base version is a sub-multiset of it — an
+// additive-only local edit, so the upstream deletion loses nothing. Otherwise it
+// falls through to the configured resolver, which quarantines it under the YAML
+// merge resolver.
 func (g *git) resolveModifyDelete(ctx context.Context, path string, kind conflictKind) bool {
 	if kind == conflictKindOursDeleted {
 		if err := g.stageUpstreamVersion(ctx, path); err != nil {
@@ -1630,7 +1633,94 @@ func (g *git) resolveModifyDelete(ctx context.Context, path string, kind conflic
 		)
 		return true
 	}
+	if kind == conflictKindTheirsDeleted && !isUnderConflictsDir(path) {
+		if g.isAdditiveModifyDelete(ctx, path) {
+			if err := g.keepOursSide(ctx, path); err != nil {
+				slog.WarnContext(
+					ctx,
+					"git-rest: keeping the surviving side of an additive modify/delete conflict failed",
+					"path",
+					path,
+					"err",
+					err.Error(),
+				)
+				return false
+			}
+			slog.InfoContext(
+				ctx,
+				"git-rest: modify/delete conflict resolved by keeping the surviving side",
+				"path",
+				path,
+			)
+			return true
+		}
+	}
 	return false
+}
+
+// isAdditiveModifyDelete reports whether the merge-base version of path (stage 1)
+// is a sub-multiset of the surviving side (stage 2) — an additive-only local edit.
+// A missing stage 1 or 2, or a read error, is not additive: the path then falls
+// through to the configured resolver, which quarantines it.
+func (g *git) isAdditiveModifyDelete(ctx context.Context, path string) bool {
+	base, err := g.runCmdOutput(ctx, g.repoPath, "show", ":1:"+path)
+	if err != nil {
+		slog.WarnContext(
+			ctx,
+			"git-rest: reading the merge-base version for a modify/delete check failed",
+			"path",
+			path,
+			"err",
+			err.Error(),
+		)
+		return false
+	}
+	ours, err := g.runCmdOutput(ctx, g.repoPath, "show", ":2:"+path)
+	if err != nil {
+		slog.WarnContext(
+			ctx,
+			"git-rest: reading the surviving version for a modify/delete check failed",
+			"path",
+			path,
+			"err",
+			err.Error(),
+		)
+		return false
+	}
+	return linesSubMultiset(string(base), string(ours))
+}
+
+// linesSubMultiset reports whether every line of base appears in ours at least as
+// many times — base is a sub-multiset of ours. A dropped duplicate line is not
+// counted as present; ordering is ignored.
+func linesSubMultiset(base, ours string) bool {
+	baseCount := make(map[string]int)
+	for _, line := range strings.Split(base, "\n") {
+		baseCount[line]++
+	}
+	oursCount := make(map[string]int)
+	for _, line := range strings.Split(ours, "\n") {
+		oursCount[line]++
+	}
+	for line, count := range baseCount {
+		if oursCount[line] < count {
+			return false
+		}
+	}
+	return true
+}
+
+// keepOursSide writes HEAD's version of path into the working tree and stages it,
+// clearing the unmerged index entry. It is the checkout --ours + add pair shared
+// by the additive modify/delete arm and skipQuarantinedPath.
+func (g *git) keepOursSide(ctx context.Context, path string) error {
+	if err := g.runCmd(ctx, g.repoPath, "checkout", "--ours", "--", path); err != nil {
+		return errors.Wrapf(ctx, err, "checkout --ours %s", path)
+	}
+	if err := g.runCmd(ctx, g.repoPath, "add", "--", path); err != nil {
+		return errors.Wrapf(ctx, err, "git add %s", path)
+	}
+	return nil
 }
 
 // skipQuarantinedPath resolves a conflicted path that already lives under
@@ -1650,21 +1740,10 @@ func (g *git) resolveModifyDelete(ctx context.Context, path string, kind conflic
 // leaving the index entry unmerged so a later commit refuses rather than
 // silently dropping the conflict.
 func (g *git) skipQuarantinedPath(ctx context.Context, path string) bool {
-	if err := g.runCmd(ctx, g.repoPath, "checkout", "--ours", "--", path); err != nil {
+	if err := g.keepOursSide(ctx, path); err != nil {
 		slog.WarnContext(
 			ctx,
 			"git-rest: keeping the local version of a conflicted path under _conflicts/ failed",
-			"path",
-			path,
-			"err",
-			err.Error(),
-		)
-		return false
-	}
-	if err := g.runCmd(ctx, g.repoPath, "add", "--", path); err != nil {
-		slog.WarnContext(
-			ctx,
-			"git-rest: staging the kept local version of a conflicted path under _conflicts/ failed",
 			"path",
 			path,
 			"err",
