@@ -10,6 +10,8 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 
 ## Unreleased
 
+- fix: keep the surviving side on an additive modify/delete conflict. A theirs-deleted path outside `_conflicts/` whose merge-base version is a sub-multiset of the survivor now resolves to the survivor instead of quarantining as `no_frontmatter`; a lossy or duplicate-dropping edit still falls through to quarantine. The additive arm is a no-op under the default `MarkerResolver` (its `git add` already stages the survivor) and load-bearing under the YAML merge resolver (`VAULT_WRITE_MODE=true`), which is what the vault pods run.
+
 - fix: install a pinned, checksum-verified Trivy release instead of piping the upstream install script from `main` into a shell. The previous change fixed the retired apt keyring helper but replaced a GPG-verified install with an unpinned root-level dependency.
 
 - feat: add a `check-task-link` gate that fails a PR whose body carries no `Task: <task_identifier>` line
