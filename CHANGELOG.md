@@ -8,7 +8,7 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 * MINOR version when you add functionality in a backwards-compatible manner, and
 * PATCH version when you make backwards-compatible bug fixes.
 
-## Unreleased
+## v0.45.0
 
 - fix: keep the surviving side on an additive modify/delete conflict. A theirs-deleted path outside `_conflicts/` whose merge-base version is a sub-multiset of the survivor now resolves to the survivor instead of quarantining as `no_frontmatter`; a lossy or duplicate-dropping edit still falls through to quarantine. The additive arm is a no-op under the default `MarkerResolver` (its `git add` already stages the survivor) and load-bearing under the YAML merge resolver (`VAULT_WRITE_MODE=true`), which is what the vault pods run.
 
