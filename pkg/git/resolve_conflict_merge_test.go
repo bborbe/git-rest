@@ -961,38 +961,7 @@ func TestResolveModifyDeleteAdditiveSurvivingSide(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			workDir := t.TempDir()
-			run := func(args ...string) {
-				cmd := exec.Command("git", args...)
-				cmd.Dir = workDir
-				if out, e := cmd.CombinedOutput(); e != nil {
-					t.Fatalf("git %v: %s", args, string(out))
-				}
-			}
-			run("init", "-q", "-b", "main")
-			run("config", "user.email", "test@example.com")
-			run("config", "user.name", "Test")
-			if wErr := os.WriteFile(filepath.Join(workDir, "f.md"), []byte(tc.base), 0o644); wErr != nil {
-				t.Fatalf("write base: %v", wErr)
-			}
-			run("add", "--", "f.md")
-			run("commit", "-q", "-m", "base")
-			// theirs deletes the path.
-			run("checkout", "-q", "-b", "theirs")
-			run("rm", "-q", "--", "f.md")
-			run("commit", "-q", "-m", "delete")
-			// ours modifies it additively or lossily.
-			run("checkout", "-q", "main")
-			if wErr := os.WriteFile(filepath.Join(workDir, "f.md"), []byte(tc.ours), 0o644); wErr != nil {
-				t.Fatalf("write ours: %v", wErr)
-			}
-			run("commit", "-q", "-am", "modify")
-			// Merge theirs: a modify/delete conflict (non-zero exit expected).
-			mergeCmd := exec.Command("git", "merge", "theirs")
-			mergeCmd.Dir = workDir
-			_ = mergeCmd.Run()
-
-			repo := New(workDir, &unsafeTestMetrics{}, libtime.NewCurrentDateTime(), "", fakeResolver{}).(*git)
+			workDir, repo := setupModifyDeleteConflict(t, tc.base, tc.ours)
 			if got := repo.resolveModifyDelete(context.Background(), "f.md", conflictKindTheirsDeleted); got != tc.wantRes {
 				t.Fatalf("resolveModifyDelete = %v, want %v", got, tc.wantRes)
 			}
@@ -1007,6 +976,48 @@ func TestResolveModifyDeleteAdditiveSurvivingSide(t *testing.T) {
 			}
 		})
 	}
+}
+
+// setupModifyDeleteConflict builds a repo with a modify/delete conflict on f.md:
+// theirs deletes the path, main modifies it to ours. Returns the work dir and the
+// internal git handle.
+func setupModifyDeleteConflict(t *testing.T, base, ours string) (string, *git) {
+	t.Helper()
+	workDir := t.TempDir()
+	run := func(args ...string) {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = workDir
+		if out, e := cmd.CombinedOutput(); e != nil {
+			t.Fatalf("git %v: %s", args, string(out))
+		}
+	}
+	run("init", "-q", "-b", "main")
+	run("config", "user.email", "test@example.com")
+	run("config", "user.name", "Test")
+	if wErr := os.WriteFile(filepath.Join(workDir, "f.md"), []byte(base), 0o644); wErr != nil {
+		t.Fatalf("write base: %v", wErr)
+	}
+	run("add", "--", "f.md")
+	run("commit", "-q", "-m", "base")
+	// theirs deletes the path.
+	run("checkout", "-q", "-b", "theirs")
+	run("rm", "-q", "--", "f.md")
+	run("commit", "-q", "-m", "delete")
+	// ours modifies it additively or lossily.
+	run("checkout", "-q", "main")
+	if wErr := os.WriteFile(filepath.Join(workDir, "f.md"), []byte(ours), 0o644); wErr != nil {
+		t.Fatalf("write ours: %v", wErr)
+	}
+	run("commit", "-q", "-am", "modify")
+	// Merge theirs: a modify/delete conflict (non-zero exit expected).
+	mergeCmd := exec.Command("git", "merge", "theirs")
+	mergeCmd.Dir = workDir
+	_ = mergeCmd.Run()
+	repo, ok := New(workDir, &unsafeTestMetrics{}, libtime.NewCurrentDateTime(), "", fakeResolver{}).(*git)
+	if !ok {
+		t.Fatal("New did not return *git")
+	}
+	return workDir, repo
 }
 
 // TestIsRetryablePushRejection pins the push-rejection classifier against the
