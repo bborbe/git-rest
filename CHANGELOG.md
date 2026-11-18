@@ -8,6 +8,10 @@ Please choose versions by [Semantic Versioning](http://semver.org/).
 * MINOR version when you add functionality in a backwards-compatible manner, and
 * PATCH version when you make backwards-compatible bug fixes.
 
+## Unreleased
+
+- feat: carry an optional `spawned_at` on a claim ref, in the commit message and on the claim listing. It records the instant the holder created the claim's Job, so a peer that takes an expired claim over can tell a holder that ran the task from one that only held the key. Additive and `omitempty`: a `PUT` that omits it writes no key, so an older writer's payload is unchanged and an older reader ignores it.
+
 ## v0.45.0
 
 - fix: keep the surviving side on an additive modify/delete conflict. A theirs-deleted path outside `_conflicts/` whose merge-base version is a sub-multiset of the survivor now resolves to the survivor instead of quarantining as `no_frontmatter`; a lossy or duplicate-dropping edit still falls through to quarantine. The additive arm is a no-op under the default `MarkerResolver` (its `git add` already stages the survivor) and load-bearing under the YAML merge resolver (`VAULT_WRITE_MODE=true`), which is what the vault pods run.

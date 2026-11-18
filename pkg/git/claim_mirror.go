@@ -188,7 +188,7 @@ func (g *git) listClaimRefsFromMirror(
 			return nil, false, nil
 		}
 		claim := ClaimRef{Ref: entry.Ref, SHA: entry.SHA}
-		cluster, taskID, leaseUntil, parseErr := parseClaimMetadata(ctx, message)
+		cluster, taskID, leaseUntil, spawnedAt, parseErr := parseClaimMetadata(ctx, message)
 		if parseErr != nil {
 			slog.WarnContext(
 				ctx,
@@ -203,6 +203,7 @@ func (g *git) listClaimRefsFromMirror(
 		claim.Cluster = cluster
 		claim.TaskID = taskID
 		claim.LeaseUntil = leaseUntil
+		claim.SpawnedAt = spawnedAt
 		result = append(result, claim)
 	}
 	return result, true, nil

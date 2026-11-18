@@ -143,8 +143,9 @@ claim written by another cluster is visible after at most one pull cycle. Each
 read logs one INFO line naming its source: `served_from=mirror` with an
 `age_s=` field, or `served_from=origin`.
 
-Response: a JSON array, sorted by `ref`, of objects with exactly `ref`, `sha`,
-`cluster`, `task_id` and `lease_until`:
+Response: a JSON array, sorted by `ref`, of objects with `ref`, `sha`,
+`cluster`, `task_id`, `lease_until` and — when the holder has recorded it —
+`spawned_at`:
 
 ```json
 [
@@ -153,10 +154,19 @@ Response: a JSON array, sorted by `ref`, of objects with exactly `ref`, `sha`,
     "sha": "4b825dc642cb6eb9a060e54bf8d69288fbee4904",
     "cluster": "cluster-a",
     "task_id": "t-42",
-    "lease_until": "2026-10-21T12:00:00Z"
+    "lease_until": "2026-10-21T12:00:00Z",
+    "spawned_at": "2026-10-21T11:57:00Z"
   }
 ]
 ```
+
+`spawned_at` is additive and optional. It records the instant the holder created
+the claim's Job, so a peer taking the claim over can tell "the previous holder
+actually ran this task" from "the previous holder only held the key". It is
+omitted, not empty-string, on every claim written before it existed and on any
+claim whose holder has not yet spawned; a reader must treat its absence as "no
+Job was started", never as an error. A `PUT` that omits it writes no key, which
+keeps an older writer's payload unchanged.
 
 An empty result is `[]`, never `null`.
 
