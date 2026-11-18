@@ -41,22 +41,34 @@ func IsObjectID(sha string) bool {
 }
 
 // ClaimRef is one claim ref as read live from the origin. The JSON field set is
-// the HTTP response contract: exactly these five keys, never a nonce.
+// the HTTP response contract: these keys, never a nonce.
+//
+// SpawnedAt is additive and optional. It records the instant the holder created
+// the Job for this claim, and is absent on every claim written before it
+// existed. A reader must treat absent as "this claim proves no Job was started",
+// never as an error: a peer reads it to decide whether a taken-over claim's
+// holder actually ran the task, and an older writer never emits it.
 type ClaimRef struct {
 	Ref        string `json:"ref"`
 	SHA        string `json:"sha"`
 	Cluster    string `json:"cluster"`
 	TaskID     string `json:"task_id"`
 	LeaseUntil string `json:"lease_until"`
+	SpawnedAt  string `json:"spawned_at,omitempty"`
 }
 
 // ClaimRefRequest is the create/renew request. ExpectedSHA empty means the ref
 // must not exist.
+//
+// SpawnedAt is written only when the holder has created the claim's Job. An
+// acquire never carries it; a renew carries it when the holder is marking the
+// spawn, and the caller preserves an existing value when it omits it.
 type ClaimRefRequest struct {
 	ExpectedSHA string `json:"expected_sha"`
 	Cluster     string `json:"cluster"`
 	TaskID      string `json:"task_id"`
 	LeaseUntil  string `json:"lease_until"`
+	SpawnedAt   string `json:"spawned_at,omitempty"`
 }
 
 // ErrRefConflict is returned when the origin's compare-and-swap rejects a claim
@@ -369,7 +381,7 @@ func (g *git) readClaimRef(
 			return ClaimRef{}, false, errors.Wrapf(ctx, err, "read claim commit %s", entry.SHA)
 		}
 	}
-	cluster, taskID, leaseUntil, err := parseClaimMetadata(ctx, message)
+	cluster, taskID, leaseUntil, spawnedAt, err := parseClaimMetadata(ctx, message)
 	if err != nil {
 		slog.WarnContext(
 			ctx,
@@ -383,6 +395,7 @@ func (g *git) readClaimRef(
 	claim.Cluster = cluster
 	claim.TaskID = taskID
 	claim.LeaseUntil = leaseUntil
+	claim.SpawnedAt = spawnedAt
 	return claim, true, nil
 }
 
@@ -452,19 +465,23 @@ type claimMetadata struct {
 	Cluster    string `json:"cluster"`
 	TaskID     string `json:"task_id"`
 	LeaseUntil string `json:"lease_until"`
+	SpawnedAt  string `json:"spawned_at,omitempty"`
 }
 
 // parseClaimMetadata decodes the caller-visible fields of a claim commit
 // message. Unknown keys are ignored and the nonce is never returned.
+//
+// SpawnedAt is absent on every claim written before it existed, so an empty
+// value is the ordinary state of an older ref, not a parse failure.
 func parseClaimMetadata(
 	ctx context.Context,
 	message []byte,
-) (cluster, taskID, leaseUntil string, err error) {
+) (cluster, taskID, leaseUntil, spawnedAt string, err error) {
 	var metadata claimMetadata
 	if err := json.Unmarshal(message, &metadata); err != nil {
-		return "", "", "", errors.Wrap(ctx, err, "parse claim metadata")
+		return "", "", "", "", errors.Wrap(ctx, err, "parse claim metadata")
 	}
-	return metadata.Cluster, metadata.TaskID, metadata.LeaseUntil, nil
+	return metadata.Cluster, metadata.TaskID, metadata.LeaseUntil, metadata.SpawnedAt, nil
 }
 
 // claimCommitMessage is the JSON payload written into a claim commit.
@@ -472,6 +489,7 @@ type claimCommitMessage struct {
 	Cluster    string `json:"cluster"`
 	TaskID     string `json:"task_id"`
 	LeaseUntil string `json:"lease_until"`
+	SpawnedAt  string `json:"spawned_at,omitempty"`
 	Nonce      string `json:"nonce"`
 }
 
@@ -503,6 +521,7 @@ func (g *git) PutClaimRef(
 		Cluster:    request.Cluster,
 		TaskID:     request.TaskID,
 		LeaseUntil: request.LeaseUntil,
+		SpawnedAt:  request.SpawnedAt,
 		Nonce:      nonce,
 	})
 	if err != nil {

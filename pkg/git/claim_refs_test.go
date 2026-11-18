@@ -538,6 +538,71 @@ func TestClaimMetadataRoundTrip(t *testing.T) {
 	assertClaimCommitShape(t, fixture.bare, sha, request)
 }
 
+// TestClaimSpawnedAtRoundTrip pins the additive spawned_at field in both
+// directions: a request that carries it writes it into the commit message and
+// returns it on the listing, and a request that omits it leaves the key out
+// entirely, so a claim written by an older writer still serialises exactly as
+// before.
+func TestClaimSpawnedAtRoundTrip(t *testing.T) {
+	fixture := newClaimFixture(t)
+	ctx := context.Background()
+
+	spawnedAt := "2026-11-18T22:10:00Z"
+	key := "claims/meta/spawned"
+	sha, err := fixture.clientA.PutClaimRef(ctx, key, git.ClaimRefRequest{
+		Cluster:    "nuke",
+		TaskID:     "t-42",
+		LeaseUntil: claimLeaseUntil,
+		SpawnedAt:  spawnedAt,
+	})
+	if err != nil {
+		t.Fatalf("put: %v", err)
+	}
+
+	claims := listClaimRefs(t, fixture.clientA, "claims/")
+	if len(claims) != 1 {
+		t.Fatalf("expected one claim, got %d", len(claims))
+	}
+	if claims[0].SpawnedAt != spawnedAt {
+		t.Fatalf("listed spawned_at %q, want %q", claims[0].SpawnedAt, spawnedAt)
+	}
+
+	out := mustGit(t, fixture.bare, "cat-file", "-p", sha)
+	_, message, found := strings.Cut(out, "\n\n")
+	if !found {
+		t.Fatalf("commit has no message separator: %q", out)
+	}
+	var decoded struct {
+		SpawnedAt string `json:"spawned_at"`
+	}
+	if err := json.Unmarshal([]byte(message), &decoded); err != nil {
+		t.Fatalf("decode message: %v", err)
+	}
+	if decoded.SpawnedAt != spawnedAt {
+		t.Fatalf("commit spawned_at %q, want %q", decoded.SpawnedAt, spawnedAt)
+	}
+
+	// The absent case: a renew that does not carry the marker must not emit the
+	// key, which is what keeps an older writer's payload byte-identical.
+	sha2, err := fixture.clientA.PutClaimRef(ctx, key, git.ClaimRefRequest{
+		ExpectedSHA: sha,
+		Cluster:     "nuke",
+		TaskID:      "t-42",
+		LeaseUntil:  claimLeaseUntil,
+	})
+	if err != nil {
+		t.Fatalf("renew: %v", err)
+	}
+	out = mustGit(t, fixture.bare, "cat-file", "-p", sha2)
+	_, message, found = strings.Cut(out, "\n\n")
+	if !found {
+		t.Fatalf("commit has no message separator: %q", out)
+	}
+	if strings.Contains(message, "spawned_at") {
+		t.Fatalf("renew without a marker wrote spawned_at: %q", message)
+	}
+}
+
 func assertClaimCommitShape(t *testing.T, dir, sha string, request git.ClaimRefRequest) {
 	t.Helper()
 	out := mustGit(t, dir, "cat-file", "-p", sha)
